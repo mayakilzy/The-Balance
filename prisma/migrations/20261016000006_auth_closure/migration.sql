@@ -21,34 +21,28 @@ DROP POLICY IF EXISTS "membership_self_insert_balance_app" ON "memberships";
 REVOKE INSERT, UPDATE, DELETE ON "memberships" FROM balance_app;
 
 -- ============================================================
--- 2. USERS — RESTRICT UPDATE TO name ONLY
+-- 2. USERS — RESTRICT UPDATE TO name + updatedAt ONLY
 -- ============================================================
 -- Previous: UPDATE policy allowed updating own row (all columns).
 -- Problem: balance_app could update status, email (identity fields).
--- Fix: DROP the broad UPDATE policy; CREATE column-specific one.
+-- Fix: REVOKE all UPDATE at table level, then GRANT only safe columns.
+
+-- First, REVOKE all UPDATE on users from balance_app
+REVOKE UPDATE ON "users" FROM balance_app;
+
+-- Then, GRANT UPDATE only on safe columns (name, updatedAt)
+-- Note: Prisma's @updatedAt auto-manages "updatedAt" on every update.
+GRANT UPDATE ("name", "updatedAt") ON "users" TO balance_app;
+
+-- The UPDATE RLS policy still controls WHICH rows can be updated
+-- (only own row). The column-level GRANT controls WHICH columns.
+-- Combined: balance_app can UPDATE only own row's name + updatedAt.
 
 DROP POLICY IF EXISTS "user_self_update_balance_app" ON "users";
-
--- New UPDATE policy: only allows updating own row.
--- Column-level REVOKEs (below) further restrict which columns.
 CREATE POLICY "user_self_update_balance_app" ON "users"
     FOR UPDATE TO balance_app
     USING (id = current_setting('app.user_id', true))
     WITH CHECK (id = current_setting('app.user_id', true));
-
--- REVOKE UPDATE on sensitive columns:
--- - passwordHash (already revoked in 0005, re-revoke for clarity)
--- - status (admin-only — user cannot suspend/activate themselves)
--- - email (identity field — admin-only)
--- - id (PK — never updatable)
-REVOKE UPDATE ("passwordHash") ON "users" FROM balance_app;
-REVOKE UPDATE ("status") ON "users" FROM balance_app;
-REVOKE UPDATE ("email") ON "users" FROM balance_app;
-REVOKE UPDATE ("id") ON "users" FROM balance_app;
-REVOKE UPDATE ("createdAt") ON "users" FROM balance_app;
-
--- balance_app can only UPDATE: name, updatedAt
--- (updatedAt is auto-managed by Prisma)
 
 -- ============================================================
 -- 3. VERIFY — confirm policies + grants are correct
