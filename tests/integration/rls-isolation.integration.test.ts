@@ -132,30 +132,37 @@ describeIntegration("RLS isolation — balance_app role (real PostgreSQL)", () =
 
   // ============================================================
   // 3. CROSS-TENANT UPDATE IS BLOCKED
+  // ------------------------------------------------------------
+  // After 00-02 corrective closure: UPDATE is REVOKE'd from balance_app
+  // entirely (append-only). So the operation throws "permission denied"
+  // rather than returning 0 rows affected.
   // ============================================================
   it("Tenant A cannot UPDATE Tenant B's audit_log row", async () => {
     // Tenant B's row exists (from test 1). Tenant A attempts to modify it.
-    const result = await withTenant(tenantAId, async (tx) => {
-      return await tx.auditLog.updateMany({
-        where: { tenantId: tenantBId },
-        data: { actor: "hijacked" },
-      });
-    });
-    // updateMany returns count of affected rows. RLS filters BEFORE update,
-    // so Tenant A sees 0 rows matching tenant_id=B → 0 updated.
-    expect(result.count).toBe(0);
+    // UPDATE is revoked from balance_app → throws "permission denied".
+    await expect(
+      withTenant(tenantAId, async (tx) => {
+        await tx.auditLog.updateMany({
+          where: { tenantId: tenantBId },
+          data: { actor: "hijacked" },
+        });
+      })
+    ).rejects.toThrow(/permission denied|row-level security/i);
   });
 
   // ============================================================
   // 4. CROSS-TENANT DELETE IS BLOCKED
+  // ------------------------------------------------------------
+  // Same as UPDATE: DELETE is revoked from balance_app → throws.
   // ============================================================
   it("Tenant A cannot DELETE Tenant B's audit_log row", async () => {
-    const result = await withTenant(tenantAId, async (tx) => {
-      return await tx.auditLog.deleteMany({
-        where: { tenantId: tenantBId },
-      });
-    });
-    expect(result.count).toBe(0); // RLS filtered out Tenant B's rows
+    await expect(
+      withTenant(tenantAId, async (tx) => {
+        await tx.auditLog.deleteMany({
+          where: { tenantId: tenantBId },
+        });
+      })
+    ).rejects.toThrow(/permission denied|row-level security/i);
   });
 
   // ============================================================
