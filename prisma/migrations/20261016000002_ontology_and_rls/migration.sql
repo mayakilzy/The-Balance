@@ -295,7 +295,7 @@ CREATE POLICY "admin_all_balance_admin" ON "audit_log"
 DO $$
 DECLARE
     r RECORD;
-    missing TEXT;
+    rls_ok BOOLEAN;
 BEGIN
     FOR r IN
         SELECT tablename FROM pg_tables
@@ -304,13 +304,11 @@ BEGIN
                             'role_references','source_registry','public_knowledge',
                             'tenants','audit_log')
     LOOP
-        SELECT EXISTS (
-            SELECT 1 FROM pg_class c
-            WHERE c.relname = r.tablename
-              AND c.relrowsecurity = TRUE
-              AND c.relforcerowsecurity = TRUE
-        ) INTO missing;
-        IF NOT missing THEN
+        SELECT c.relrowsecurity AND c.relforcerowsecurity INTO rls_ok
+        FROM pg_class c
+        WHERE c.relname = r.tablename;
+
+        IF NOT rls_ok THEN
             RAISE EXCEPTION 'RLS not FORCE-enabled on table %', r.tablename;
         END IF;
     END LOOP;
