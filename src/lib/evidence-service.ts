@@ -246,8 +246,12 @@ export async function verifyEvidence(
   newStatus: "verified" | "disputed" | "refuted",
   notes?: string
 ): Promise<{ evidenceId: string; verificationStatus: string }> {
-  return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    // Verify the evidence exists in this tenant (RLS-enforced)
+  // PERMISSION ENFORCED INSIDE THE SERVICE (founder directive 00-05 pre-setup).
+  // Don't rely on route handler alone — the service itself checks permission.
+  const { requirePermissionWithCurrentRole } = await import("@/lib/permissions");
+  await requirePermissionWithCurrentRole(session, "evidence:verify");
+
+  return withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
     const evidence = await tx.evidence.findFirst({
       where: { id: evidenceId, tenantId },
     });
@@ -255,13 +259,12 @@ export async function verifyEvidence(
       throw new Error("Evidence not found in tenant scope");
     }
 
-    // Update verification status
     const updated = await tx.evidence.update({
       where: { id: evidenceId },
       data: {
         verificationStatus: newStatus,
         confidenceNotes: notes
-          ? `${evidence.confidenceNotes ?? ""}\n[Verification ${newStatus}]: ${notes}`.trim()
+          ? `${evidence.confidenceNotes ?? ""}\n[Verification ${newStatus} by ${userId}]: ${notes}`.trim()
           : evidence.confidenceNotes,
       },
     });

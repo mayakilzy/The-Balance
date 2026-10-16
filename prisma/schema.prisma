@@ -141,6 +141,11 @@ model Tenant {
   memberships Membership[]
   evidence    Evidence[]
   evidenceEmbeddings EvidenceEmbedding[]
+  strategies  Strategy[]
+  strategyVersions StrategyVersion[]
+  decisions   Decision[]
+  decisionEvents DecisionEvent[]
+  events      Event[]
 
   @@map("tenants")
   @@index([status])
@@ -284,8 +289,6 @@ model EvidenceEmbedding {
   id          String   @id @default(cuid())
   evidenceId  String   @unique
   tenantId    String
-  // pgvector — stored as Unsupported("vector(384)") because Prisma
-  // doesn't natively support pgvector. Read/write via raw SQL.
   embedding   Unsupported("vector(384)")?
   model       String
   createdAt   DateTime @default(now())
@@ -295,6 +298,114 @@ model EvidenceEmbedding {
 
   @@index([tenantId])
   @@map("evidence_embeddings")
+}
+
+// ============================================================
+// STRATEGY CONTRACTS (00-05)
+// ============================================================
+
+model Strategy {
+  id          String   @id @default(cuid())
+  tenantId    String
+  title       String
+  description String?
+  // Status: draft | submitted | approved | archived
+  status      String   @default("draft")
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant   Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  versions StrategyVersion[]
+
+  @@index([tenantId, status])
+  @@map("strategies")
+}
+
+model StrategyVersion {
+  id             String    @id @default(cuid())
+  strategyId     String
+  tenantId       String
+  versionNumber  Int
+  content        String
+  // Status: draft | approved | superseded
+  status         String    @default("draft")
+  approvedBy     String?
+  approvedAt     DateTime?
+  approvalNotes  String?
+  createdBy      String
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  strategy  Strategy   @relation(fields: [strategyId], references: [id], onDelete: Cascade)
+  tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  decisions Decision[]
+
+  @@unique([strategyId, versionNumber])
+  @@index([tenantId, status])
+  @@map("strategy_versions")
+}
+
+model Decision {
+  id                String   @id @default(cuid())
+  tenantId          String
+  strategyVersionId String?
+  title             String
+  rationale         String
+  decidedBy         String
+  decidedAt         DateTime @default(now())
+  // Status: proposed | reviewed | approved | implemented | reversed
+  status            String   @default("proposed")
+  // Evidence snapshot at decision time (JSONB arrays)
+  supportingEvidence Json    @default("[]")
+  counterEvidence    Json    @default("[]")
+  metadata           Json    @default("{}")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  tenant          Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  strategyVersion StrategyVersion? @relation(fields: [strategyVersionId], references: [id], onDelete: SetNull)
+  events          DecisionEvent[]
+
+  @@index([tenantId, status])
+  @@index([strategyVersionId])
+  @@map("decisions")
+}
+
+model DecisionEvent {
+  id         String   @id @default(cuid())
+  decisionId String
+  tenantId   String
+  // EventType: proposed | reviewed | approved | implemented | reversed | notes_added
+  eventType  String
+  actor      String
+  at         DateTime @default(now())
+  notes      String?
+  metadata   Json     @default("{}")
+
+  decision Decision @relation(fields: [decisionId], references: [id], onDelete: Cascade)
+  tenant   Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([decisionId, at])
+  @@index([tenantId, at])
+  @@map("decision_events")
+}
+
+model Event {
+  id         String   @id @default(cuid())
+  tenantId   String
+  eventType  String
+  actor      String
+  entityType String?
+  entityId   String?
+  at         DateTime @default(now())
+  metadata   Json     @default("{}")
+
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, at])
+  @@index([entityType, entityId])
+  @@map("events")
 }
 
 // NOTE: pgvector extension is enabled via the first SQL migration.
