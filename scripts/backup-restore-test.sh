@@ -131,8 +131,9 @@ SQL
 )
 echo "  RLS enabled (users:tasks:evidence:audit_log): $RLS_CHECK"
 
-if [ "$RLS_CHECK" != "t:t:t:t" ]; then
+if [ "$RLS_CHECK" != "t:t:t:t" ] && [ "$RLS_CHECK" != "true:true:true:true" ]; then
   echo "FAIL: RLS not enabled on all key tables after restore!"
+  echo "  RLS check value: $RLS_CHECK"
   echo "  Debug — tables with RLS status:"
   psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
     SELECT relname, relrowsecurity, relforcerowsecurity
