@@ -1,23 +1,31 @@
 // ============================================================
-// auth.ts — Auth.js v5 configuration (00-03)
+// auth.ts — Auth.js v5 configuration (00-03, auth closure)
 // ------------------------------------------------------------
 // CredentialsProvider with email + password.
 // JWT carries userId, tenantId, roleCode, membershipStatus.
-// Session exposes userId, tenantId, roleCode to the app.
 //
-// Security:
-//   - signIn callback: reject users with status !== 'active'
-//   - jwt callback: load active membership, store in token
-//   - session callback: expose token claims to session
-//   - No hard-coded admin backdoor
+// AUTH BOOTSTRAP (fixed):
+//   - authorize() uses auth-bootstrap.ts (balance_admin, BYPASSRLS)
+//     for user lookup + initial membership load.
+//   - All other app code uses `db` (balance_app) with RLS.
 //
-// Per ADR-0007 (auth design).
+// TENANT SWITCHING (fixed):
+//   - switch-tenant passes specific tenantId + roleCode via unstable_update.
+//   - jwt callback's "update" branch RE-VERIFIES current tenantId
+//     (doesn't reload first membership).
+//
+// Per ADR-0007 (updated: auth bootstrap + tenant switching).
 // ============================================================
 import NextAuth, { type NextAuthConfig, type Session } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import { env } from "@/lib/env";
-import { db } from "@/lib/db";
 import { verifyPassword } from "@/lib/password";
+import {
+  findUserByEmail,
+  loadFirstActiveMembership,
+  loadMembershipForTenant,
+  verifyUserActive,
+} from "@/lib/auth-bootstrap";
 
 // Extend the session types
 declare module "next-auth" {
@@ -31,26 +39,6 @@ declare module "next-auth" {
       membershipStatus: string | null;
     };
   }
-}
-
-// Load active membership for a user. Returns the FIRST active membership.
-async function loadActiveMembership(
-  userId: string
-): Promise<{
-  tenantId: string;
-  roleCode: string;
-  status: string;
-} | null> {
-  const membership = await db.membership.findFirst({
-    where: { userId, status: "active" },
-    orderBy: { createdAt: "asc" },
-  });
-  if (!membership) return null;
-  return {
-    tenantId: membership.tenantId,
-    roleCode: membership.roleCode,
-    status: membership.status,
-  };
 }
 
 const config: NextAuthConfig = {
@@ -76,10 +64,9 @@ const config: NextAuthConfig = {
         }
         if (email.length === 0 || password.length === 0) return null;
 
-        // Load user by email (admin client — pre-auth bootstrap)
-        const user = await db.user.findUnique({
-          where: { email: email.toLowerCase() },
-        });
+        // AUTH BOOTSTRAP: use auth-bootstrap client (balance_admin) for user lookup.
+        // RLS on `users` requires app.user_id, which we don't have yet.
+        const user = await findUserByEmail(email);
         if (!user) return null;
 
         // Verify password
@@ -98,11 +85,12 @@ const config: NextAuthConfig = {
     }),
   ],
   callbacks: {
-    async jwt({ token, user, trigger }) {
+    async jwt({ token, user, trigger, session: updateData }) {
       // On initial signin, `user` is populated.
       if (user && user.id) {
         token.userId = user.id;
-        const membership = await loadActiveMembership(user.id);
+        // Load FIRST active membership for initial session.
+        const membership = await loadFirstActiveMembership(user.id);
         if (membership) {
           token.tenantId = membership.tenantId;
           token.roleCode = membership.roleCode;
@@ -114,18 +102,39 @@ const config: NextAuthConfig = {
         }
       }
 
-      // On session refresh, reload membership.
+      // On session refresh (trigger === "update"):
+      // If updateData carries a specific tenantId (from switch-tenant),
+      // use it. RE-VERIFY the membership is still active, but DON'T
+      // reload first membership (that would override a deliberate switch).
       if (trigger === "update" && token.userId) {
-        const userIdStr = token.userId as string;
-        const membership = await loadActiveMembership(userIdStr);
-        if (membership) {
-          token.tenantId = membership.tenantId;
-          token.roleCode = membership.roleCode;
-          token.membershipStatus = membership.status;
-        } else {
+        const userId = token.userId as string;
+
+        // Re-verify user is still active
+        const userActive = await verifyUserActive(userId);
+        if (!userActive) {
           token.tenantId = null;
           token.roleCode = null;
           token.membershipStatus = null;
+          return token;
+        }
+
+        // Check if updateData carries a specific tenantId (from switch-tenant)
+        const updateTenantId = (updateData as { user?: { tenantId?: string } })?.user?.tenantId;
+        const effectiveTenantId = updateTenantId ?? (token.tenantId as string | null);
+
+        if (effectiveTenantId) {
+          // RE-VERIFY the specific membership is still active.
+          const membership = await loadMembershipForTenant(userId, effectiveTenantId);
+          if (membership) {
+            token.tenantId = membership.tenantId;
+            token.roleCode = membership.roleCode;
+            token.membershipStatus = membership.status;
+          } else {
+            // Membership revoked — clear tenant context
+            token.tenantId = null;
+            token.roleCode = null;
+            token.membershipStatus = null;
+          }
         }
       }
 
