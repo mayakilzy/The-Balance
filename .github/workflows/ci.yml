@@ -94,37 +94,32 @@ jobs:
         run: bun run db:seed
 
       - name: Verify role privileges (security check)
-        # Asserts balance_app has NO SUPERUSER, NO BYPASSRLS, NO CREATE on schema.
+        # Asserts balance_app has NO SUPERUSER, NO BYPASSRLS, NO CREATE on schema,
+        # and NO UPDATE/DELETE on audit_log (append-only).
         env:
           PGPASSWORD: postgres
         run: |
-          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 -t -A <<'SQL' | while read -r line; do
-            echo "$line"
-          done
-          -- balance_app must NOT be superuser
-          SELECT CASE WHEN rolsuper THEN 'FAIL: balance_app is SUPERUSER' ELSE 'OK: balance_app not superuser' END
-          FROM pg_roles WHERE rolname = 'balance_app';
-          -- balance_app must NOT have BYPASSRLS
-          SELECT CASE WHEN rolbypassrls THEN 'FAIL: balance_app has BYPASSRLS' ELSE 'OK: balance_app no BYPASSRLS' END
-          FROM pg_roles WHERE rolname = 'balance_app';
-          -- balance_app must NOT have CREATE on schema public
-          SELECT CASE WHEN has_schema_privilege('balance_app', 'public', 'CREATE')
-            THEN 'FAIL: balance_app has CREATE on public' ELSE 'OK: balance_app no CREATE on public' END;
-          -- balance_app must NOT have UPDATE/DELETE on audit_log (append-only)
-          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'UPDATE')
-            THEN 'FAIL: balance_app has UPDATE on audit_log' ELSE 'OK: balance_app no UPDATE on audit_log' END;
-          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'DELETE')
-            THEN 'FAIL: balance_app has DELETE on audit_log' ELSE 'OK: balance_app no DELETE on audit_log' END;
+          # Run all checks; fail if ANY returns 'FAIL'.
+          RESULT=$(psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 -t -A <<'SQL'
+          SELECT CASE WHEN rolsuper THEN 'FAIL: balance_app is SUPERUSER' ELSE 'OK: balance_app not superuser' END FROM pg_roles WHERE rolname = 'balance_app'
+          UNION ALL
+          SELECT CASE WHEN rolbypassrls THEN 'FAIL: balance_app has BYPASSRLS' ELSE 'OK: balance_app no BYPASSRLS' END FROM pg_roles WHERE rolname = 'balance_app'
+          UNION ALL
+          SELECT CASE WHEN has_schema_privilege('balance_app', 'public', 'CREATE') THEN 'FAIL: balance_app has CREATE on public' ELSE 'OK: balance_app no CREATE on public' END
+          UNION ALL
+          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'UPDATE') THEN 'FAIL: balance_app has UPDATE on audit_log' ELSE 'OK: balance_app no UPDATE on audit_log' END
+          UNION ALL
+          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'DELETE') THEN 'FAIL: balance_app has DELETE on audit_log' ELSE 'OK: balance_app no DELETE on audit_log' END;
           SQL
+          )
 
-          # Re-run with strict failure: any FAIL line exits 1
-          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 -t -A <<'SQL' | grep -q "FAIL" && exit 1 || exit 0
-          SELECT CASE WHEN rolsuper THEN 'FAIL' ELSE 'OK' END FROM pg_roles WHERE rolname = 'balance_app';
-          SELECT CASE WHEN rolbypassrls THEN 'FAIL' ELSE 'OK' END FROM pg_roles WHERE rolname = 'balance_app';
-          SELECT CASE WHEN has_schema_privilege('balance_app', 'public', 'CREATE') THEN 'FAIL' ELSE 'OK' END;
-          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'UPDATE') THEN 'FAIL' ELSE 'OK' END;
-          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'DELETE') THEN 'FAIL' ELSE 'OK' END;
-          SQL
+          echo "$RESULT"
+
+          if echo "$RESULT" | grep -q "^FAIL:"; then
+            echo "ERROR: privilege check failed"
+            exit 1
+          fi
+          echo "All privilege checks passed."
 
       - name: Verify DB connection + schema + RLS (as balance_app)
         env:
