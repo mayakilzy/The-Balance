@@ -405,6 +405,11 @@ describeIntegration("Durable Task Runtime", () => {
   it("Balance Master: LLM provider failure → task fails with error", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
+    // Clean up ALL non-terminal tasks first
+    await adminClient.task.deleteMany({
+      where: { tenantId: tenantAId, status: { in: ["pending", "claimed", "running"] } },
+    });
+
     // Create a task
     const createResult = await createTask(session, {
       type: "llm-fail-test",

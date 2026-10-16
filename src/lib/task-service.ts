@@ -16,7 +16,6 @@ import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { writeAudit } from "@/lib/audit";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
-import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 
 const LEASE_DURATION_MS = 60_000;
 
@@ -75,7 +74,7 @@ export async function createTask(
       return { taskId: task.id, created: true };
     } catch (err) {
       // P2002 = unique constraint violation
-      if (err instanceof PrismaClientKnownRequestError && err.code === "P2002") {
+      if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
         // Concurrent create with same key — find and return the existing task
         const existing = await tx.task.findFirst({
           where: { tenantId, idempotencyKey: input.idempotencyKey },
