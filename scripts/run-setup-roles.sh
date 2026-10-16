@@ -1,20 +1,18 @@
 #!/usr/bin/env bash
-# The Balance — Role Setup Wrapper
+# The Balance — Role Setup Wrapper (password-fix)
 # ------------------------------------------------------------
 # Runs scripts/setup-roles.sql with env-var-aware password handling.
 #
+# Mechanism:
+#   - Reads PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP from env.
+#   - Loads them into psql variables via \set with backtick execution.
+#   - setup-roles.sql reads them via :'var' (psql substitution).
+#   - If env vars are unset, dev defaults are used + WARNING printed.
+#
 # Usage:
-#   CI/dev (dev defaults):
-#     bash scripts/run-setup-roles.sh
-#
-#   Production (strong passwords from secret manager):
-#     PGPASSWORD_BALANCE_ADMIN=xxx PGPASSWORD_BALANCE_APP=yyy \
-#       bash scripts/run-setup-roles.sh
-#
-# The wrapper passes passwords as psql variables so the SQL script
-# can read them via current_setting('balance_admin_pw', true).
-# This avoids putting passwords on the command line (which would be
-# visible in process listings).
+#   CI/dev:  bash scripts/run-setup-roles.sh
+#   Prod:    PGPASSWORD_BALANCE_ADMIN=xxx PGPASSWORD_BALANCE_APP=yyy \
+#            bash scripts/run-setup-roles.sh
 
 set -euo pipefail
 
@@ -23,23 +21,31 @@ DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-balance}"
 DB_SUPERUSER="${DB_SUPERUSER:-postgres}"
 
-# Passwords: env vars override dev defaults.
-ADMIN_PW="${PGPASSWORD_BALANCE_ADMIN:-balance_admin_dev_only}"
-APP_PW="${PGPASSWORD_BALANCE_APP:-balance_app_dev_only}"
+# Read env vars (empty string if unset)
+ADMIN_PW="${PGPASSWORD_BALANCE_ADMIN:-}"
+APP_PW="${PGPASSWORD_BALANCE_APP:-}"
 
 # Warn if using dev defaults
-if [ "$ADMIN_PW" = "balance_admin_dev_only" ] || [ "$APP_PW" = "balance_app_dev_only" ]; then
+if [ -z "$ADMIN_PW" ] || [ -z "$APP_PW" ]; then
     echo "WARNING: Using dev-default passwords. NOT FOR PRODUCTION." >&2
     echo "  Set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP for production." >&2
 fi
 
-# Run the SQL script, passing passwords as psql variables.
-# PGPASSWORD is for the postgres superuser connection (bootstrap).
+# Run the SQL script.
+# We use a heredoc to send \set commands + \i (include) the SQL file.
+# The \set with backtick loads the env var into a psql variable.
+# printf '%s' avoids trailing newline; the value is shell-escaped by being
+# in a single-quoted backtick context (psql handles it).
+#
+# Security: the password is in the psql variable, NOT on the command line,
+# so it doesn't appear in process listings. psql doesn't log variable values.
 PGPASSWORD="${PGPASSWORD_POSTGRES:-postgres}" \
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
     -v ON_ERROR_STOP=1 \
-    -v balance_admin_pw="$ADMIN_PW" \
-    -v balance_app_pw="$APP_PW" \
-    -f scripts/setup-roles.sql
+    <<PSQL_EOF
+\set balance_admin_pw \`printf '%s' "$ADMIN_PW"\`
+\set balance_app_pw \`printf '%s' "$APP_PW"\`
+\i scripts/setup-roles.sql
+PSQL_EOF
 
 echo "Role setup complete."

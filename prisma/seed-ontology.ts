@@ -1,8 +1,9 @@
 // ============================================================
-// seed-ontology.ts — Seed fictional country + tenants + state + institutions
+// seed-ontology.ts — Seed fictional country + tenants + state + institutions + users
 // ------------------------------------------------------------
 // Per mission 00-02: "Seed one clearly fictional country fixture".
 // We use "Demolandia" (ISO3: DML) — a fictional country.
+// Per mission 00-03: seed users + memberships for auth testing.
 //
 // This script is idempotent: it uses upserts and skips if rows exist.
 // Run with: bunx tsx prisma/seed-ontology.ts
@@ -11,9 +12,9 @@
 // balance_app cannot INSERT into PUBLIC tables (RLS blocks writes).
 // ============================================================
 import { PrismaClient } from "@prisma/client";
+import { hashPassword } from "../src/lib/password";
 
 const prisma = new PrismaClient({
-  // We use DIRECT_URL (balance_admin) for seeding — see .env.example.
   datasources: { db: { url: process.env.DIRECT_URL ?? process.env.DATABASE_URL } },
 });
 
@@ -184,6 +185,123 @@ async function main() {
   console.log("Test tenant IDs for RLS tests:");
   console.log(`  Tenant A: ${tenantA.id} (${tenantA.code})`);
   console.log(`  Tenant B: ${tenantB.id} (${tenantB.code})`);
+
+  // ============================================================
+  // 8. USERS + MEMBERSHIPS (00-03)
+  // ============================================================
+  console.log("\nSeeding users + memberships...");
+
+  // Hash test passwords. These are TEST FIXTURES, not secrets.
+  // They are documented here for integration tests to use.
+  const adminHash = await hashPassword("test_admin_password_00_03");
+  const analystHash = await hashPassword("test_analyst_password_00_03");
+  const suspendedHash = await hashPassword("test_suspended_password_00_03");
+  const revokedHash = await hashPassword("test_revoked_password_00_03");
+
+  // User 1: admin in Tenant A
+  const adminUser = await prisma.user.upsert({
+    where: { email: "admin@demolandia.test" },
+    update: {},
+    create: {
+      email: "admin@demolandia.test",
+      name: "Test Admin",
+      passwordHash: adminHash,
+      status: "active",
+    },
+  });
+
+  // User 2: analyst in Tenant A
+  const analystUser = await prisma.user.upsert({
+    where: { email: "analyst@demolandia.test" },
+    update: {},
+    create: {
+      email: "analyst@demolandia.test",
+      name: "Test Analyst",
+      passwordHash: analystHash,
+      status: "active",
+    },
+  });
+
+  // User 3: suspended user (cannot authenticate)
+  const suspendedUser = await prisma.user.upsert({
+    where: { email: "suspended@demolandia.test" },
+    update: {},
+    create: {
+      email: "suspended@demolandia.test",
+      name: "Test Suspended",
+      passwordHash: suspendedHash,
+      status: "suspended",
+    },
+  });
+
+  // User 4: user with revoked membership (can authenticate but no tenant access)
+  const revokedUser = await prisma.user.upsert({
+    where: { email: "revoked@demolandia.test" },
+    update: {},
+    create: {
+      email: "revoked@demolandia.test",
+      name: "Test Revoked",
+      passwordHash: revokedHash,
+      status: "active",
+    },
+  });
+
+  // Memberships
+  // Admin → Tenant A as admin
+  await prisma.membership.upsert({
+    where: { userId_tenantId: { userId: adminUser.id, tenantId: tenantA.id } },
+    update: {},
+    create: {
+      userId: adminUser.id,
+      tenantId: tenantA.id,
+      roleCode: "admin",
+      status: "active",
+    },
+  });
+
+  // Analyst → Tenant A as analyst
+  await prisma.membership.upsert({
+    where: { userId_tenantId: { userId: analystUser.id, tenantId: tenantA.id } },
+    update: {},
+    create: {
+      userId: analystUser.id,
+      tenantId: tenantA.id,
+      roleCode: "analyst",
+      status: "active",
+    },
+  });
+
+  // Suspended user → Tenant A (membership active, but user suspended)
+  await prisma.membership.upsert({
+    where: { userId_tenantId: { userId: suspendedUser.id, tenantId: tenantA.id } },
+    update: {},
+    create: {
+      userId: suspendedUser.id,
+      tenantId: tenantA.id,
+      roleCode: "observer",
+      status: "active",
+    },
+  });
+
+  // Revoked user → Tenant A (membership revoked)
+  await prisma.membership.upsert({
+    where: { userId_tenantId: { userId: revokedUser.id, tenantId: tenantA.id } },
+    update: { status: "revoked" },
+    create: {
+      userId: revokedUser.id,
+      tenantId: tenantA.id,
+      roleCode: "observer",
+      status: "revoked",
+    },
+  });
+
+  console.log(`  Users: ${adminUser.email}, ${analystUser.email}, ${suspendedUser.email}, ${revokedUser.email}`);
+  console.log(`  Memberships: 4 (admin, analyst, suspended-user, revoked-membership)`);
+  console.log("\nTest credentials (FIXTURES, not secrets):");
+  console.log("  admin@demolandia.test / test_admin_password_00_03");
+  console.log("  analyst@demolandia.test / test_analyst_password_00_03");
+  console.log("  suspended@demolandia.test / test_suspended_password_00_03 (suspended)");
+  console.log("  revoked@demolandia.test / test_revoked_password_00_03 (membership revoked)");
 }
 
 main()

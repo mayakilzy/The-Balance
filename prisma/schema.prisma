@@ -85,6 +85,8 @@ model RoleReference {
   permissions Json  @default("{}")
   createdAt   DateTime @default(now())
 
+  memberships Membership[]
+
   @@map("role_references")
 }
 
@@ -134,8 +136,9 @@ model Tenant {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  country    Country    @relation(fields: [countryId], references: [id])
+  country    Country       @relation(fields: [countryId], references: [id])
   auditLogs  AuditLog[]
+  memberships Membership[]
 
   @@map("tenants")
   @@index([status])
@@ -165,6 +168,46 @@ model AuditLog {
   @@map("audit_log")
   @@index([tenantId, at])
   @@index([action, at])
+}
+
+// ============================================================
+// IDENTITY (00-03) — User + Membership
+// ============================================================
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  // Status lifecycle: active | suspended | disabled
+  status       String   @default("active")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships Membership[]
+
+  @@map("users")
+  @@index([status])
+}
+
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  tenantId  String
+  roleCode  String
+  // Status lifecycle: active | revoked
+  status    String   @default("active")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tenant Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  role   RoleReference @relation(fields: [roleCode], references: [code])
+
+  @@unique([userId, tenantId])
+  @@index([tenantId, status])
+  @@index([userId, status])
+  @@map("memberships")
 }
 
 // NOTE: pgvector extension is enabled via the first SQL migration.

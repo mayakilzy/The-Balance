@@ -1,38 +1,35 @@
--- The Balance — Database Role Setup Script (FINAL)
+-- The Balance — Database Role Setup Script (FINAL, password-fix)
 -- ------------------------------------------------------------
 -- This script is the CANONICAL source for PostgreSQL role management.
 -- It is NOT a migration — it runs BEFORE migrations to bootstrap roles.
 --
--- Per ADR-0005 (updated): role setup is separated from schema migrations.
+-- PASSWORD MECHANISM (fixed in 00-03):
+--   The wrapper script (run-setup-roles.sh) loads env vars into psql
+--   variables via \set. This script reads them via psql's variable
+--   substitution syntax (:'var'), NOT via current_setting().
 --
--- PASSWORD POLICY (final closure):
---   - In CI/dev: dev-only passwords are set (overridable via env vars).
---   - In PRODUCTION: this script MUST be run with env vars set:
---       PGPASSWORD_BALANCE_ADMIN=<strong-from-secret-manager>
---       PGPASSWORD_BALANCE_APP=<strong-from-secret-manager>
---     If these env vars are NOT set, the script uses dev defaults and
---     prints a WARNING. A separate production-readiness check should
---     fail the deployment if dev defaults are detected.
+--   Why NOT current_setting():
+--   - psql -v variables are client-side; they do NOT become PostgreSQL
+--     session GUCs automatically.
+--   - current_setting('var', true) reads GUCs, not psql variables.
+--   - So the old code silently fell back to dev defaults even when
+--     env vars were set.
 --
---   - Migration 0002 historically sets dev passwords via ALTER ROLE.
---     This script runs AFTER migration 0002 in CI and overrides those
---     with the env-var-provided passwords (or dev defaults in CI).
---     In production, the DBA runs this script with env vars set, so
---     the dev defaults from migration 0002 are overridden.
+--   Why :'var' (psql substitution):
+--   - psql substitutes :'var' with a properly-quoted string literal
+--     BEFORE sending SQL to the server.
+--   - The password does not appear in PostgreSQL server logs (only
+--     in the SQL text, which psql doesn't log by default).
+--   - The password does not appear in process listings (it's in a
+--     psql variable, not the command line).
+--
+--   Fallback: if a psql variable is not set (empty), the script uses
+--   dev defaults and prints a WARNING.
 --
 -- Usage:
---   CI/dev:  psql -h <host> -U postgres -d balance -f scripts/setup-roles.sql
+--   CI/dev:  bash scripts/run-setup-roles.sh
 --   Prod:    PGPASSWORD_BALANCE_ADMIN=xxx PGPASSWORD_BALANCE_APP=yyy \
---            psql -h <host> -U postgres -d balance -f scripts/setup-roles.sql
---
--- Role design (per ADR-0005):
---   balance_admin: BYPASSRLS for migrations/ops. CI adds SUPERUSER for
---                  CREATE EXTENSION (pgvector); production should NOT grant
---                  SUPERUSER — instead, the DBA pre-installs extensions.
---   balance_app:   NOSUPERUSER, NOBYPASSRLS, NO DDL. RLS-enforced runtime role.
---                  Can only SELECT/INSERT/UPDATE/DELETE per table grants.
---                  On audit_log: SELECT + INSERT only (append-only, enforced
---                  in migration 0003).
+--            bash scripts/run-setup-roles.sh
 
 -- ============================================================
 -- 1. CREATE ROLES (idempotent)
@@ -48,37 +45,37 @@ BEGIN
 END $$;
 
 -- ============================================================
--- 2. SET PASSWORDS (env-var aware, dev-default fallback)
+-- 2. SET PASSWORDS (psql variable substitution)
 -- ------------------------------------------------------------
--- Production MUST set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP.
--- If not set, dev defaults are used + a WARNING is printed.
--- A production-readiness check (outside this script) should fail if
--- dev defaults are detected in a production environment.
+-- The wrapper loads env vars into psql variables:
+--   \set balance_admin_pw `printf '%s' "$PGPASSWORD_BALANCE_ADMIN"`
+--   \set balance_app_pw   `printf '%s' "$PGPASSWORD_BALANCE_APP"`
+--
+-- Here we read them via :'var' syntax. If the variable is empty
+-- (not set or empty string), we fall back to dev defaults.
+--
+-- The :- syntax: :'var' produces the variable value or empty string.
+-- We use a CASE to detect empty and fall back.
 -- ============================================================
+
+-- Detect if psql variables are set; fall back to dev defaults if not.
+-- NOTE: :'var' substitution happens at psql layer; we cannot use IFNULL
+-- because the substitution already occurred. Instead, we use a DO block
+-- that receives the substituted values as string literals.
+
 DO $$
 DECLARE
-    admin_pw TEXT;
-    app_pw TEXT;
+    -- :'var' is substituted by psql before reaching the server.
+    -- If the psql variable is unset, :'var' produces '' (empty string).
+    admin_pw TEXT := :'balance_admin_pw';
+    app_pw TEXT := :'balance_app_pw';
     using_dev_defaults BOOLEAN := FALSE;
 BEGIN
-    -- Read from current_setting (env vars passed via PGPASSWORD_BALANCE_*)
-    -- PostgreSQL exposes env vars via current_setting() only if set in
-    -- postgresql.conf or via SET. For psql -v, we use a different approach:
-    -- the calling shell exports these as psql variables.
-    --
-    -- We use a simpler approach: the calling environment sets these as
-    -- psql variables via -v, OR we fall back to dev defaults.
-    --
-    -- Implementation: use current_setting('app.balance_admin_pw', true)
-    -- which returns NULL if not set. The CI/prod wrapper sets these via:
-    --   psql ... -v balance_admin_pw="$PGPASSWORD_BALANCE_ADMIN"
-    -- See scripts/run-setup-roles.sh for the wrapper.
-
-    admin_pw := current_setting('balance_admin_pw', true);
-    app_pw := current_setting('balance_app_pw', true);
-
-    IF admin_pw IS NULL OR app_pw IS NULL THEN
+    IF admin_pw IS NULL OR admin_pw = '' THEN
         admin_pw := 'balance_admin_dev_only';
+        using_dev_defaults := TRUE;
+    END IF;
+    IF app_pw IS NULL OR app_pw = '' THEN
         app_pw := 'balance_app_dev_only';
         using_dev_defaults := TRUE;
     END IF;
@@ -97,34 +94,14 @@ END $$;
 -- ============================================================
 -- 3. SCHEMA PRIVILEGES
 -- ============================================================
--- PostgreSQL 15+ requires explicit CREATE grant on schema public.
--- balance_admin needs CREATE for migrations (CREATE TABLE, etc.).
--- balance_app gets USAGE only (no CREATE — no DDL).
 GRANT ALL ON SCHEMA public TO balance_admin;
 GRANT USAGE ON SCHEMA public TO balance_app;
 
 -- ============================================================
--- 4. EXTENSIONS (must be done as superuser or with proper grants)
+-- 4. EXTENSIONS (must be done as superuser)
 -- ============================================================
--- pgvector must be installed before migration 0001 references it.
--- In CI: the workflow runs this as the postgres superuser.
--- In production: the DBA installs extensions separately.
 CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- ============================================================
--- 5. DOCUMENTATION: CI vs PRODUCTION
--- ============================================================
--- CI ONLY (do NOT use in production):
---   The GitHub Actions workflow grants SUPERUSER to balance_admin
---   so it can CREATE EXTENSION. In production, balance_admin should
---   be NOSUPERUSER, and extensions are pre-installed by the DBA.
---
--- PRODUCTION CHECKLIST:
---   [ ] balance_admin is NOSUPERUSER (only BYPASSRLS)
---   [ ] balance_app is NOSUPERUSER, NOBYPASSRLS, no DDL grants
---   [ ] PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP set from secret manager
---   [ ] pgvector extension pre-installed by DBA
---   [ ] DATABASE_URL uses balance_app; DIRECT_URL uses balance_admin
---   [ ] connection pooling uses balance_app with statement_timeout
---   [ ] Production-readiness check passes (no dev-default passwords)
+-- 5. PRODUCTION CHECKLIST (see ADR-0005)
 -- ============================================================
