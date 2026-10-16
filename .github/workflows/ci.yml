@@ -170,8 +170,20 @@ jobs:
 
       - name: Start Next.js server for Playwright
         run: |
-          # Start production server on port 3001
-          bunx next start -p 3001 &
+          # Create .env file for the dev server to read
+          cat > .env <<ENV
+          NODE_ENV=development
+          DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
+          DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
+          AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
+          AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
+          AUTH_TRUST_HOST="true"
+          LLM_PROVIDER="stub"
+          LOG_LEVEL="warn"
+          ENV
+          
+          # Start dev server on port 3001
+          bunx next dev -p 3001 &
           SERVER_PID=$!
           echo "Server PID: $SERVER_PID"
           
