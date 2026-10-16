@@ -54,19 +54,33 @@ test.describe("Full Browser Journey", () => {
     await page.fill('[data-testid="task-goal-input"]', taskGoal);
     await page.click('[data-testid="task-create-button"]');
 
-    // Step 6: Wait for task list to refresh and show at least one card
+    // Step 6: Wait for task list to refresh — task cards should be visible
     await page.waitForSelector('[data-testid^="task-card-"]', { timeout: 15_000 });
-    await page.waitForTimeout(1000); // Give list time to settle after refresh
+    await page.waitForTimeout(2000); // Give list + auto-detail time to settle
     await page.screenshot({ path: "test-results/screenshots/04-task-created.png" });
 
-    // Step 7: Open task detail — click the FIRST task card
-    const firstTaskCard = page.locator('[data-testid^="task-card-"]').first();
-    await firstTaskCard.click({ timeout: 10_000 });
+    // Step 7: The handleCreate auto-opens the detail panel — verify it's visible
+    // If not visible, click the first task card to open it
+    const detailPanel = page.locator('[data-testid="task-detail-panel"]');
+    const isDetailVisible = await detailPanel.isVisible().catch(() => false);
+
+    if (!isDetailVisible) {
+      // Close the create form if it's still open (might be covering cards)
+      const createForm = page.locator('[data-testid="create-task-form"]');
+      if (await createForm.isVisible().catch(() => false)) {
+        await page.click("text=إلغاء");
+        await page.waitForTimeout(500);
+      }
+
+      // Now click the first task card
+      const firstTaskCard = page.locator('[data-testid^="task-card-"]').first();
+      await firstTaskCard.click({ timeout: 15_000 });
+    }
 
     // Wait for detail panel
-    await expect(page.locator('[data-testid="task-detail-panel"]')).toBeVisible({ timeout: 10_000 });
-    await expect(page.locator('[data-testid="task-detail-panel"]')).toContainText("تفاصيل المهمة");
-    await expect(page.locator('[data-testid="task-detail-panel"]')).toContainText("سجل الأحداث");
+    await expect(detailPanel).toBeVisible({ timeout: 15_000 });
+    await expect(detailPanel).toContainText("تفاصيل المهمة");
+    await expect(detailPanel).toContainText("سجل الأحداث");
     await page.screenshot({ path: "test-results/screenshots/05-task-detail.png" });
 
     // Close detail
