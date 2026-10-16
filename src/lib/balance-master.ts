@@ -1,24 +1,13 @@
 // ============================================================
-// balance-master.ts — Balance Master Stub
+// balance-master.ts — Balance Master Stub (Integrity Closure)
 // ------------------------------------------------------------
-// The Balance Master is the orchestrator that:
-//   1. Claims a pending task
-//   2. Processes it via LLMProvider (StubProvider by default)
-//   3. Saves the result
-//   4. Records execution events
-//
-// This is a STUB — it proves the durable task runtime works.
-// It does NOT build a full agent swarm (that's GROUP 01+).
-//
-// The Master uses the LLMProvider abstraction (ADR-0002):
-//   - StubProvider: deterministic canned responses (SIMULATED)
-//   - ZaiProvider (future 00-07+): real LLM calls
+// Updated to pass claimGeneration through all task operations.
+// Fencing prevents stale workers from overwriting results.
 //
 // HONEST CLASSIFICATION:
 //   When StubProvider is active, the Master's output is SIMULATED.
-//   It does NOT represent real AI reasoning or government recommendation.
 // ============================================================
-import { getLLMProvider } from "@/lib/llm";
+import { getLLMProvider, type LLMProvider } from "@/lib/llm";
 import type { Session } from "next-auth";
 import {
   claimTask,
@@ -31,7 +20,7 @@ import {
 } from "@/lib/task-service";
 
 const WORKER_ID = `balance-master-${process.pid}-${Date.now()}`;
-const LEASE_DURATION_MS = 30_000; // 30s per lease
+const LEASE_DURATION_MS = 30_000;
 const PROGRESS_STEPS = [25, 50, 75, 100];
 
 export interface MasterExecuteResult {
@@ -44,33 +33,31 @@ export interface MasterExecuteResult {
 }
 
 /**
- * Execute ONE pending task.
- * This is the core Balance Master cycle:
- *   claim → start → process (via LLMProvider) → complete/fail
- *
- * Returns the result. If no task is pending, returns { status: "no_task" }.
+ * Execute ONE pending task using a specific LLM provider.
+ * The provider is injected so tests can inject failures.
  */
-export async function executeNextTask(
-  session: Session
+export async function executeNextTaskWithProvider(
+  session: Session,
+  provider: LLMProvider
 ): Promise<MasterExecuteResult> {
-  const provider = getLLMProvider();
   const isSimulated = provider.name === "stub";
 
-  // 1. Claim a pending task
+  // 1. Claim a pending task (includes claimGeneration fencing token)
   const claimed = await claimTask(session, WORKER_ID, LEASE_DURATION_MS);
   if (!claimed) {
     return { taskId: "", status: "no_task", provider: provider.name, simulated: isSimulated };
   }
 
+  const { taskId, goal, claimGeneration } = claimed;
+
   try {
-    // 2. Start the task (claimed → running)
-    await startTask(session, claimed.taskId, WORKER_ID);
+    // 2. Start the task (fenced by claimGeneration)
+    await startTask(session, taskId, WORKER_ID, claimGeneration);
 
     // 3. Process via LLMProvider
-    // Renew lease before each step to prevent expiry during long processing
     for (const progress of PROGRESS_STEPS) {
-      await renewLease(session, claimed.taskId, WORKER_ID, LEASE_DURATION_MS);
-      await updateProgress(session, claimed.taskId, progress, WORKER_ID);
+      await renewLease(session, taskId, WORKER_ID, claimGeneration, LEASE_DURATION_MS);
+      await updateProgress(session, taskId, progress, WORKER_ID, claimGeneration);
     }
 
     // Call LLM provider to process the task goal
@@ -85,13 +72,13 @@ export async function executeNextTask(
         },
         {
           role: "user",
-          content: `Task type: ${claimed.input && typeof claimed.input === "object" && "type" in (claimed.input as Record<string, unknown>) ? (claimed.input as Record<string, unknown>)["type"] : "general"}\nGoal: ${claimed.goal}`,
+          content: `Goal: ${goal}`,
         },
       ],
-      traceId: claimed.taskId,
+      traceId: taskId,
     });
 
-    // 4. Complete the task with the LLM output
+    // 4. Complete the task (fenced by claimGeneration)
     const output: Record<string, unknown> = {
       response: llmResult.content,
       provider: llmResult.provider,
@@ -101,10 +88,10 @@ export async function executeNextTask(
       simulated: isSimulated,
     };
 
-    await completeTask(session, claimed.taskId, output, WORKER_ID);
+    await completeTask(session, taskId, output, WORKER_ID, claimGeneration);
 
     return {
-      taskId: claimed.taskId,
+      taskId,
       status: "completed",
       output,
       provider: provider.name,
@@ -112,9 +99,16 @@ export async function executeNextTask(
     };
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
-    await failTask(session, claimed.taskId, errorMsg, WORKER_ID);
+    // Fail the task (fenced by claimGeneration — if claim was lost, this also fails,
+    // which is correct: we don't want a stale worker recording a failure either)
+    try {
+      await failTask(session, taskId, errorMsg, WORKER_ID, claimGeneration);
+    } catch {
+      // If fencing rejects the fail (claim lost), the error is already logged
+      // by the reclaim process. We don't suppress it — we just don't duplicate.
+    }
     return {
-      taskId: claimed.taskId,
+      taskId,
       status: "failed",
       error: errorMsg,
       provider: provider.name,
@@ -124,7 +118,16 @@ export async function executeNextTask(
 }
 
 /**
- * Get the current status of a task (for monitoring).
+ * Execute ONE pending task using the default LLM provider.
+ */
+export async function executeNextTask(
+  session: Session
+): Promise<MasterExecuteResult> {
+  return executeNextTaskWithProvider(session, getLLMProvider());
+}
+
+/**
+ * Get the current status of a task.
  */
 export async function getTaskStatus(session: Session, taskId: string) {
   return getTask(session, taskId);

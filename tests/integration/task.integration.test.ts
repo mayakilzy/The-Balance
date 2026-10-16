@@ -23,7 +23,8 @@ import {
   reclaimStaleTasks,
   getTask,
 } from "@/lib/task-service";
-import { executeNextTask } from "@/lib/balance-master";
+import { executeNextTask, executeNextTaskWithProvider } from "@/lib/balance-master";
+import type { LLMProvider } from "@/lib/llm";
 import type { Session } from "next-auth";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
@@ -97,23 +98,24 @@ describeIntegration("Durable Task Runtime", () => {
       type: "analysis",
       goal: "Analyze agricultural data for Demolandia.",
       input: { sector: "agriculture" },
+      priority: 100,
     });
     expect(createResult.created).toBe(true);
-    expect(createResult.taskId).toBeTruthy();
 
     // Claim
     const claimed = await claimTask(session, "worker-1", 60_000);
     expect(claimed).toBeTruthy();
     expect(claimed?.taskId).toBe(createResult.taskId);
+    const gen = claimed!.claimGeneration;
 
     // Start
-    await startTask(session, claimed!.taskId, "worker-1");
+    await startTask(session, claimed!.taskId, "worker-1", gen);
 
     // Progress
-    await updateProgress(session, claimed!.taskId, 50, "worker-1");
+    await updateProgress(session, claimed!.taskId, 50, "worker-1", gen);
 
     // Complete
-    await completeTask(session, claimed!.taskId, { result: "Agricultural analysis complete." }, "worker-1");
+    await completeTask(session, claimed!.taskId, { result: "Agricultural analysis complete." }, "worker-1", gen);
 
     // Verify
     const detail = await getTask(session, claimed!.taskId);
@@ -121,7 +123,6 @@ describeIntegration("Durable Task Runtime", () => {
     expect(detail.task.progress).toBe(100);
     expect(detail.task.completedAt).toBeTruthy();
 
-    // Verify events
     const eventTypes = detail.events.map((e) => e.eventType);
     expect(eventTypes).toContain("created");
     expect(eventTypes).toContain("claimed");
@@ -135,25 +136,22 @@ describeIntegration("Durable Task Runtime", () => {
   it("concurrent claim: only one worker gets the task", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
-    // Create a task
     const createResult = await createTask(session, {
       type: "concurrent-test",
       goal: "Test concurrent claiming.",
+      priority: 100,
     });
 
-    // Two workers try to claim simultaneously
     const [claim1, claim2] = await Promise.all([
       claimTask(session, "worker-A", 60_000),
       claimTask(session, "worker-B", 60_000),
     ]);
 
-    // Only one should get the task
     const claims = [claim1, claim2].filter((c) => c !== null);
     expect(claims.length).toBe(1);
     expect(claims[0]?.taskId).toBe(createResult.taskId);
 
-    // Cleanup
-    await completeTask(session, createResult.taskId, {}, claims[0]!.goal);
+    await completeTask(session, createResult.taskId, {}, "worker-A", claims[0]!.claimGeneration);
   });
 
   // ============================================================
@@ -185,26 +183,27 @@ describeIntegration("Durable Task Runtime", () => {
   it("crash + resume: expired lease → task reclaimed", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
-    // Create + claim with very short lease (1 second)
     const createResult = await createTask(session, {
       type: "crash-test",
       goal: "Test crash recovery.",
+      priority: 100,
     });
 
-    const claimed = await claimTask(session, "crashed-worker", 1_000); // 1s lease
+    const claimed = await claimTask(session, "crashed-worker", 1_000);
     expect(claimed).toBeTruthy();
 
-    // Wait for lease to expire
     await new Promise((resolve) => setTimeout(resolve, 2_000));
 
-    // Reclaim stale tasks
     const reclaimResult = await reclaimStaleTasks(session);
     expect(reclaimResult.reclaimedCount).toBeGreaterThanOrEqual(1);
 
-    // Task should be pending again
     const detail = await getTask(session, createResult.taskId);
     expect(detail.task.status).toBe("pending");
     expect(detail.task.claimedBy).toBeNull();
+
+    // VERIFY: stale_reclaimed event was recorded (durable reclaim events)
+    const eventTypes = detail.events.map((e) => e.eventType);
+    expect(eventTypes).toContain("stale_reclaimed");
   });
 
   // ============================================================
@@ -238,15 +237,14 @@ describeIntegration("Durable Task Runtime", () => {
     const createResult = await createTask(session, {
       type: "append-test",
       goal: "Test append-only events.",
+      priority: 100,
     });
-    const claimed = await claimTask(session, "worker-1", 60_000);
+    await claimTask(session, "worker-1", 60_000);
 
-    // Get an event ID
     const detail = await getTask(session, createResult.taskId);
     const firstEventId = detail.events[0]?.id;
     expect(firstEventId).toBeTruthy();
 
-    // Attempt UPDATE → should fail
     await expect(
       withTenant(tenantAId, async (tx) => {
         await tx.taskEvent.update({
@@ -256,7 +254,6 @@ describeIntegration("Durable Task Runtime", () => {
       })
     ).rejects.toThrow(/permission denied/i);
 
-    // Attempt DELETE → should fail
     await expect(
       withTenant(tenantAId, async (tx) => {
         await tx.taskEvent.delete({ where: { id: firstEventId! } });
@@ -270,27 +267,23 @@ describeIntegration("Durable Task Runtime", () => {
   it("Balance Master: executeNextTask completes a pending task", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
-    // Create a task with HIGH priority so it gets claimed first
     const createResult = await createTask(session, {
       type: "master-test",
       goal: "Analyze economic indicators for Q3 2025.",
       input: { quarter: "Q3", year: 2025 },
-      priority: 100, // High priority
+      priority: 100,
     });
 
-    // Execute via Balance Master
     const execResult = await executeNextTask(session);
     expect(execResult.status).toBe("completed");
     expect(execResult.taskId).toBe(createResult.taskId);
-    expect(execResult.provider).toBe("stub"); // StubProvider
-    expect(execResult.simulated).toBe(true); // HONEST: simulated
+    expect(execResult.provider).toBe("stub");
+    expect(execResult.simulated).toBe(true);
 
-    // Verify task is completed
     const detail = await getTask(session, createResult.taskId);
     expect(detail.task.status).toBe("completed");
     expect(detail.task.output).toBeTruthy();
 
-    // Verify output includes simulated flag
     const output = detail.task.output as Record<string, unknown>;
     expect(output.simulated).toBe(true);
     expect(output.response).toBeTruthy();
@@ -305,19 +298,142 @@ describeIntegration("Durable Task Runtime", () => {
     const createResult = await createTask(session, {
       type: "fail-test",
       goal: "This task will fail.",
-      priority: 100, // High priority
+      priority: 100,
     });
 
     const claimed = await claimTask(session, "failing-worker", 60_000);
     expect(claimed?.taskId).toBe(createResult.taskId);
-    await startTask(session, claimed!.taskId, "failing-worker");
+    await startTask(session, claimed!.taskId, "failing-worker", claimed!.claimGeneration);
 
-    await failTask(session, claimed!.taskId, "Simulated processing error.", "failing-worker");
+    await failTask(session, claimed!.taskId, "Simulated processing error.", "failing-worker", claimed!.claimGeneration);
 
     const detail = await getTask(session, createResult.taskId);
     expect(detail.task.status).toBe("failed");
     expect(detail.task.error).toContain("Simulated processing error");
 
+    const eventTypes = detail.events.map((e) => e.eventType);
+    expect(eventTypes).toContain("failed");
+  });
+
+  // ============================================================
+  // 9. FENCING — stale worker cannot complete after lease expiry
+  // ============================================================
+  it("fencing: stale worker A cannot complete after B reclaims", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Create task
+    const createResult = await createTask(session, {
+      type: "fencing-test",
+      goal: "Test fencing token.",
+      priority: 100,
+    });
+
+    // Worker A claims
+    const claimA = await claimTask(session, "worker-A", 1_000); // 1s lease
+    expect(claimA).toBeTruthy();
+    const genA = claimA!.claimGeneration;
+
+    // Wait for lease to expire
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+    // Reclaim stale tasks
+    await reclaimStaleTasks(session);
+
+    // Worker B claims
+    const claimB = await claimTask(session, "worker-B", 60_000);
+    expect(claimB).toBeTruthy();
+    expect(claimB?.taskId).toBe(createResult.taskId);
+    const genB = claimB!.claimGeneration;
+    expect(genB).toBeGreaterThan(genA); // New generation
+
+    // Worker A tries to complete with OLD generation → should be REJECTED
+    await expect(
+      completeTask(session, createResult.taskId, { result: "A's stale result" }, "worker-A", genA)
+    ).rejects.toThrow(/Claim lost or fencing mismatch/i);
+
+    // Worker B completes with CURRENT generation → should SUCCEED
+    await completeTask(session, createResult.taskId, { result: "B's correct result" }, "worker-B", genB);
+
+    // Verify B's result is saved, not A's
+    const detail = await getTask(session, createResult.taskId);
+    expect(detail.task.status).toBe("completed");
+    const output = detail.task.output as Record<string, unknown>;
+    expect(output.result).toBe("B's correct result");
+  });
+
+  // ============================================================
+  // 10. ATOMIC IDEMPOTENCY — concurrent creates with same key
+  // ============================================================
+  it("atomic idempotency: concurrent creates with same key → one task", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    const key = `atomic-idem-${Date.now()}`;
+
+    // Two concurrent creates with the same key
+    const [result1, result2] = await Promise.all([
+      createTask(session, { type: "atomic-test", goal: "First.", idempotencyKey: key, priority: 100 }),
+      createTask(session, { type: "atomic-test", goal: "Second.", idempotencyKey: key, priority: 100 }),
+    ]);
+
+    // Exactly one should be created, the other returns existing
+    const tasks = [result1, result2];
+    const createdCount = tasks.filter((t) => t.created).length;
+    expect(createdCount).toBe(1);
+
+    // Both should return the SAME task ID
+    expect(result1.taskId).toBe(result2.taskId);
+
+    // Verify only ONE task exists in DB with this key
+    const dbTasks = await adminClient.task.findMany({
+      where: { tenantId: tenantAId, idempotencyKey: key },
+    });
+    expect(dbTasks.length).toBe(1);
+  });
+
+  // ============================================================
+  // 11. LLM PROVIDER FAILURE — Balance Master handles provider error
+  // ============================================================
+  it("Balance Master: LLM provider failure → task fails with error", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Create a task
+    const createResult = await createTask(session, {
+      type: "llm-fail-test",
+      goal: "This task will fail because the LLM provider throws.",
+      priority: 100,
+    });
+
+    // Create a failing provider that always throws
+    const failingProvider: LLMProvider = {
+      name: "failing-test-provider",
+      defaultModel: "fail-model",
+      defaultEmbeddingModel: "fail-embed",
+      async complete() {
+        throw new Error("Simulated LLM provider failure: API key invalid.");
+      },
+      async *stream() {
+        throw new Error("Simulated LLM provider failure.");
+      },
+      async embed() {
+        throw new Error("Simulated embedding failure.");
+      },
+      async health() {
+        return false;
+      },
+    };
+
+    // Execute with the failing provider
+    const execResult = await executeNextTaskWithProvider(session, failingProvider);
+    expect(execResult.status).toBe("failed");
+    expect(execResult.taskId).toBe(createResult.taskId);
+    expect(execResult.error).toContain("Simulated LLM provider failure");
+
+    // Verify task is failed in DB
+    const detail = await getTask(session, createResult.taskId);
+    expect(detail.task.status).toBe("failed");
+    expect(detail.task.error).toContain("Simulated LLM provider failure");
+
+    // Verify failed event was recorded
     const eventTypes = detail.events.map((e) => e.eventType);
     expect(eventTypes).toContain("failed");
   });

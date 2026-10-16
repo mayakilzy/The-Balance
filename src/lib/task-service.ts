@@ -1,24 +1,27 @@
 // ============================================================
-// task-service.ts — Durable Task Runtime
+// task-service.ts — Durable Task Runtime (Integrity Closure)
 // ------------------------------------------------------------
-// Handles:
-//   - Creating tasks with idempotency keys
-//   - Claiming tasks via SELECT FOR UPDATE SKIP LOCKED
-//   - Lease management (renew, expire, reclaim)
-//   - Completing / failing tasks
-//   - Reclaiming stale tasks after worker crash
-//   - Audit trail via task_events (append-only)
+// FENCING: claimGeneration increments on each claim. All operations
+//   (start, renew, progress, complete, fail) verify claimGeneration
+//   matches the caller's claim. Stale workers are rejected.
+//
+// ATOMIC IDEMPOTENCY: unique partial index on (tenantId, idempotencyKey).
+//   createTask handles unique violation → returns existing task.
+//
+// DURABLE RECLAIM: reclaimStaleTasks records an event per task
+//   within the transaction. No silent .catch() on FK violation.
 // ============================================================
 import { db } from "@/lib/db";
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { writeAudit } from "@/lib/audit";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
+import { PrismaClientKnownRequestError } from "@prisma/client/runtime/library";
 
-const LEASE_DURATION_MS = 60_000; // 60 seconds default lease
+const LEASE_DURATION_MS = 60_000;
 
 // ============================================================
-// CREATE TASK (with idempotency)
+// CREATE TASK (atomic idempotency via unique index)
 // ============================================================
 
 export interface CreateTaskInput {
@@ -34,68 +37,82 @@ export async function createTask(
   input: CreateTaskInput
 ): Promise<{ taskId: string; created: boolean }> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
-    // IDEMPOTENCY: if idempotencyKey provided, check for existing task
+    // IDEMPOTENCY: if key provided, try to find existing FIRST (fast path)
     if (input.idempotencyKey) {
       const existing = await tx.task.findFirst({
         where: { tenantId, idempotencyKey: input.idempotencyKey },
       });
       if (existing) {
-        // Record idempotent retry event
-        await tx.taskEvent.create({
-          data: {
-            taskId: existing.id,
-            tenantId,
-            eventType: "idempotent_retry",
-            actor: userId,
-            details: { message: "Task already exists, returning existing" } as Prisma.InputJsonValue,
-          },
-        });
         return { taskId: existing.id, created: false };
       }
     }
 
-    const task = await tx.task.create({
-      data: {
-        tenantId,
-        type: input.type,
-        goal: input.goal,
-        input: (input.input ?? {}) as Prisma.InputJsonValue,
-        idempotencyKey: input.idempotencyKey,
-        priority: input.priority ?? 0,
-        status: "pending",
-      },
-    });
+    // Attempt to create. If unique constraint violation (concurrent same key),
+    // catch it and return the existing task.
+    try {
+      const task = await tx.task.create({
+        data: {
+          tenantId,
+          type: input.type,
+          goal: input.goal,
+          input: (input.input ?? {}) as Prisma.InputJsonValue,
+          idempotencyKey: input.idempotencyKey,
+          priority: input.priority ?? 0,
+          status: "pending",
+        },
+      });
 
-    await tx.taskEvent.create({
-      data: {
-        taskId: task.id,
-        tenantId,
-        eventType: "created",
-        actor: userId,
-        details: { type: input.type, goal: input.goal.slice(0, 200) } as Prisma.InputJsonValue,
-      },
-    });
+      await tx.taskEvent.create({
+        data: {
+          taskId: task.id,
+          tenantId,
+          eventType: "created",
+          actor: userId,
+          details: { type: input.type, goal: input.goal.slice(0, 200) } as Prisma.InputJsonValue,
+        },
+      });
 
-    return { taskId: task.id, created: true };
+      return { taskId: task.id, created: true };
+    } catch (err) {
+      // P2002 = unique constraint violation
+      if (err instanceof PrismaClientKnownRequestError && err.code === "P2002") {
+        // Concurrent create with same key — find and return the existing task
+        const existing = await tx.task.findFirst({
+          where: { tenantId, idempotencyKey: input.idempotencyKey },
+        });
+        if (existing) {
+          return { taskId: existing.id, created: false };
+        }
+      }
+      throw err;
+    }
   });
 }
 
 // ============================================================
-// CLAIM TASK (SELECT FOR UPDATE SKIP LOCKED)
+// CLAIM TASK (SELECT FOR UPDATE SKIP LOCKED + claimGeneration increment)
 // ============================================================
+
+export interface ClaimedTask {
+  taskId: string;
+  goal: string;
+  input: unknown;
+  claimGeneration: number;
+}
 
 export async function claimTask(
   session: Session,
   workerId: string,
   leaseDurationMs: number = LEASE_DURATION_MS
-): Promise<{ taskId: string; goal: string; input: unknown } | null> {
+): Promise<ClaimedTask | null> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    // Use raw SQL for SELECT FOR UPDATE SKIP LOCKED.
-    // This ensures only ONE worker can claim a given task at a time.
-    const rows = await tx.$queryRaw<{ id: string; goal: string; input: unknown }[]>`
+    // Atomic claim: UPDATE with subquery SELECT FOR UPDATE SKIP LOCKED.
+    // Increments claimGeneration so stale workers are fenced out.
+    const rows = await tx.$queryRaw<ClaimedTask[]>`
       UPDATE "tasks"
       SET "status" = 'claimed',
           "claimedBy" = ${workerId},
+          "claimGeneration" = "claimGeneration" + 1,
           "leaseExpiresAt" = NOW() + (${leaseDurationMs}::integer / 1000.0) * INTERVAL '1 second',
           "startedAt" = COALESCE("startedAt", NOW()),
           "updatedAt" = NOW()
@@ -107,27 +124,50 @@ export async function claimTask(
         LIMIT 1
         FOR UPDATE SKIP LOCKED
       )
-      RETURNING id, goal, input
+      RETURNING id AS "taskId", goal, input, "claimGeneration"
     `;
 
     if (rows.length === 0) {
-      return null; // No pending tasks
+      return null;
     }
 
     const claimed = rows[0]!;
 
     await tx.taskEvent.create({
       data: {
-        taskId: claimed.id,
+        taskId: claimed.taskId,
         tenantId,
         eventType: "claimed",
         actor: workerId,
-        details: { leaseDurationMs } as Prisma.InputJsonValue,
+        details: {
+          leaseDurationMs,
+          claimGeneration: claimed.claimGeneration,
+        } as Prisma.InputJsonValue,
       },
     });
 
-    return { taskId: claimed.id, goal: claimed.goal, input: claimed.input };
+    return claimed;
   });
+}
+
+// ============================================================
+// FENCING HELPER: verify worker owns current claim
+// ============================================================
+// All task operations use updateMany with WHERE clause that checks:
+//   - id matches
+//   - tenantId matches (RLS also enforces, but belt-and-suspenders)
+//   - claimedBy matches workerId
+//   - claimGeneration matches expected generation
+// If the row was re-claimed by another worker, claimGeneration won't match,
+// and updateMany returns count=0 → we throw "claim lost" error.
+
+function assertClaimValid(result: { count: number }, operation: string): void {
+  if (result.count === 0) {
+    throw new Error(
+      `Claim lost or fencing mismatch: operation '${operation}' failed. ` +
+        "The task may have been reclaimed by another worker after lease expiry."
+    );
+  }
 }
 
 // ============================================================
@@ -138,6 +178,7 @@ export async function renewLease(
   session: Session,
   taskId: string,
   workerId: string,
+  claimGeneration: number,
   leaseDurationMs: number = LEASE_DURATION_MS
 ): Promise<{ renewed: boolean }> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
@@ -146,30 +187,40 @@ export async function renewLease(
         id: taskId,
         tenantId,
         claimedBy: workerId,
+        claimGeneration,
         status: { in: ["claimed", "running"] },
       },
       data: {
         leaseExpiresAt: new Date(Date.now() + leaseDurationMs),
       },
     });
-    return { renewed: result.count > 0 };
+    assertClaimValid(result, "renewLease");
+    return { renewed: true };
   });
 }
 
 // ============================================================
-// START TASK (transition claimed → running)
+// START TASK
 // ============================================================
 
 export async function startTask(
   session: Session,
   taskId: string,
-  workerId: string
+  workerId: string,
+  claimGeneration: number
 ): Promise<void> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    await tx.task.updateMany({
-      where: { id: taskId, tenantId, claimedBy: workerId, status: "claimed" },
+    const result = await tx.task.updateMany({
+      where: {
+        id: taskId,
+        tenantId,
+        claimedBy: workerId,
+        claimGeneration,
+        status: "claimed",
+      },
       data: { status: "running" },
     });
+    assertClaimValid(result, "startTask");
 
     await tx.taskEvent.create({
       data: { taskId, tenantId, eventType: "started", actor: workerId },
@@ -185,13 +236,20 @@ export async function updateProgress(
   session: Session,
   taskId: string,
   progress: number,
-  workerId: string
+  workerId: string,
+  claimGeneration: number
 ): Promise<void> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    await tx.task.updateMany({
-      where: { id: taskId, tenantId, claimedBy: workerId },
+    const result = await tx.task.updateMany({
+      where: {
+        id: taskId,
+        tenantId,
+        claimedBy: workerId,
+        claimGeneration,
+      },
       data: { progress: Math.max(0, Math.min(100, progress)) },
     });
+    assertClaimValid(result, "updateProgress");
   });
 }
 
@@ -203,11 +261,18 @@ export async function completeTask(
   session: Session,
   taskId: string,
   output: Record<string, unknown>,
-  workerId: string
+  workerId: string,
+  claimGeneration: number
 ): Promise<void> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    await tx.task.update({
-      where: { id: taskId },
+    const result = await tx.task.updateMany({
+      where: {
+        id: taskId,
+        tenantId,
+        claimedBy: workerId,
+        claimGeneration,
+        status: { in: ["claimed", "running"] },
+      },
       data: {
         status: "completed",
         output: output as Prisma.InputJsonValue,
@@ -216,6 +281,7 @@ export async function completeTask(
         leaseExpiresAt: null,
       },
     });
+    assertClaimValid(result, "completeTask");
 
     await tx.taskEvent.create({
       data: {
@@ -237,17 +303,25 @@ export async function failTask(
   session: Session,
   taskId: string,
   error: string,
-  workerId: string
+  workerId: string,
+  claimGeneration: number
 ): Promise<void> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    await tx.task.update({
-      where: { id: taskId },
+    const result = await tx.task.updateMany({
+      where: {
+        id: taskId,
+        tenantId,
+        claimedBy: workerId,
+        claimGeneration,
+        status: { in: ["claimed", "running"] },
+      },
       data: {
         status: "failed",
         error,
         leaseExpiresAt: null,
       },
     });
+    assertClaimValid(result, "failTask");
 
     await tx.taskEvent.create({
       data: {
@@ -262,47 +336,58 @@ export async function failTask(
 }
 
 // ============================================================
-// RECLAIM STALE TASKS (after worker crash)
+// RECLAIM STALE TASKS (with per-task event recording)
 // ============================================================
 
 export async function reclaimStaleTasks(
   session: Session
 ): Promise<{ reclaimedCount: number }> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    // Find tasks where lease has expired and status is claimed/running
-    const result = await tx.task.updateMany({
+    // Find stale tasks first (so we can record events per task)
+    const staleTasks = await tx.task.findMany({
       where: {
         tenantId,
         status: { in: ["claimed", "running"] },
         leaseExpiresAt: { lt: new Date() },
       },
-      data: {
-        status: "pending",
-        claimedBy: null,
-        leaseExpiresAt: null,
-      },
+      select: { id: true, claimedBy: true, claimGeneration: true },
     });
 
-    if (result.count > 0) {
+    if (staleTasks.length === 0) {
+      return { reclaimedCount: 0 };
+    }
+
+    // Reclaim each task + record event per task (within the same transaction)
+    for (const task of staleTasks) {
+      await tx.task.update({
+        where: { id: task.id },
+        data: {
+          status: "pending",
+          claimedBy: null,
+          leaseExpiresAt: null,
+        },
+      });
+
       await tx.taskEvent.create({
         data: {
-          taskId: "batch",
+          taskId: task.id,
           tenantId,
           eventType: "stale_reclaimed",
           actor: "system",
-          details: { count: result.count } as Prisma.InputJsonValue,
+          details: {
+            previousWorker: task.claimedBy,
+            previousClaimGeneration: task.claimGeneration,
+          } as Prisma.InputJsonValue,
         },
-      }).catch(() => {
-        // taskId="batch" may violate FK; that's OK — we just skip the event
       });
     }
 
-    return { reclaimedCount: result.count };
+    return { reclaimedCount: staleTasks.length };
   });
 }
 
 // ============================================================
-// GET TASK (status + result + events)
+// GET TASK
 // ============================================================
 
 export async function getTask(
@@ -318,6 +403,7 @@ export async function getTask(
     output: unknown;
     error: string | null;
     claimedBy: string | null;
+    claimGeneration: number;
     createdAt: Date;
     startedAt: Date | null;
     completedAt: Date | null;
@@ -353,6 +439,7 @@ export async function getTask(
         output: task.output,
         error: task.error,
         claimedBy: task.claimedBy,
+        claimGeneration: task.claimGeneration,
         createdAt: task.createdAt,
         startedAt: task.startedAt,
         completedAt: task.completedAt,

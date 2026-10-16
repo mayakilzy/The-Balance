@@ -431,6 +431,7 @@ model Task {
   error           String?
   progress        Int       @default(0)
   claimedBy       String?
+  claimGeneration Int       @default(0)
   leaseExpiresAt  DateTime?
   priority        Int       @default(0)
   createdAt       DateTime  @default(now())
@@ -443,7 +444,7 @@ model Task {
 
   @@index([tenantId, status])
   @@index([status, priority, createdAt])
-  @@index([tenantId, idempotencyKey])
+  @@unique([tenantId, idempotencyKey])
   @@index([leaseExpiresAt])
   @@map("tasks")
 }
