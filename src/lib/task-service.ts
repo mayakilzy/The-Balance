@@ -35,61 +35,53 @@ export async function createTask(
   session: Session,
   input: CreateTaskInput
 ): Promise<{ taskId: string; created: boolean }> {
-  if (!session || !session.user) {
-    throw new Error("Unauthenticated: no session");
-  }
-  const userId = session.user.id;
-  const tenantId = session.user.tenantId;
-  if (!userId || !tenantId) {
-    throw new Error("Session missing required claims");
-  }
-
-  // IDEMPOTENCY: fast path — check for existing task first
+  // Step 1: Check for existing task (fast path, inside tx with RLS context)
   if (input.idempotencyKey) {
-    const existing = await db.task.findFirst({
-      where: { tenantId, idempotencyKey: input.idempotencyKey },
+    const existing = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+      return await tx.task.findFirst({
+        where: { tenantId, idempotencyKey: input.idempotencyKey },
+      });
     });
     if (existing) {
       return { taskId: existing.id, created: false };
     }
   }
 
-  // Attempt to create. The UNIQUE partial index on (tenantId, idempotencyKey)
-  // guarantees atomicity — if two concurrent requests try to create with the
-  // same key, only one succeeds; the other gets P2002.
-  // We use db (not tx) because a P2002 inside a transaction aborts it,
-  // making the follow-up findFirst impossible.
+  // Step 2: Try to create (inside tx with RLS context)
   try {
-    const task = await db.task.create({
-      data: {
-        tenantId,
-        type: input.type,
-        goal: input.goal,
-        input: (input.input ?? {}) as Prisma.InputJsonValue,
-        idempotencyKey: input.idempotencyKey,
-        priority: input.priority ?? 0,
-        status: "pending",
-      },
-    });
+    return await withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
+      const task = await tx.task.create({
+        data: {
+          tenantId,
+          type: input.type,
+          goal: input.goal,
+          input: (input.input ?? {}) as Prisma.InputJsonValue,
+          idempotencyKey: input.idempotencyKey,
+          priority: input.priority ?? 0,
+          status: "pending",
+        },
+      });
 
-    // Record event in a separate transaction (won't affect the task creation)
-    await db.taskEvent.create({
-      data: {
-        taskId: task.id,
-        tenantId,
-        eventType: "created",
-        actor: userId,
-        details: { type: input.type, goal: input.goal.slice(0, 200) } as Prisma.InputJsonValue,
-      },
-    });
+      await tx.taskEvent.create({
+        data: {
+          taskId: task.id,
+          tenantId,
+          eventType: "created",
+          actor: userId,
+          details: { type: input.type, goal: input.goal.slice(0, 200) } as Prisma.InputJsonValue,
+        },
+      });
 
-    return { taskId: task.id, created: true };
+      return { taskId: task.id, created: true };
+    });
   } catch (err) {
-    // P2002 = unique constraint violation — concurrent create with same key
+    // P2002 = unique constraint violation — concurrent create with same key won.
+    // The transaction is aborted, so we need a NEW transaction to findFirst.
     if (err && typeof err === "object" && "code" in err && err.code === "P2002") {
-      // The other request won — find and return the existing task
-      const existing = await db.task.findFirst({
-        where: { tenantId, idempotencyKey: input.idempotencyKey },
+      const existing = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+        return await tx.task.findFirst({
+          where: { tenantId, idempotencyKey: input.idempotencyKey },
+        });
       });
       if (existing) {
         return { taskId: existing.id, created: false };
