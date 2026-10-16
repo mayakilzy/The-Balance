@@ -78,12 +78,14 @@ echo "[4/6] Recreating database + restoring from backup..."
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";"
 # Note: --no-owner keeps ownership flexible, but we do NOT use
 # --no-privileges so RLS policies are restored.
-pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
+# We do NOT use --clean because the database was just created (empty).
+# We do NOT use --exit-on-error because pg_restore may emit warnings
+# about pre-existing objects from the schema — we capture output and
+# check for actual errors afterward.
+RESTORE_OUTPUT=$(pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
   --no-owner \
-  --clean \
-  --if-exists \
-  "$BACKUP_FILE" 2>&1 || true
-# pg_restore may emit warnings about pre-existing objects; that's OK
+  "$BACKUP_FILE" 2>&1) || true
+echo "$RESTORE_OUTPUT" | grep -i "^pg_restore:.*error" && echo "FAIL: pg_restore had errors" && exit 1
 echo "  Restore complete."
 
 # ------------------------------------------------------------
@@ -131,6 +133,15 @@ echo "  RLS enabled (users:tasks:evidence:audit_log): $RLS_CHECK"
 
 if [ "$RLS_CHECK" != "t:t:t:t" ]; then
   echo "FAIL: RLS not enabled on all key tables after restore!"
+  echo "  Debug — tables with RLS status:"
+  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
+    SELECT relname, relrowsecurity, relforcerowsecurity
+    FROM pg_class
+    WHERE relname IN ('users', 'tasks', 'evidence', 'audit_log', 'tenants', 'memberships')
+    ORDER BY relname;
+  "
+  echo "  Debug — restore output (last 20 lines):"
+  echo "$RESTORE_OUTPUT" | tail -20
   exit 1
 fi
 
