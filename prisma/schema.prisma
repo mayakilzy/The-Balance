@@ -228,6 +228,10 @@ model Source {
   // Independence group: sources in the same group are NOT independent
   // (e.g., syndicated news feeds). Used for dedup + independence counting.
   independenceGroup String?
+  // Review status: "candidate" (tenant-submitted, not reviewed) | "approved" (global)
+  reviewStatus     String   @default("approved")
+  // Which tenant submitted this candidate (null for admin-curated)
+  submittedByTenantId String?
   metadata         Json     @default("{}")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -236,6 +240,7 @@ model Source {
 
   @@index([type])
   @@index([independenceGroup])
+  @@index([reviewStatus])
   @@map("sources")
 }
 

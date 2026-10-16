@@ -14,7 +14,7 @@
 // ============================================================
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { PrismaClient } from "@prisma/client";
-import { createEvidence, searchEvidence, countIndependentSources, hashUrl } from "@/lib/evidence-service";
+import { createEvidence, searchEvidence, countIndependentSources, hashUrl, verifyEvidence } from "@/lib/evidence-service";
 import { withAuthenticatedTenant, withTenant } from "@/lib/security/tenant-context";
 import type { Session } from "next-auth";
 
@@ -84,7 +84,6 @@ describeIntegration("Evidence Fabric", () => {
       claim: "Test evidence claim for integration testing.",
       summary: "A test evidence record.",
       type: "supporting",
-      verificationStatus: "unverified",
       observedAt: new Date("2024-06-15"),
       extractionMethod: "manual",
       classification: "public",
@@ -125,7 +124,6 @@ describeIntegration("Evidence Fabric", () => {
       claim: "Counter-evidence: test results were inconclusive.",
       type: "counter",
       relatedEvidenceId: evidence1Id,
-      verificationStatus: "disputed",
       source: {
         code: "TEST-SRC-002",
         displayName: "Counter Source",
@@ -277,5 +275,162 @@ describeIntegration("Evidence Fabric", () => {
 
     expect(embedding).toBeTruthy();
     expect(embedding?.model).toBeTruthy();
+  });
+
+  // ============================================================
+  // 8. CROSS-TENANT relatedEvidenceId BLOCKED (trigger)
+  // ============================================================
+  it("cannot create evidence with relatedEvidenceId pointing to different tenant", async () => {
+    // Create evidence in Tenant B (via admin client)
+    const tenantBEvidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantBId,
+        claim: "Tenant B evidence for cross-tenant test.",
+      },
+    });
+
+    // Attempt: create evidence in Tenant A linking to Tenant B's evidence
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+    await expect(
+      createEvidence(session, {
+        claim: "Attempt to link cross-tenant.",
+        type: "counter",
+        relatedEvidenceId: tenantBEvidence.id,
+      })
+    ).rejects.toThrow(/same tenant|relation violation/i);
+
+    // Cleanup
+    await adminClient.evidence.delete({ where: { id: tenantBEvidence.id } });
+  });
+
+  // ============================================================
+  // 9. EVIDENCE_EMBEDDINGS tenantId consistency (trigger)
+  // ============================================================
+  it("cannot create embedding with tenantId different from evidence tenantId", async () => {
+    // Create evidence in Tenant A
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+    const result = await createEvidence(session, {
+      claim: "Embedding consistency test.",
+    });
+
+    // Attempt: insert embedding with Tenant B's tenantId (via admin raw SQL)
+    await expect(
+      adminClient.$executeRaw`
+        INSERT INTO "evidence_embeddings" ("id", "evidenceId", "tenantId", "embedding", "model", "createdAt")
+        VALUES (gen_random_uuid()::text, ${result.evidenceId}, ${tenantBId}, '[0.1, 0.2]'::vector, 'test', NOW())
+      `
+    ).rejects.toThrow(/tenant mismatch|consistency/i);
+  });
+
+  // ============================================================
+  // 10. VERIFICATION STATUS FORCED TO "unverified" on create
+  // ============================================================
+  it("createEvidence forces verificationStatus to 'unverified' (cannot self-verify)", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Attempt to pass verificationStatus (typed as `never`, but test raw)
+    const result = await createEvidence(session, {
+      claim: "Self-verification attempt test.",
+      // @ts-expect-error — testing that even if passed, it's ignored
+      verificationStatus: "verified",
+    });
+
+    const evidence = await adminClient.evidence.findUnique({
+      where: { id: result.evidenceId },
+    });
+
+    // Must be "unverified" regardless of input
+    expect(evidence?.verificationStatus).toBe("unverified");
+  });
+
+  // ============================================================
+  // 11. VERIFY EVIDENCE via separate operation (requires permission)
+  // ============================================================
+  it("verifyEvidence changes status from unverified to verified", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Create evidence (unverified by default)
+    const createResult = await createEvidence(session, {
+      claim: "Evidence to be verified.",
+    });
+
+    // Verify it via separate operation
+    const verifyResult = await verifyEvidence(
+      session,
+      createResult.evidenceId,
+      "verified",
+      "Cross-checked with World Bank data."
+    );
+
+    expect(verifyResult.verificationStatus).toBe("verified");
+
+    // Confirm in DB
+    const evidence = await adminClient.evidence.findUnique({
+      where: { id: createResult.evidenceId },
+    });
+    expect(evidence?.verificationStatus).toBe("verified");
+  });
+
+  // ============================================================
+  // 12. OBSERVER cannot verify evidence (RBAC)
+  // ============================================================
+  it("observer role cannot verify evidence (requires evidence:verify)", async () => {
+    // Observer session
+    const observerSession = mockSession(adminUserId, tenantAId, "observer", ADMIN_EMAIL, "Test Admin");
+
+    // Create evidence as admin first
+    const adminSession = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+    const createResult = await createEvidence(adminSession, {
+      claim: "Evidence for observer verify test.",
+    });
+
+    // Observer attempts to verify → should be rejected by requirePermissionWithCurrentRole
+    // (verifyEvidence itself doesn't check permission; the API route does.
+    // Here we test the permission check directly.)
+    const { requirePermissionWithCurrentRole } = await import("@/lib/permissions");
+    await expect(
+      requirePermissionWithCurrentRole(observerSession, "evidence:verify")
+    ).rejects.toThrow(/Permission denied/);
+  });
+
+  // ============================================================
+  // 13. SEARCH RESULTS include embedding provider disclosure
+  // ============================================================
+  it("searchEvidence results include embeddingProvider + similarityDisclaimer", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    const results = await searchEvidence(session, "test", 5);
+
+    if (results.length > 0) {
+      expect(results[0]?.embeddingProvider).toBeTruthy();
+      expect(results[0]?.similarityDisclaimer).toBeTruthy();
+      expect(results[0]?.similarityDisclaimer).toMatch(/SIMULATED|provider/i);
+    }
+  });
+
+  // ============================================================
+  // 14. CANDIDATE SOURCES — tenant-submitted sources are "candidate"
+  // ============================================================
+  it("new sources created by balance_app are 'candidate' (not approved)", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    const result = await createEvidence(session, {
+      claim: "Evidence with new source.",
+      source: {
+        code: "CANDIDATE-TEST-001",
+        displayName: "Candidate Test Source",
+        type: "media",
+        url: "https://candidate-test.example.com/001",
+      },
+    });
+
+    // Find the source that was created
+    const evidence = await adminClient.evidence.findUnique({
+      where: { id: result.evidenceId },
+      include: { source: true },
+    });
+
+    expect(evidence?.source?.reviewStatus).toBe("candidate");
+    expect(evidence?.source?.submittedByTenantId).toBe(tenantAId);
   });
 });
