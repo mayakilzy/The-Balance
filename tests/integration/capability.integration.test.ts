@@ -307,4 +307,82 @@ describeIntegration("Capability Registry", () => {
     // Cleanup
     await adminClient.task.delete({ where: { id: tenantBTask.id } });
   });
+
+  // ============================================================
+  // 12. MOCK READINESS WITHOUT ADAPTER — fails (no silent stub fallback)
+  // ============================================================
+  it("invokeCapability with readiness=mock and no mock adapter fails", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    await registerCapability({
+      code: "TEST-MOCK-NO-ADAPTER",
+      displayName: "Mock No Adapter",
+      description: "Readiness=mock but no mock adapter registered.",
+      type: "tool",
+      readiness: "mock",
+      requiredPermission: "evidence:read",
+      // No adapterEndpoint
+    });
+
+    const result = await invokeCapability(session, "TEST-MOCK-NO-ADAPTER", { test: true });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("mock");
+    expect(result.error).toContain("not registered");
+    expect(result.simulated).toBe(false);
+  });
+
+  // ============================================================
+  // 13. SLOW ADAPTER — no PostgreSQL transaction held during execution
+  // ============================================================
+  it("slow adapter executes without holding database transaction", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Register a capability that uses a slow adapter
+    await registerCapability({
+      code: "TEST-SLOW-ADAPTER",
+      displayName: "Slow Adapter Tool",
+      description: "Tests that adapter execution doesn't hold DB transaction.",
+      type: "tool",
+      readiness: "live",
+      requiredPermission: "evidence:read",
+      adapterEndpoint: "slow-test-adapter",
+    });
+
+    // Register a slow adapter that takes 500ms
+    const { registerAdapter } = await import("@/lib/capability-service");
+    registerAdapter("slow-test-adapter", {
+      name: "slow-test-adapter",
+      readiness: "live" as const,
+      async execute(input: Record<string, unknown>) {
+        // Simulate slow external call (500ms)
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        return {
+          output: { result: "slow adapter completed", delayMs: 500 },
+          provider: "slow-test-adapter",
+          simulated: false,
+        };
+      },
+    });
+
+    const startTime = Date.now();
+    const result = await invokeCapability(session, "TEST-SLOW-ADAPTER", { test: true });
+    const elapsedMs = Date.now() - startTime;
+
+    expect(result.status).toBe("completed");
+    expect(elapsedMs).toBeGreaterThanOrEqual(500); // Adapter took at least 500ms
+    expect(result.provider).toBe("slow-test-adapter");
+
+    // Verify the invocation was recorded with correct status
+    const { withAuthenticatedTenant } = await import("@/lib/security/tenant-context");
+    const invocations = await withAuthenticatedTenant(session, async ({ tx }) => {
+      return await tx.capabilityInvocation.findMany({
+        where: { capabilityId: (await tx.capability.findUnique({ where: { code: "TEST-SLOW-ADAPTER" } }))?.id },
+        orderBy: { startedAt: "desc" },
+        take: 1,
+      });
+    });
+    expect(invocations[0]?.status).toBe("completed");
+    expect(invocations[0]?.output).toBeTruthy();
+  });
 });

@@ -316,11 +316,21 @@ export async function invokeCapability(
         );
       }
     } else {
-      // No adapterEndpoint — use stub ONLY if readiness is "stub"
+      // No adapterEndpoint — use adapter ONLY if readiness matches a registered adapter
       if (capability.readiness === "stub") {
         adapter = getAdapter("stub");
+        if (!adapter) {
+          throw new Error(`Capability '${capabilityCode}' has readiness='stub' but stub adapter is not registered.`);
+        }
       } else if (capability.readiness === "mock") {
-        adapter = getAdapter("mock") ?? getAdapter("stub");
+        adapter = getAdapter("mock");
+        if (!adapter) {
+          // NO FALLBACK to stub — mock means mock, not stub
+          throw new Error(
+            `Capability '${capabilityCode}' has readiness='mock' but no mock adapter is registered. ` +
+              `Cannot execute — do not silently fall back to stub.`
+          );
+        }
       } else {
         // live/untested with no adapter — FAIL
         throw new Error(
