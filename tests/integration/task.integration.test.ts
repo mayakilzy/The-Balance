@@ -451,4 +451,76 @@ describeIntegration("Durable Task Runtime", () => {
     const eventTypes = detail.events.map((e) => e.eventType);
     expect(eventTypes).toContain("failed");
   });
+
+  // ============================================================
+  // 12. LEASE EXPIRY BLOCKS COMPLETE — worker cannot complete after lease expires
+  // ============================================================
+  it("completeTask rejected when lease has expired (before reclaim)", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Clean up
+    await adminClient.task.deleteMany({
+      where: { tenantId: tenantAId, status: { in: ["pending", "claimed", "running"] } },
+    });
+
+    // Create + claim with 1s lease
+    const createResult = await createTask(session, {
+      type: "lease-expiry-test",
+      goal: "Test lease expiry blocks complete.",
+      priority: 100,
+    });
+
+    const claimed = await claimTask(session, "worker-X", 1_000); // 1s lease
+    expect(claimed).toBeTruthy();
+    const gen = claimed!.claimGeneration;
+
+    // Wait for lease to expire
+    await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+    // Worker X tries to complete — should be REJECTED (lease expired)
+    await expect(
+      completeTask(session, createResult.taskId, { result: "late completion" }, "worker-X", gen)
+    ).rejects.toThrow(/lease expired|Claim lost/i);
+
+    // Task should still be claimed/running (not completed)
+    const detail = await getTask(session, createResult.taskId);
+    expect(detail.task.status).not.toBe("completed");
+  });
+
+  // ============================================================
+  // 13. RECLAIM RACE — renewed lease is NOT reclaimed
+  // ============================================================
+  it("reclaimStaleTasks does not reclaim task with valid renewed lease", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Clean up
+    await adminClient.task.deleteMany({
+      where: { tenantId: tenantAId, status: { in: ["pending", "claimed", "running"] } },
+    });
+
+    // Create + claim with 5s lease
+    const createResult = await createTask(session, {
+      type: "reclaim-race-test",
+      goal: "Test reclaim race with renewed lease.",
+      priority: 100,
+    });
+
+    const claimed = await claimTask(session, "worker-Y", 5_000); // 5s lease
+    expect(claimed).toBeTruthy();
+    const gen = claimed!.claimGeneration;
+
+    // Immediately run reclaimStaleTasks — lease is still valid
+    const reclaimResult = await reclaimStaleTasks(session);
+    expect(reclaimResult.reclaimedCount).toBe(0); // Nothing reclaimed
+
+    // Task should still be claimed (not pending)
+    const detail = await getTask(session, createResult.taskId);
+    expect(detail.task.status).toBe("claimed");
+    expect(detail.task.claimedBy).toBe("worker-Y");
+
+    // Worker Y can still complete (lease valid)
+    await completeTask(session, createResult.taskId, { result: "completed before expiry" }, "worker-Y", gen);
+    const finalDetail = await getTask(session, createResult.taskId);
+    expect(finalDetail.task.status).toBe("completed");
+  });
 });

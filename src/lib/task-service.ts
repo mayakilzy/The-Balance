@@ -153,20 +153,20 @@ export async function claimTask(
 }
 
 // ============================================================
-// FENCING HELPER: verify worker owns current claim
+// FENCING HELPER: verify worker owns current claim + lease is valid
 // ============================================================
 // All task operations use updateMany with WHERE clause that checks:
 //   - id matches
-//   - tenantId matches (RLS also enforces, but belt-and-suspenders)
+//   - tenantId matches (RLS also enforces)
 //   - claimedBy matches workerId
 //   - claimGeneration matches expected generation
-// If the row was re-claimed by another worker, claimGeneration won't match,
-// and updateMany returns count=0 → we throw "claim lost" error.
+//   - leaseExpiresAt is in the future (lease still valid)
+// If the row was re-claimed or lease expired, updateMany returns count=0.
 
 function assertClaimValid(result: { count: number }, operation: string): void {
   if (result.count === 0) {
     throw new Error(
-      `Claim lost or fencing mismatch: operation '${operation}' failed. ` +
+      `Claim lost, fencing mismatch, or lease expired: operation '${operation}' failed. ` +
         "The task may have been reclaimed by another worker after lease expiry."
     );
   }
@@ -191,6 +191,7 @@ export async function renewLease(
         claimedBy: workerId,
         claimGeneration,
         status: { in: ["claimed", "running"] },
+        leaseExpiresAt: { gt: new Date() }, // Lease must still be valid
       },
       data: {
         leaseExpiresAt: new Date(Date.now() + leaseDurationMs),
@@ -219,6 +220,7 @@ export async function startTask(
         claimedBy: workerId,
         claimGeneration,
         status: "claimed",
+        leaseExpiresAt: { gt: new Date() }, // Lease must still be valid
       },
       data: { status: "running" },
     });
@@ -248,6 +250,7 @@ export async function updateProgress(
         tenantId,
         claimedBy: workerId,
         claimGeneration,
+        leaseExpiresAt: { gt: new Date() }, // Lease must still be valid
       },
       data: { progress: Math.max(0, Math.min(100, progress)) },
     });
@@ -274,6 +277,7 @@ export async function completeTask(
         claimedBy: workerId,
         claimGeneration,
         status: { in: ["claimed", "running"] },
+        leaseExpiresAt: { gt: new Date() }, // Lease must still be valid
       },
       data: {
         status: "completed",
@@ -316,6 +320,7 @@ export async function failTask(
         claimedBy: workerId,
         claimGeneration,
         status: { in: ["claimed", "running"] },
+        leaseExpiresAt: { gt: new Date() }, // Lease must still be valid
       },
       data: {
         status: "failed",
@@ -345,46 +350,50 @@ export async function reclaimStaleTasks(
   session: Session
 ): Promise<{ reclaimedCount: number }> {
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    // Find stale tasks first (so we can record events per task)
-    const staleTasks = await tx.task.findMany({
-      where: {
-        tenantId,
-        status: { in: ["claimed", "running"] },
-        leaseExpiresAt: { lt: new Date() },
-      },
-      select: { id: true, claimedBy: true, claimGeneration: true },
-    });
+    // ATOMIC RECLAIM: use UPDATE with WHERE clause that checks:
+    //   - status is claimed/running
+    //   - leaseExpiresAt is in the past
+    // This prevents the race where a worker renews its lease between
+    // our read and our update — the UPDATE will simply not match that row.
+    //
+    // We use raw SQL to RETURN the reclaimed task IDs + their old
+    // claimedBy + claimGeneration, so we can record events per task.
+    const reclaimedRows = await tx.$queryRaw<
+      Array<{ id: string; oldClaimedBy: string | null; oldClaimGeneration: number }>
+    >`
+      UPDATE "tasks"
+      SET "status" = 'pending',
+          "claimedBy" = NULL,
+          "leaseExpiresAt" = NULL,
+          "updatedAt" = NOW()
+      WHERE "tenantId" = ${tenantId}
+        AND "status" IN ('claimed', 'running')
+        AND "leaseExpiresAt" IS NOT NULL
+        AND "leaseExpiresAt" < NOW()
+      RETURNING id, "claimedBy" AS "oldClaimedBy", "claimGeneration" AS "oldClaimGeneration"
+    `;
 
-    if (staleTasks.length === 0) {
+    if (reclaimedRows.length === 0) {
       return { reclaimedCount: 0 };
     }
 
-    // Reclaim each task + record event per task (within the same transaction)
-    for (const task of staleTasks) {
-      await tx.task.update({
-        where: { id: task.id },
-        data: {
-          status: "pending",
-          claimedBy: null,
-          leaseExpiresAt: null,
-        },
-      });
-
+    // Record a stale_reclaimed event for each actually-reclaimed task
+    for (const row of reclaimedRows) {
       await tx.taskEvent.create({
         data: {
-          taskId: task.id,
+          taskId: row.id,
           tenantId,
           eventType: "stale_reclaimed",
           actor: "system",
           details: {
-            previousWorker: task.claimedBy,
-            previousClaimGeneration: task.claimGeneration,
+            previousWorker: row.oldClaimedBy,
+            previousClaimGeneration: row.oldClaimGeneration,
           } as Prisma.InputJsonValue,
         },
       });
     }
 
-    return { reclaimedCount: staleTasks.length };
+    return { reclaimedCount: reclaimedRows.length };
   });
 }
 
