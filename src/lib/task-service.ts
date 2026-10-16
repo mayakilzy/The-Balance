@@ -100,6 +100,7 @@ export interface ClaimedTask {
   goal: string;
   input: unknown;
   claimGeneration: number;
+  claimedBy: string;
 }
 
 export async function claimTask(
@@ -126,7 +127,7 @@ export async function claimTask(
         LIMIT 1
         FOR UPDATE SKIP LOCKED
       )
-      RETURNING id AS "taskId", goal, input, "claimGeneration"
+      RETURNING id AS "taskId", goal, input, "claimGeneration", "claimedBy"
     `;
 
     if (rows.length === 0) {
