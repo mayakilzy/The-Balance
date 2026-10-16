@@ -146,6 +146,8 @@ model Tenant {
   decisions   Decision[]
   decisionEvents DecisionEvent[]
   events      Event[]
+  tasks       Task[]
+  taskEvents  TaskEvent[]
 
   @@map("tenants")
   @@index([status])
@@ -411,3 +413,54 @@ model Event {
 // NOTE: pgvector extension is enabled via the first SQL migration.
 // Vector columns will be added in mission 00-04 (Evidence) on the
 // `evidence_embeddings` table, not on a Prisma model directly.
+
+// ============================================================
+// DURABLE TASK RUNTIME (00-06)
+// ============================================================
+
+model Task {
+  id              String    @id @default(cuid())
+  tenantId        String
+  type            String
+  goal            String
+  // Status: pending → claimed → running → completed | failed | abandoned
+  status          String    @default("pending")
+  idempotencyKey  String?
+  input           Json      @default("{}")
+  output          Json?
+  error           String?
+  progress        Int       @default(0)
+  claimedBy       String?
+  leaseExpiresAt  DateTime?
+  priority        Int       @default(0)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  startedAt       DateTime?
+  completedAt     DateTime?
+
+  tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  events  TaskEvent[]
+
+  @@index([tenantId, status])
+  @@index([status, priority, createdAt])
+  @@index([tenantId, idempotencyKey])
+  @@index([leaseExpiresAt])
+  @@map("tasks")
+}
+
+model TaskEvent {
+  id        String   @id @default(cuid())
+  taskId    String
+  tenantId  String
+  eventType String
+  actor     String   @default("system")
+  at        DateTime @default(now())
+  details   Json     @default("{}")
+
+  task   Task    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([taskId, at])
+  @@index([tenantId, at])
+  @@map("task_events")
+}

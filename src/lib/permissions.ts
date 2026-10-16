@@ -25,6 +25,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "strategy:read",
     "strategy:write",
     "strategy:approve",
+    "task:read",
+    "task:write",
     "user:read",
     "user:write",
     "membership:read",
@@ -37,6 +39,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "evidence:write",
     "strategy:read",
     "strategy:write",
+    "task:read",
+    "task:write",
     "audit:read",
   ],
   reviewer: [
@@ -45,12 +49,14 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "evidence:verify",
     "strategy:read",
     "strategy:approve",
+    "task:read",
     "audit:read",
   ],
   observer: [
     "tenant:read",
     "evidence:read",
     "strategy:read",
+    "task:read",
     "audit:read",
   ],
 };
