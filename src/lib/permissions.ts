@@ -57,7 +57,6 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "evidence:read",
     "strategy:read",
     "task:read",
-    "audit:read",
   ],
 };
 
