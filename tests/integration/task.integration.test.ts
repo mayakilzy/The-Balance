@@ -267,6 +267,9 @@ describeIntegration("Durable Task Runtime", () => {
   it("Balance Master: executeNextTask completes a pending task", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
+    // Clean up any leftover pending tasks first
+    await adminClient.task.deleteMany({ where: { tenantId: tenantAId, status: "pending" } });
+
     const createResult = await createTask(session, {
       type: "master-test",
       goal: "Analyze economic indicators for Q3 2025.",
@@ -295,6 +298,9 @@ describeIntegration("Durable Task Runtime", () => {
   it("failTask saves error and marks task as failed", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
+    // Clean up any leftover pending tasks first
+    await adminClient.task.deleteMany({ where: { tenantId: tenantAId, status: "pending" } });
+
     const createResult = await createTask(session, {
       type: "fail-test",
       goal: "This task will fail.",
@@ -320,6 +326,9 @@ describeIntegration("Durable Task Runtime", () => {
   // ============================================================
   it("fencing: stale worker A cannot complete after B reclaims", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Clean up any leftover pending tasks first
+    await adminClient.task.deleteMany({ where: { tenantId: tenantAId, status: "pending" } });
 
     // Create task
     const createResult = await createTask(session, {
