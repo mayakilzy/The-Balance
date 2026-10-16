@@ -129,12 +129,23 @@ jobs:
 
       # ============================================================
       # PHASE 4: DATABASE BACKUP/RESTORE DRILL
-      # pg_dump → drop → restore → verify data + RLS + privileges.
+      # pg_dump → drop → restore (fail-closed) → verify data + RLS +
+      # privileges → negative test (corrupted backup rejected).
       # ============================================================
       - name: Phase 4 — Database backup/restore drill
         env:
           PGPASSWORD: postgres
         run: bash scripts/backup-restore-test.sh
+
+      # ============================================================
+      # PHASE 4b: NON-DESTRUCTIVE VERIFICATION OF RESTORED DB
+      # Runs verify-restored-db.sh against the restored database to
+      # prove the non-destructive verification path works on a restored DB.
+      # ============================================================
+      - name: Phase 4b — Non-destructive verification of restored DB
+        env:
+          PGPASSWORD: postgres
+        run: bash scripts/verify-restored-db.sh
 
       # ============================================================
       # PHASE 5: FULL TEST SUITE on restored database

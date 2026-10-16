@@ -143,12 +143,27 @@ Verify health: `curl http://localhost:3000/api/health` → `{"status":"ok"}`
 
 ### 2.2 Metrics boundaries (known limitation)
 
-**Important:** Metrics counters are **in-process and local to the current Node.js process**. In the current single-instance deployment:
+**Important:** Metrics counters are **in-process and local to the current Node.js process**. They are NOT shared across processes, instances, or restarts.
 
-- **Middleware and API route handlers share the same process** → metrics are aggregated correctly.
-- In a **multi-instance deployment** (e.g., multiple Next.js workers behind a load balancer), each process has its own counters. `/api/v1/_metrics` would only reflect traffic to that specific instance.
+**Current behavior (single-instance deployment):**
 
-**Resolution for production:** Deploy an external metrics aggregator (Prometheus + Grafana) before scaling to multiple instances. This is deferred to post-GROUP-00.
+- Next.js runs as a single Node.js process by default (`next start`).
+- In this configuration, middleware and API route handlers execute within the **same process**, so they share the same in-memory metrics counters.
+- `/api/v1/_metrics` reflects all traffic to that single instance.
+
+**Multi-instance deployments (NOT yet tested in GROUP-00):**
+
+- If you scale to multiple Next.js workers (e.g., via a process manager like PM2 cluster mode, or multiple containers behind a load balancer), **each process maintains its own independent counters**.
+- In that case, `/api/v1/_metrics` would only report the counters of the specific process that handled the request — NOT aggregated across all instances.
+- Additionally, counters reset to zero on every process restart.
+
+**What this means for operation:**
+
+- For GROUP-00 (single-instance), `/api/v1/_metrics` is reliable for observing traffic patterns, error rates, and rate-limit events.
+- Before scaling to multiple instances, deploy an external metrics aggregator (Prometheus + Grafana, or equivalent) with a pull-based scraper. This is deferred to post-GROUP-00.
+- The `recordRequest`, `recordApiError`, `recordFailedTask`, and `recordRateLimitedRequest` functions in `src/lib/metrics.ts` are the single wiring points — replacing the in-memory store with a Prometheus client would only require changes there.
+
+**Verification:** The `tests/integration/recovery.integration.test.ts` → "Metrics Process Boundaries" test documents that middleware and route handlers share counters in the current single-process model. This is a code-level wiring test, not a multi-instance integration test.
 
 ### 2.3 Logging
 
@@ -231,7 +246,11 @@ pg_dump -h <host> -p 5432 -U postgres -d balance \
 
 ### 3.4 Database restore
 
-**Restore from logical backup:**
+**Critical: roles must be re-created BEFORE the restore.**
+
+The backup contains RLS policies and grants that reference `balance_app`, `balance_admin`, and `balance_auth` roles. If these roles do not exist when `pg_restore` runs, the GRANT statements will fail and the restore will be incomplete. Always re-create roles first.
+
+**Restore from logical backup (correct order):**
 ```bash
 # 1. Drop the existing database (if present)
 psql -h <host> -U postgres -d postgres -c "DROP DATABASE IF EXISTS balance;"
@@ -239,35 +258,39 @@ psql -h <host> -U postgres -d postgres -c "DROP DATABASE IF EXISTS balance;"
 # 2. Recreate empty database
 psql -h <host> -U postgres -d postgres -c "CREATE DATABASE balance;"
 
-# 3. Restore from backup
-pg_restore -h <host> -U postgres -d balance \
-  --no-owner \
-  --clean \
-  --if-exists \
-  balance-backup-YYYYMMDD-HHMMSS.dump
-
-# 4. Re-create roles (NOT in the backup — cluster-level)
+# 3. Re-create roles FIRST (cluster-level, not in the backup)
 export PGPASSWORD_BALANCE_ADMIN="..."
 export PGPASSWORD_BALANCE_APP="..."
 export PGPASSWORD_BALANCE_AUTH="..."
+export PGPASSWORD_POSTGRES="<postgres-superuser-password>"
 bash scripts/run-setup-roles.sh
 
-# 5. Verify
-bash scripts/fresh-install-verify.sh
+# 4. Restore from backup (fail-closed: non-zero exit = incomplete restore)
+pg_restore -h <host> -U postgres -d balance \
+  --no-owner \
+  balance-backup-YYYYMMDD-HHMMSS.dump
+# If pg_restore exits non-zero, the restore is incomplete — DO NOT proceed.
+
+# 5. Verify the restored DB (non-destructive — does NOT require empty DB)
+bash scripts/verify-restored-db.sh
 ```
 
-**Verification drill:**
+**Important:** Do NOT use `fresh-install-verify.sh` after a restore — that script requires an empty database and will fail on a restored DB. Use `verify-restored-db.sh` instead, which checks migrations, data, RLS, and privileges without re-running migrations or seed.
+
+**Important:** Do NOT use `--no-privileges` with `pg_dump` or `pg_restore` — RLS policies are classified as privileges and will be stripped, making the restored database insecure.
+
+**Verification drill (CI):**
 ```bash
 bash scripts/backup-restore-test.sh
 ```
 
-This script performs the full round-trip: backup → drop → restore → verify data + RLS + privileges.
+This script performs the full round-trip: backup → drop → restore (fail-closed) → verify data + RLS + privileges → negative test (corrupted backup rejected).
 
 ### 3.5 Recovery from total environment loss
 
 If the entire environment is lost (server + database), recovery procedure:
 
-1. **Provision new PostgreSQL 16 + pgvector instance**
+1. **Provision new PostgreSQL 16 + pgvector instance** (ensure `CREATE EXTENSION vector` is available to the postgres superuser)
 2. **Clone the repository:**
    ```bash
    git clone https://github.com/mayakilzy/The-Balance.git
@@ -275,17 +298,18 @@ If the entire environment is lost (server + database), recovery procedure:
    bun install --frozen-lockfile
    ```
 3. **Configure `.env`** with new database credentials + `AUTH_SECRET`
-4. **Set up roles:**
+4. **Re-create database roles (BEFORE restore):**
    ```bash
    export PGPASSWORD_BALANCE_ADMIN="..."
    export PGPASSWORD_BALANCE_APP="..."
    export PGPASSWORD_BALANCE_AUTH="..."
+   export PGPASSWORD_POSTGRES="<postgres-superuser-password>"
    bash scripts/run-setup-roles.sh
    ```
-5. **Restore database from backup** (Section 3.4)
-6. **Verify installation:**
+5. **Restore database from backup** (Section 3.4, step 4)
+6. **Verify the restored DB (non-destructive):**
    ```bash
-   bash scripts/fresh-install-verify.sh
+   bash scripts/verify-restored-db.sh
    ```
 7. **Start the application:**
    ```bash
@@ -305,9 +329,18 @@ The `fresh-install-recovery.yml` GitHub Actions workflow runs on every push and 
 | 1 | Fresh install from empty DB | `scripts/fresh-install-verify.sh` |
 | 2 | Recovery integration tests | `tests/integration/recovery.integration.test.ts` |
 | 3 | Application restart + data persistence | `scripts/restart-verify.sh` |
-| 4 | Database backup/restore drill | `scripts/backup-restore-test.sh` |
+| 4 | Database backup/restore drill (incl. negative test) | `scripts/backup-restore-test.sh` |
 | 5 | Full test suite on restored DB | `bunx vitest run` |
 | 6 | Production build | `bun run build` |
+
+**Script inventory:**
+
+| Script | Purpose | Destructive? |
+|--------|---------|--------------|
+| `fresh-install-verify.sh` | Verifies a FRESH install from an empty DB (runs migrations + seed) | YES — requires empty DB, runs migrations |
+| `verify-restored-db.sh` | Verifies a RESTORED DB is structurally sound (non-destructive) | NO — read-only checks, does NOT run migrations or seed |
+| `restart-verify.sh` | Tests app restart + data persistence (starts/stops Next.js) | YES — starts/stops server, creates test task |
+| `backup-restore-test.sh` | Full backup → drop → restore drill + negative test | YES — drops + recreates database |
 
 All phases must pass for the workflow to succeed.
 

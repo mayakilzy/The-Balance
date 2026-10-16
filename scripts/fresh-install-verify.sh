@@ -127,20 +127,55 @@ if [ "$CAPABILITY_COUNT" -ne 0 ]; then echo "NOTE: Expected 0 capabilities on fr
 echo "  All seed counts within expected range."
 
 # ------------------------------------------------------------
-# STEP 6: Verify RLS is enabled on all key tables
+# STEP 6: Verify RLS is ENABLED + FORCED on all 14 private tables (strict)
 # ------------------------------------------------------------
-echo "[6/8] Verifying RLS policies..."
-RLS_STATUS=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -t -A <<'SQL'
-SELECT string_agg(relname || ':' || relrowsecurity::text, ', ')
+echo "[6/8] Verifying RLS (ENABLE + FORCE) on all 14 private tables..."
+RLS_RESULT=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -t -A <<'SQL'
+SELECT
+  count(*) AS total,
+  count(*) FILTER (WHERE relrowsecurity = true) AS rls_enabled,
+  count(*) FILTER (WHERE relforcerowsecurity = true) AS rls_forced
 FROM pg_class
-WHERE relname IN ('users', 'memberships', 'tasks', 'task_events', 'evidence',
-                  'evidence_embeddings', 'strategies', 'strategy_versions',
-                  'decisions', 'decision_events', 'events', 'audit_log',
-                  'capability_invocations', 'tenants')
-  AND relrowsecurity = true;
+WHERE relname IN (
+  'users', 'memberships', 'tasks', 'task_events', 'evidence',
+  'evidence_embeddings', 'strategies', 'strategy_versions',
+  'decisions', 'decision_events', 'events', 'audit_log',
+  'capability_invocations', 'tenants'
+);
 SQL
 )
-echo "  RLS-enabled tables: $(echo "$RLS_STATUS" | tr ',' '\n' | wc -l) of 14 expected"
+IFS='|' read -r RLS_TOTAL RLS_ENABLED RLS_FORCED <<< "$(echo "$RLS_RESULT" | tr -d ' ')"
+echo "  Private tables: total=$RLS_TOTAL, RLS enabled=$RLS_ENABLED, RLS forced=$RLS_FORCED (expected 14/14/14)"
+
+if [ "$RLS_TOTAL" -ne 14 ]; then
+  echo "FAIL: Expected 14 private tables, found $RLS_TOTAL"
+  exit 1
+fi
+if [ "$RLS_ENABLED" -ne 14 ]; then
+  echo "FAIL: $((14 - RLS_ENABLED)) table(s) missing ENABLE ROW LEVEL SECURITY:"
+  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
+    SELECT relname FROM pg_class
+    WHERE relname IN ('users', 'memberships', 'tasks', 'task_events', 'evidence',
+                      'evidence_embeddings', 'strategies', 'strategy_versions',
+                      'decisions', 'decision_events', 'events', 'audit_log',
+                      'capability_invocations', 'tenants')
+      AND relrowsecurity = false;
+  "
+  exit 1
+fi
+if [ "$RLS_FORCED" -ne 14 ]; then
+  echo "FAIL: $((14 - RLS_FORCED)) table(s) missing FORCE ROW LEVEL SECURITY:"
+  psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
+    SELECT relname FROM pg_class
+    WHERE relname IN ('users', 'memberships', 'tasks', 'task_events', 'evidence',
+                      'evidence_embeddings', 'strategies', 'strategy_versions',
+                      'decisions', 'decision_events', 'events', 'audit_log',
+                      'capability_invocations', 'tenants')
+      AND relforcerowsecurity = false;
+  "
+  exit 1
+fi
+echo "  Verified: all 14 private tables have ENABLE + FORCE RLS"
 
 # ------------------------------------------------------------
 # STEP 7: Verify balance_app privileges (no superuser, no bypassrls)

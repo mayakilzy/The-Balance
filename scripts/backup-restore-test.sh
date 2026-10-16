@@ -78,15 +78,22 @@ echo "[4/6] Recreating database + restoring from backup..."
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";"
 # Note: --no-owner keeps ownership flexible, but we do NOT use
 # --no-privileges so RLS policies are restored.
-# We do NOT use --clean because the database was just created (empty).
-# We do NOT use --exit-on-error because pg_restore may emit warnings
-# about pre-existing objects from the schema — we capture output and
-# check for actual errors afterward.
+# We do NOT use --clean (database is empty).
+# FAIL-CLOSED: capture exit code explicitly. pg_restore returns non-zero
+# on any error (corrupt backup, missing objects, SQL errors). We do NOT
+# swallow the exit code with `|| true` — a non-zero exit means the restore
+# is incomplete and we must fail the drill.
 RESTORE_OUTPUT=$(pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
   --no-owner \
-  "$BACKUP_FILE" 2>&1) || true
-echo "$RESTORE_OUTPUT" | grep -i "^pg_restore:.*error" && echo "FAIL: pg_restore had errors" && exit 1
-echo "  Restore complete."
+  "$BACKUP_FILE" 2>&1)
+RESTORE_EXIT=$?
+if [ "$RESTORE_EXIT" -ne 0 ]; then
+  echo "FAIL: pg_restore exited with code $RESTORE_EXIT — restore is incomplete"
+  echo "  pg_restore output (last 30 lines):"
+  echo "$RESTORE_OUTPUT" | tail -30
+  exit 1
+fi
+echo "  Restore complete (pg_restore exit code 0)."
 
 # ------------------------------------------------------------
 # STEP 5: Re-run role setup (roles are NOT in the backup)
@@ -120,29 +127,33 @@ if [ "$PRE_COUNTS" != "$POST_COUNTS" ]; then
   exit 1
 fi
 
-# Verify RLS is still enabled on key tables
-RLS_CHECK=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -t -A <<'SQL'
+# Verify RLS is ENABLED + FORCED on all 14 private tables (strict assertion)
+RLS_RESULT=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -t -A <<'SQL'
 SELECT
-  (SELECT relrowsecurity FROM pg_class WHERE relname = 'users') || ':' ||
-  (SELECT relrowsecurity FROM pg_class WHERE relname = 'tasks') || ':' ||
-  (SELECT relrowsecurity FROM pg_class WHERE relname = 'evidence') || ':' ||
-  (SELECT relrowsecurity FROM pg_class WHERE relname = 'audit_log');
+  count(*) AS total,
+  count(*) FILTER (WHERE relrowsecurity = true) AS rls_enabled,
+  count(*) FILTER (WHERE relforcerowsecurity = true) AS rls_forced
+FROM pg_class
+WHERE relname IN (
+  'users', 'memberships', 'tasks', 'task_events', 'evidence',
+  'evidence_embeddings', 'strategies', 'strategy_versions',
+  'decisions', 'decision_events', 'events', 'audit_log',
+  'capability_invocations', 'tenants'
+);
 SQL
 )
-echo "  RLS enabled (users:tasks:evidence:audit_log): $RLS_CHECK"
+IFS='|' read -r RLS_TOTAL RLS_ENABLED RLS_FORCED <<< "$(echo "$RLS_RESULT" | tr -d ' ')"
+echo "  Private tables: total=$RLS_TOTAL, RLS enabled=$RLS_ENABLED, RLS forced=$RLS_FORCED (expected 14/14/14)"
 
-if [ "$RLS_CHECK" != "t:t:t:t" ] && [ "$RLS_CHECK" != "true:true:true:true" ]; then
-  echo "FAIL: RLS not enabled on all key tables after restore!"
-  echo "  RLS check value: $RLS_CHECK"
-  echo "  Debug — tables with RLS status:"
+if [ "$RLS_TOTAL" -ne 14 ] || [ "$RLS_ENABLED" -ne 14 ] || [ "$RLS_FORCED" -ne 14 ]; then
+  echo "FAIL: RLS not fully enabled+forced on all 14 private tables after restore!"
+  echo "  RLS check value: total=$RLS_TOTAL enabled=$RLS_ENABLED forced=$RLS_FORCED"
   psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
     SELECT relname, relrowsecurity, relforcerowsecurity
     FROM pg_class
     WHERE relname IN ('users', 'tasks', 'evidence', 'audit_log', 'tenants', 'memberships')
     ORDER BY relname;
   "
-  echo "  Debug — restore output (last 20 lines):"
-  echo "$RESTORE_OUTPUT" | tail -20
   exit 1
 fi
 
@@ -164,9 +175,48 @@ fi
 echo ""
 echo "=== BACKUP/RESTORE DRILL: PASS ==="
 echo "  - All row counts match pre-backup state"
-echo "  - RLS enabled on all key tables"
+echo "  - RLS ENABLE + FORCE on all 14 private tables"
 echo "  - balance_app privileges correct (no superuser, no bypassrls)"
 echo ""
 
+# ------------------------------------------------------------
+# NEGATIVE TEST: corrupted backup MUST fail-closed
+# ------------------------------------------------------------
+echo "=== Negative test: corrupted backup must fail ==="
+CORRUPT_FILE="/tmp/balance-corrupt-$(date +%s).dump"
+echo "NOT_A_VALID_PG_DUMP_FILE_THIS_IS_CORRUPT_DATA_FOR_TESTING" > "$CORRUPT_FILE"
+
+# Drop + recreate empty DB for the negative test
+psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
+psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";" >/dev/null
+
+# Attempt to restore the corrupt file — pg_restore MUST exit non-zero
+pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
+  --no-owner \
+  "$CORRUPT_FILE" >/dev/null 2>&1
+CORRUPT_EXIT=$?
+
+if [ "$CORRUPT_EXIT" -eq 0 ]; then
+  echo "FAIL: pg_restore accepted a corrupted backup (exit code 0) — should have failed!"
+  rm -f "$CORRUPT_FILE"
+  exit 1
+fi
+echo "  OK: pg_restore rejected corrupted backup (exit code $CORRUPT_EXIT)"
+rm -f "$CORRUPT_FILE"
+
+# Restore the valid backup again so the database is in a usable state
+# for any subsequent CI phases (e.g. full test suite).
+echo "  Re-restoring valid backup for subsequent phases..."
+psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
+psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";" >/dev/null
+pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
+  --no-owner \
+  "$BACKUP_FILE" >/dev/null 2>&1 || true
+bash scripts/run-setup-roles.sh >/dev/null 2>&1
+
 # Cleanup
 rm -f "$BACKUP_FILE"
+
+echo ""
+echo "=== NEGATIVE TEST: PASS (corrupted backup rejected) ==="
+echo ""
