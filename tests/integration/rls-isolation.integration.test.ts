@@ -451,4 +451,169 @@ describeIntegration("RLS isolation — balance_app role (real PostgreSQL)", () =
     const exists = await adminClient.auditLog.findUnique({ where: { id: row.id } });
     expect(exists).toBeNull();
   });
+
+  // ============================================================
+  // 16. STATE HIERARCHY — CYCLE DETECTION (A → B → A)
+  // ------------------------------------------------------------
+  // Founder directive (00-02 final integrity closure):
+  //   "اختبر منع الحلقات في StateHierarchy و Institution"
+  //   (Test cycle prevention in StateHierarchy and Institution)
+  // ============================================================
+  it("StateHierarchy rejects cycles (A → B → A)", async () => {
+    // Create two nodes: parent P and child C (C → P)
+    const parent = await adminClient.stateHierarchy.create({
+      data: {
+        countryId,
+        code: "DML-CYCLE-P",
+        displayName: "Cycle Test Parent",
+        level: "province",
+      },
+    });
+    const child = await adminClient.stateHierarchy.create({
+      data: {
+        countryId,
+        parentId: parent.id,
+        code: "DML-CYCLE-C",
+        displayName: "Cycle Test Child",
+        level: "district",
+      },
+    });
+
+    // Attempt: set P's parent to C → creates cycle P → C → P
+    await expect(
+      adminClient.stateHierarchy.update({
+        where: { id: parent.id },
+        data: { parentId: child.id },
+      })
+    ).rejects.toThrow(/cycle/i);
+
+    // Cleanup
+    await adminClient.stateHierarchy.deleteMany({
+      where: { code: { in: ["DML-CYCLE-P", "DML-CYCLE-C"] } },
+    });
+  });
+
+  // ============================================================
+  // 17. INSTITUTION — CYCLE DETECTION
+  // ============================================================
+  it("Institution rejects cycles (A → B → A)", async () => {
+    const parent = await adminClient.institution.create({
+      data: {
+        countryId,
+        code: "DML-ICYC-P",
+        displayName: "Cycle Test Parent Inst",
+        type: "ministry",
+      },
+    });
+    const child = await adminClient.institution.create({
+      data: {
+        countryId,
+        parentId: parent.id,
+        code: "DML-ICYC-C",
+        displayName: "Cycle Test Child Inst",
+        type: "directorate",
+      },
+    });
+
+    await expect(
+      adminClient.institution.update({
+        where: { id: parent.id },
+        data: { parentId: child.id },
+      })
+    ).rejects.toThrow(/cycle/i);
+
+    await adminClient.institution.deleteMany({
+      where: { code: { in: ["DML-ICYC-P", "DML-ICYC-C"] } },
+    });
+  });
+
+  // ============================================================
+  // 18. STATE HIERARCHY — COUNTRY CHANGE BLOCKED WHEN HAS CHILDREN
+  // ------------------------------------------------------------
+  // Founder directive (00-02 final integrity closure):
+  //   "اختبر تغيير countryId للعقدة الأب بعد وجود أبناء"
+  //   (Test changing countryId of a parent node after it has children)
+  // ============================================================
+  it("StateHierarchy blocks countryId change when node has children", async () => {
+    // Create a second country
+    const testlandia = await adminClient.country.upsert({
+      where: { iso3: "ZZT" },
+      update: {},
+      create: { iso3: "ZZT", iso2: "ZT", displayName: "Testlandia (country-change test)" },
+    });
+
+    // Parent in Demolandia + child under it
+    const parent = await adminClient.stateHierarchy.create({
+      data: {
+        countryId,
+        code: "DML-CCG-P",
+        displayName: "Country Change Parent",
+        level: "province",
+      },
+    });
+    await adminClient.stateHierarchy.create({
+      data: {
+        countryId,
+        parentId: parent.id,
+        code: "DML-CCG-C",
+        displayName: "Country Change Child",
+        level: "district",
+      },
+    });
+
+    // Attempt: change parent's countryId to Testlandia → should be blocked
+    await expect(
+      adminClient.stateHierarchy.update({
+        where: { id: parent.id },
+        data: { countryId: testlandia.id },
+      })
+    ).rejects.toThrow(/child|orphan/i);
+
+    // Cleanup
+    await adminClient.stateHierarchy.deleteMany({
+      where: { code: { in: ["DML-CCG-P", "DML-CCG-C"] } },
+    });
+    await adminClient.country.deleteMany({ where: { iso3: "ZZT" } });
+  });
+
+  // ============================================================
+  // 19. INSTITUTION — COUNTRY CHANGE BLOCKED WHEN HAS CHILDREN
+  // ============================================================
+  it("Institution blocks countryId change when node has children", async () => {
+    const testlandia = await adminClient.country.upsert({
+      where: { iso3: "ZZT" },
+      update: {},
+      create: { iso3: "ZZT", iso2: "ZT", displayName: "Testlandia (country-change test)" },
+    });
+
+    const parent = await adminClient.institution.create({
+      data: {
+        countryId,
+        code: "DML-ICG-P",
+        displayName: "Country Change Parent Inst",
+        type: "ministry",
+      },
+    });
+    await adminClient.institution.create({
+      data: {
+        countryId,
+        parentId: parent.id,
+        code: "DML-ICG-C",
+        displayName: "Country Change Child Inst",
+        type: "directorate",
+      },
+    });
+
+    await expect(
+      adminClient.institution.update({
+        where: { id: parent.id },
+        data: { countryId: testlandia.id },
+      })
+    ).rejects.toThrow(/child|orphan/i);
+
+    await adminClient.institution.deleteMany({
+      where: { code: { in: ["DML-ICG-P", "DML-ICG-C"] } },
+    });
+    await adminClient.country.deleteMany({ where: { iso3: "ZZT" } });
+  });
 });

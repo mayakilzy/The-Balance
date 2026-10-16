@@ -69,14 +69,14 @@ jobs:
           exit 1
 
       - name: Setup database roles + extensions (as postgres superuser)
-        # Uses the canonical scripts/setup-roles.sql.
-        # CI adds SUPERUSER to balance_admin so it can CREATE EXTENSION.
-        # Production should NOT grant SUPERUSER — DBA pre-installs extensions.
+        # Uses scripts/run-setup-roles.sh which calls setup-roles.sql.
+        # CI uses dev-default passwords (env vars not set).
+        # Production MUST set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP.
         env:
           PGPASSWORD: postgres
         run: |
-          # Run the canonical setup script
-          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 -f scripts/setup-roles.sql
+          # Run the canonical setup script (dev defaults in CI)
+          bash scripts/run-setup-roles.sh
 
           # CI-ONLY: grant SUPERUSER to balance_admin for CREATE EXTENSION.
           # In production, balance_admin is NOSUPERUSER and extensions are pre-installed.

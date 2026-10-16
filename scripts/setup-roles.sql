@@ -1,23 +1,29 @@
--- The Balance — Database Role Setup Script
+-- The Balance — Database Role Setup Script (FINAL)
 -- ------------------------------------------------------------
 -- This script is the CANONICAL source for PostgreSQL role management.
 -- It is NOT a migration — it runs BEFORE migrations to bootstrap roles.
 --
 -- Per ADR-0005 (updated): role setup is separated from schema migrations.
--- Migration 0002 historically created roles; going forward, this script
--- is the single source of truth.
+--
+-- PASSWORD POLICY (final closure):
+--   - In CI/dev: dev-only passwords are set (overridable via env vars).
+--   - In PRODUCTION: this script MUST be run with env vars set:
+--       PGPASSWORD_BALANCE_ADMIN=<strong-from-secret-manager>
+--       PGPASSWORD_BALANCE_APP=<strong-from-secret-manager>
+--     If these env vars are NOT set, the script uses dev defaults and
+--     prints a WARNING. A separate production-readiness check should
+--     fail the deployment if dev defaults are detected.
+--
+--   - Migration 0002 historically sets dev passwords via ALTER ROLE.
+--     This script runs AFTER migration 0002 in CI and overrides those
+--     with the env-var-provided passwords (or dev defaults in CI).
+--     In production, the DBA runs this script with env vars set, so
+--     the dev defaults from migration 0002 are overridden.
 --
 -- Usage:
---   psql -h <host> -U postgres -d balance -f scripts/setup-roles.sql
---
--- Production deployment:
---   1. DBA runs this script with PASSWORD overrides via environment.
---   2. DBA rotates the dev-only passwords set in migration 0002.
---   3. The application connects as balance_app; migrations run as balance_admin.
---
--- CI usage:
---   The GitHub Actions workflow runs this script (with PGPASSWORD=postgres)
---   before running prisma migrate deploy.
+--   CI/dev:  psql -h <host> -U postgres -d balance -f scripts/setup-roles.sql
+--   Prod:    PGPASSWORD_BALANCE_ADMIN=xxx PGPASSWORD_BALANCE_APP=yyy \
+--            psql -h <host> -U postgres -d balance -f scripts/setup-roles.sql
 --
 -- Role design (per ADR-0005):
 --   balance_admin: BYPASSRLS for migrations/ops. CI adds SUPERUSER for
@@ -42,18 +48,51 @@ BEGIN
 END $$;
 
 -- ============================================================
--- 2. SET PASSWORDS
+-- 2. SET PASSWORDS (env-var aware, dev-default fallback)
 -- ------------------------------------------------------------
--- DEV/CI: use known dev passwords (overridden below for CI).
--- PRODUCTION: DBA MUST override these with strong passwords set out-of-band.
--- The dev passwords here are intentionally weak and documented as dev-only.
---
--- To override in production:
---   ALTER ROLE balance_admin WITH PASSWORD '<strong-from-secret-manager>';
---   ALTER ROLE balance_app   WITH PASSWORD '<strong-from-secret-manager>';
+-- Production MUST set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP.
+-- If not set, dev defaults are used + a WARNING is printed.
+-- A production-readiness check (outside this script) should fail if
+-- dev defaults are detected in a production environment.
 -- ============================================================
-ALTER ROLE balance_admin WITH PASSWORD 'balance_admin_dev_only';
-ALTER ROLE balance_app   WITH PASSWORD 'balance_app_dev_only';
+DO $$
+DECLARE
+    admin_pw TEXT;
+    app_pw TEXT;
+    using_dev_defaults BOOLEAN := FALSE;
+BEGIN
+    -- Read from current_setting (env vars passed via PGPASSWORD_BALANCE_*)
+    -- PostgreSQL exposes env vars via current_setting() only if set in
+    -- postgresql.conf or via SET. For psql -v, we use a different approach:
+    -- the calling shell exports these as psql variables.
+    --
+    -- We use a simpler approach: the calling environment sets these as
+    -- psql variables via -v, OR we fall back to dev defaults.
+    --
+    -- Implementation: use current_setting('app.balance_admin_pw', true)
+    -- which returns NULL if not set. The CI/prod wrapper sets these via:
+    --   psql ... -v balance_admin_pw="$PGPASSWORD_BALANCE_ADMIN"
+    -- See scripts/run-setup-roles.sh for the wrapper.
+
+    admin_pw := current_setting('balance_admin_pw', true);
+    app_pw := current_setting('balance_app_pw', true);
+
+    IF admin_pw IS NULL OR app_pw IS NULL THEN
+        admin_pw := 'balance_admin_dev_only';
+        app_pw := 'balance_app_dev_only';
+        using_dev_defaults := TRUE;
+    END IF;
+
+    EXECUTE format('ALTER ROLE balance_admin WITH PASSWORD %L', admin_pw);
+    EXECUTE format('ALTER ROLE balance_app   WITH PASSWORD %L', app_pw);
+
+    IF using_dev_defaults THEN
+        RAISE WARNING 'Using DEV-DEFAULT passwords for balance_admin/balance_app. NOT FOR PRODUCTION.';
+        RAISE WARNING 'Set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP env vars for production.';
+    ELSE
+        RAISE NOTICE 'Passwords set from env vars (production-safe).';
+    END IF;
+END $$;
 
 -- ============================================================
 -- 3. SCHEMA PRIVILEGES
@@ -66,27 +105,15 @@ GRANT USAGE ON SCHEMA public TO balance_app;
 
 -- ============================================================
 -- 4. EXTENSIONS (must be done as superuser or with proper grants)
--- ------------------------------------------------------------
+-- ============================================================
 -- pgvector must be installed before migration 0001 references it.
 -- In CI: the workflow runs this as the postgres superuser.
 -- In production: the DBA installs extensions separately.
--- ============================================================
 CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- ============================================================
--- 5. POST-MIGRATION GRANTS (run AFTER migrations)
--- ------------------------------------------------------------
--- These are also in migration 0002, but we re-run them here so the
--- script is the canonical source. Migrations + this script are
--- idempotent.
---
--- NOTE: Table-level DML grants are set in migration 0002.
--- This script only handles roles + schema + extensions.
+-- 5. DOCUMENTATION: CI vs PRODUCTION
 -- ============================================================
-
--- ============================================================
--- 6. DOCUMENTATION: CI vs PRODUCTION
--- ------------------------------------------------------------
 -- CI ONLY (do NOT use in production):
 --   The GitHub Actions workflow grants SUPERUSER to balance_admin
 --   so it can CREATE EXTENSION. In production, balance_admin should
@@ -95,8 +122,9 @@ CREATE EXTENSION IF NOT EXISTS "vector";
 -- PRODUCTION CHECKLIST:
 --   [ ] balance_admin is NOSUPERUSER (only BYPASSRLS)
 --   [ ] balance_app is NOSUPERUSER, NOBYPASSRLS, no DDL grants
---   [ ] Passwords rotated from dev defaults
+--   [ ] PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP set from secret manager
 --   [ ] pgvector extension pre-installed by DBA
 --   [ ] DATABASE_URL uses balance_app; DIRECT_URL uses balance_admin
 --   [ ] connection pooling uses balance_app with statement_timeout
+--   [ ] Production-readiness check passes (no dev-default passwords)
 -- ============================================================

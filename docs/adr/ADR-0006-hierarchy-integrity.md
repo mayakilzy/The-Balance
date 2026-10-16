@@ -1,8 +1,13 @@
 # ADR-0006 — Country Hierarchy Integrity
 
 **Date:** 2026-10-16
-**Status:** Accepted (founder-mandated, 00-02 corrective closure)
-**Mission:** 00-02
+**Status:** Accepted (founder-mandated); updated 00-02 final integrity closure
+**Mission:** 00-02 (initial + corrective + final closure)
+
+## Updates in final integrity closure (00-02)
+
+1. **Cycle detection**: triggers now prevent A → B → A cycles in both `state_hierarchy` and `institutions`. See §"Cycle detection" below.
+2. **Country immutability with children**: changing `countryId` of a node that has children is blocked. See §"Country change with children" below.
 
 ## Context
 
@@ -107,3 +112,52 @@ This is a 00-03 concern (Identity, Permissions, full Auth). The 00-02 corrective
 2. Bind `app.tenant_id` to the authenticated session, not to client-supplied input.
 3. Verify the user's membership in the tenant before setting `app.tenant_id`.
 4. Reject requests where the client attempts to switch tenants without authorization.
+
+## Cycle detection (final integrity closure)
+
+**Problem identified by founder:** The migration 0003 triggers prevent cross-country parents, but do NOT prevent cycles (A → B → A). A cycle would make the hierarchy untraversable and break recursive queries.
+
+**Solution (migration 20261016000004):**
+Two trigger functions that walk up the parent chain from `NEW.parentId`:
+- `enforce_state_hierarchy_no_cycles()` — for `state_hierarchy`.
+- `enforce_institution_no_cycles()` — for `institutions`.
+
+**Algorithm:**
+1. Start at `NEW.parentId`.
+2. Walk up via `SELECT parentId FROM <table> WHERE id = current_id`.
+3. If we encounter `NEW.id`, it's a cycle → raise exception.
+4. Safety bound: max 64 levels. If exceeded, raise exception (likely pre-existing corruption).
+
+**Why walk-up, not recursive CTE?**
+- Triggers cannot use recursive CTEs on the same table being modified (mutation in flight).
+- Walk-up with a bounded loop is safe and simple.
+- The 64-level bound is generous — real hierarchies are rarely deeper than 10.
+
+**Verified by integration tests:**
+- Test 16: "StateHierarchy rejects cycles (A → B → A)"
+- Test 17: "Institution rejects cycles (A → B → A)"
+
+## Country change with children (final integrity closure)
+
+**Problem identified by founder:** The migration 0003 trigger on a child checks that its parent is in the same country. But if a parent's `countryId` is changed AFTER it has children, the children's parent reference becomes inconsistent (child in country X, parent now in country Y). The child trigger would reject future updates to children, but the damage is already done.
+
+**Solution (migration 20261016000004):**
+Two trigger functions that block `countryId` changes on nodes with children:
+- `enforce_state_hierarchy_country_immutable_with_children()`
+- `enforce_institution_country_immutable_with_children()`
+
+**Behavior:**
+- Fires on `BEFORE UPDATE OF "countryId"`.
+- If `NEW.countryId IS DISTINCT FROM OLD.countryId` AND the node has children → raise exception.
+- If the node has no children, the change is allowed (no inconsistency possible).
+
+**Workaround for legitimate country changes:**
+1. Re-parent or delete all children first.
+2. Then change the parent's `countryId`.
+3. Re-create children in the new country.
+
+This is intentional friction — country changes are rare and should be deliberate.
+
+**Verified by integration tests:**
+- Test 18: "StateHierarchy blocks countryId change when node has children"
+- Test 19: "Institution blocks countryId change when node has children"
