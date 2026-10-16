@@ -73,7 +73,8 @@ jobs:
       - name: Verify DB connection + schema applied
         run: |
           # Smoke-test: confirm the schema is actually applied.
-          # Write SQL to a temp file to avoid heredoc quoting issues.
+          # Use psql directly (available on ubuntu-latest runners) for clarity.
+          # --url alone is what prisma db execute accepts; we drop --schema.
           cat > /tmp/verify.sql <<'SQL'
           -- Tables exist?
           SELECT 'tenants' AS table_name, count(*) AS row_count FROM tenants
@@ -82,7 +83,8 @@ jobs:
           -- pgvector extension installed?
           SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';
           SQL
-          bunx prisma db execute --schema prisma/schema.prisma --url "$DATABASE_URL" --file /tmp/verify.sql
+          # prisma db execute with --url only (not --schema).
+          bunx prisma db execute --url "$DATABASE_URL" --file /tmp/verify.sql
 
       - name: Lint
         run: bun run lint
