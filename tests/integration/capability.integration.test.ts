@@ -328,7 +328,7 @@ describeIntegration("Capability Registry", () => {
 
     expect(result.status).toBe("failed");
     expect(result.error).toContain("mock");
-    expect(result.error).toContain("not registered");
+    expect(result.error).toContain("do not silently fall back");
     expect(result.simulated).toBe(false);
   });
 
