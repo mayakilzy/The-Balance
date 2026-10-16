@@ -76,6 +76,7 @@ psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATAB
 pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
   --no-owner \
   --no-privileges \
+  --clean \
   --if-exists \
   "$BACKUP_FILE" 2>&1 || true
 # pg_restore may emit warnings about pre-existing objects; that's OK
