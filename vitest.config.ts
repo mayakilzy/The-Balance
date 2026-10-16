@@ -9,6 +9,9 @@ export default defineConfig({
       "tests/integration/**/*.test.ts",
     ],
     exclude: ["node_modules", ".next"],
+    // Integration tests share a DB; run files sequentially to avoid
+    // audit_log cleanup races between test files.
+    fileParallelism: false,
     // Integration tests are slower (real DB round-trips) — give them more time.
     testTimeout: 15_000,
     coverage: {
