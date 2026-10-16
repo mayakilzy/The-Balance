@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# The Balance — Role Setup Wrapper (password-fix)
+# The Balance — Role Setup Wrapper (password-fix v2)
 # ------------------------------------------------------------
 # Runs scripts/setup-roles.sql with env-var-aware password handling.
 #
 # Mechanism:
 #   - Reads PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP from env.
-#   - Loads them into psql variables via \set with backtick execution.
+#   - If empty, falls back to dev defaults (with WARNING).
+#   - Loads final values into psql variables via \set + backtick.
 #   - setup-roles.sql reads them via :'var' (psql substitution).
-#   - If env vars are unset, dev defaults are used + WARNING printed.
 #
 # Usage:
 #   CI/dev:  bash scripts/run-setup-roles.sh
@@ -21,24 +21,24 @@ DB_PORT="${DB_PORT:-5432}"
 DB_NAME="${DB_NAME:-balance}"
 DB_SUPERUSER="${DB_SUPERUSER:-postgres}"
 
-# Read env vars (empty string if unset)
-ADMIN_PW="${PGPASSWORD_BALANCE_ADMIN:-}"
-APP_PW="${PGPASSWORD_BALANCE_APP:-}"
+# Read env vars; fall back to dev defaults if empty.
+ADMIN_PW="${PGPASSWORD_BALANCE_ADMIN:-balance_admin_dev_only}"
+APP_PW="${PGPASSWORD_BALANCE_APP:-balance_app_dev_only}"
 
 # Warn if using dev defaults
-if [ -z "$ADMIN_PW" ] || [ -z "$APP_PW" ]; then
+if [ "$ADMIN_PW" = "balance_admin_dev_only" ] || [ "$APP_PW" = "balance_app_dev_only" ]; then
     echo "WARNING: Using dev-default passwords. NOT FOR PRODUCTION." >&2
     echo "  Set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP for production." >&2
 fi
 
+# Ensure non-empty (defense in depth)
+if [ -z "$ADMIN_PW" ]; then ADMIN_PW="balance_admin_dev_only"; fi
+if [ -z "$APP_PW" ]; then APP_PW="balance_app_dev_only"; fi
+
 # Run the SQL script.
-# We use a heredoc to send \set commands + \i (include) the SQL file.
-# The \set with backtick loads the env var into a psql variable.
-# printf '%s' avoids trailing newline; the value is shell-escaped by being
-# in a single-quoted backtick context (psql handles it).
-#
-# Security: the password is in the psql variable, NOT on the command line,
-# so it doesn't appear in process listings. psql doesn't log variable values.
+# \set loads env vars into psql variables (via backtick shell execution).
+# printf '%s' avoids trailing newline.
+# setup-roles.sql reads them via :'var' which produces a quoted string literal.
 PGPASSWORD="${PGPASSWORD_POSTGRES:-postgres}" \
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
     -v ON_ERROR_STOP=1 \

@@ -1,14 +1,11 @@
 -- The Balance — Database Role Setup Script (FINAL, password-fix v2)
 -- ------------------------------------------------------------
 -- PASSWORD MECHANISM (fixed):
---   The wrapper loads env vars into psql variables via \set.
---   This script reads them via psql's :'var' substitution syntax.
---   psql substitutes :'var' BEFORE sending SQL to the server.
+--   The wrapper (run-setup-roles.sh) handles fallback to dev defaults.
+--   This script receives NON-EMPTY psql variables via \set.
+--   :'var' produces a quoted string literal, used directly in ALTER ROLE.
 --
---   IMPORTANT: :'var' does NOT work inside DO $$ ... $$ blocks
---   (dollar-quoted strings). So we use plain SQL with ALTER ROLE.
---
---   Fallback: if a psql variable is empty, dev defaults are used.
+--   No fallback logic here — the wrapper guarantees non-empty values.
 
 -- ============================================================
 -- 1. CREATE ROLES (idempotent)
@@ -26,27 +23,11 @@ END $$;
 -- ============================================================
 -- 2. SET PASSWORDS (psql variable substitution, plain SQL)
 -- ------------------------------------------------------------
--- :'var' is substituted by psql before reaching the server.
--- If the psql variable is unset/empty, we need a fallback.
--- We use COALESCE + NULLIF to fall back to dev defaults.
---
--- The wrapper sets:
---   \set balance_admin_pw `printf '%s' "$PGPASSWORD_BALANCE_ADMIN"`
---   \set balance_app_pw   `printf '%s' "$PGPASSWORD_BALANCE_APP"`
---
--- If env var is empty, \set produces an empty string.
--- :'var' with empty string produces '' (empty SQL string literal).
--- We use NULLIF to convert empty to NULL, then COALESCE for fallback.
+-- :'var' produces a quoted string literal like 'value'.
+-- The wrapper guarantees non-empty values (fallback in bash).
 -- ============================================================
-
--- Set passwords using psql variable substitution.
--- Note: :'var' produces a quoted string literal like 'value'.
--- We wrap in COALESCE(NULLIF(:'var', ''), 'dev_default') for fallback.
-ALTER ROLE balance_admin WITH PASSWORD COALESCE(NULLIF(:'balance_admin_pw', ''), 'balance_admin_dev_only');
-ALTER ROLE balance_app   WITH PASSWORD COALESCE(NULLIF(:'balance_app_pw', ''), 'balance_app_dev_only');
-
--- Print warning if using dev defaults (for visibility in logs)
-\echo 'Password setup complete. Check warnings above for dev-default usage.'
+ALTER ROLE balance_admin WITH PASSWORD :'balance_admin_pw';
+ALTER ROLE balance_app   WITH PASSWORD :'balance_app_pw';
 
 -- ============================================================
 -- 3. SCHEMA PRIVILEGES
