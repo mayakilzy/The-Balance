@@ -164,3 +164,41 @@ jobs:
           DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
           AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
           LLM_PROVIDER: "stub"
+
+      - name: Install Playwright browsers
+        run: bunx playwright install --with-deps chromium
+
+      - name: Start Next.js server for Playwright
+        run: |
+          bun run start -- -p 3001 &
+          SERVER_PID=$!
+          # Wait for server to be ready
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/v1/meta 2>/dev/null | grep -q "200"; then
+              echo "Server ready"
+              break
+            fi
+            sleep 2
+          done
+          # Run Playwright tests
+          bunx playwright test
+          PLAYWRIGHT_EXIT=$?
+          # Kill server
+          kill $SERVER_PID 2>/dev/null || true
+          exit $PLAYWRIGHT_EXIT
+        env:
+          DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
+          DIRECT_URL: "postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
+          AUTH_DATABASE_URL: "postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
+          AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
+          AUTH_TRUST_HOST: "true"
+          LLM_PROVIDER: "stub"
+          NODE_ENV: "development"
+
+      - name: Upload Playwright screenshots
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: playwright-screenshots
+          path: test-results/screenshots/
+          retention-days: 7

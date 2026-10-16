@@ -82,9 +82,11 @@ export default function LoginPage() {
           </button>
         </form>
 
-        <div className="mt-6 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs">
-          بيانات اختبار: admin@demolandia.test / test_admin_password_00_03
-        </div>
+        {process.env.NODE_ENV === "development" && (
+          <div className="mt-6 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs">
+            بيانات اختبار: admin@demolandia.test / test_admin_password_00_03
+          </div>
+        )}
       </div>
     </div>
   );
