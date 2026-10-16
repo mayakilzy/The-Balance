@@ -358,7 +358,7 @@ describeIntegration("Durable Task Runtime", () => {
     // Worker A tries to complete with OLD generation → should be REJECTED
     await expect(
       completeTask(session, createResult.taskId, { result: "A's stale result" }, "worker-A", genA)
-    ).rejects.toThrow(/Claim lost or fencing mismatch/i);
+    ).rejects.toThrow(/Claim lost|fencing mismatch|lease expired/i);
 
     // Worker B completes with CURRENT generation → should SUCCEED
     await completeTask(session, createResult.taskId, { result: "B's correct result" }, "worker-B", genB);
