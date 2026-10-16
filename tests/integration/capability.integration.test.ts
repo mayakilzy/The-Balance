@@ -238,4 +238,73 @@ describeIntegration("Capability Registry", () => {
     expect(invocations[0]?.capability.code).toBe("TEST-AGRI-ANALYSIS");
     expect(invocations[0]?.invokedBy).toBe(adminUserId);
   });
+
+  // ============================================================
+  // 9. NO SILENT ADAPTER FALLBACK — missing adapter fails, not stub
+  // ============================================================
+  it("invokeCapability with missing adapter fails (no silent stub fallback)", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Register a capability with adapterEndpoint pointing to non-existent adapter
+    await registerCapability({
+      code: "TEST-MISSING-ADAPTER",
+      displayName: "Missing Adapter Tool",
+      description: "Has adapterEndpoint but adapter not registered.",
+      type: "tool",
+      readiness: "live",
+      requiredPermission: "evidence:read",
+      adapterEndpoint: "non-existent-adapter-xyz",
+    });
+
+    const result = await invokeCapability(session, "TEST-MISSING-ADAPTER", { test: true });
+
+    // Must FAIL — not silently complete with stub
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("non-existent-adapter-xyz");
+    expect(result.error).toContain("not registered");
+    expect(result.simulated).toBe(false);
+  });
+
+  // ============================================================
+  // 10. LIVE CAPABILITY WITHOUT ADAPTER — fails
+  // ============================================================
+  it("invokeCapability with readiness=live and no adapter fails", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    await registerCapability({
+      code: "TEST-LIVE-NO-ADAPTER",
+      displayName: "Live No Adapter",
+      description: "Readiness=live but no adapterEndpoint.",
+      type: "tool",
+      readiness: "live",
+      requiredPermission: "evidence:read",
+      // No adapterEndpoint
+    });
+
+    const result = await invokeCapability(session, "TEST-LIVE-NO-ADAPTER", { test: true });
+
+    expect(result.status).toBe("failed");
+    expect(result.error).toContain("no adapterEndpoint");
+    expect(result.simulated).toBe(false);
+  });
+
+  // ============================================================
+  // 11. CROSS-TENANT taskId — rejected
+  // ============================================================
+  it("invokeCapability rejects taskId from different tenant", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Create a task in Tenant B (via admin client)
+    const tenantBTask = await adminClient.task.create({
+      data: { tenantId: tenantBId, type: "test", goal: "Tenant B task" },
+    });
+
+    // Attempt: invoke capability in Tenant A with Tenant B's taskId
+    await expect(
+      invokeCapability(session, "TEST-AGRI-ANALYSIS", {}, tenantBTask.id)
+    ).rejects.toThrow(/not found in tenant scope/i);
+
+    // Cleanup
+    await adminClient.task.delete({ where: { id: tenantBTask.id } });
+  });
 });

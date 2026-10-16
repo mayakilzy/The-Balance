@@ -243,75 +243,140 @@ export async function invokeCapability(
   provider: string;
   simulated: boolean;
 }> {
-  return withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
-    // Find the capability
-    const capability = await tx.capability.findUnique({
+  if (!session || !session.user) {
+    throw new Error("Unauthenticated: no session");
+  }
+  const userId = session.user.id;
+  const tenantId = session.user.tenantId;
+  if (!userId || !tenantId) {
+    throw new Error("Session missing required claims");
+  }
+
+  // Step 1: Verify capability + eligibility + taskId ownership (short transaction)
+  const { capability, verifiedTaskId } = await withAuthenticatedTenant(session, async ({ tx }) => {
+    const cap = await tx.capability.findUnique({
       where: { code: capabilityCode },
     });
 
-    if (!capability) {
+    if (!cap) {
       throw new Error(`Capability '${capabilityCode}' not found`);
     }
 
     // Check eligibility (CURRENT DB role)
-    await requirePermissionWithCurrentRole(session, capability.requiredPermission);
+    await requirePermissionWithCurrentRole(session, cap.requiredPermission);
 
-    // Record invocation start
+    // Verify taskId belongs to same tenant (if provided)
+    let verifiedTaskId: string | null = null;
+    if (taskId) {
+      const task = await tx.task.findFirst({
+        where: { id: taskId, tenantId },
+      });
+      if (!task) {
+        throw new Error(
+          `Task '${taskId}' not found in tenant scope — cannot link invocation to cross-tenant task`
+        );
+      }
+      verifiedTaskId = task.id;
+    }
+
+    return { capability: cap, verifiedTaskId };
+  });
+
+  // Step 2: Record invocation start (short transaction, then close)
+  const invocationId = await withAuthenticatedTenant(session, async ({ tx }) => {
     const invocation = await tx.capabilityInvocation.create({
       data: {
         tenantId,
         capabilityId: capability.id,
-        taskId: taskId ?? null,
+        taskId: verifiedTaskId,
         invokedBy: userId,
         input: input as Prisma.InputJsonValue,
-        status: "pending",
+        status: "running",
       },
     });
+    return invocation.id;
+  });
 
-    try {
-      // Get adapter (default to stub if no adapterEndpoint)
-      const adapterName = capability.adapterEndpoint ?? "stub";
-      const adapter = getAdapter(adapterName) ?? getAdapter("stub")!;
+  // Step 3: Execute adapter OUTSIDE any database transaction
+  // This prevents long-running adapters from holding PostgreSQL transactions open.
+  try {
+    // NO SILENT FALLBACK: if adapterEndpoint is specified but adapter not registered, FAIL.
+    // Only use stub if the capability's readiness is explicitly "stub" or adapterEndpoint is null/empty.
+    const adapterName = capability.adapterEndpoint;
+    let adapter: ExpertAdapter | null = null;
 
-      // Execute
-      const result = await adapter.execute(input);
+    if (adapterName && adapterName.trim().length > 0) {
+      adapter = getAdapter(adapterName);
+      if (!adapter) {
+        // Adapter specified but not registered — FAIL, don't fall back to stub
+        throw new Error(
+          `Adapter '${adapterName}' is not registered. ` +
+            `Capability '${capabilityCode}' cannot be invoked — adapter missing. ` +
+            `Use readiness='stub' with no adapterEndpoint for simulated execution.`
+        );
+      }
+    } else {
+      // No adapterEndpoint — use stub ONLY if readiness is "stub"
+      if (capability.readiness === "stub") {
+        adapter = getAdapter("stub");
+      } else if (capability.readiness === "mock") {
+        adapter = getAdapter("mock") ?? getAdapter("stub");
+      } else {
+        // live/untested with no adapter — FAIL
+        throw new Error(
+          `Capability '${capabilityCode}' has readiness='${capability.readiness}' ` +
+            `but no adapterEndpoint specified. Cannot execute.`
+        );
+      }
+    }
 
-      // Record completion
+    if (!adapter) {
+      throw new Error(`No adapter available for capability '${capabilityCode}'`);
+    }
+
+    // Execute the adapter (NO database transaction held during this call)
+    const result = await adapter.execute(input);
+
+    // Step 4: Record completion (new short transaction)
+    await withAuthenticatedTenant(session, async ({ tx }) => {
       await tx.capabilityInvocation.update({
-        where: { id: invocation.id },
+        where: { id: invocationId },
         data: {
           status: "completed",
           output: result.output as Prisma.InputJsonValue,
           completedAt: new Date(),
         },
       });
+    });
 
-      return {
-        invocationId: invocation.id,
-        status: "completed",
-        output: result.output,
-        provider: result.provider,
-        simulated: result.simulated,
-      };
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
+    return {
+      invocationId,
+      status: "completed",
+      output: result.output,
+      provider: result.provider,
+      simulated: result.simulated,
+    };
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : String(err);
 
+    // Step 4 (failure path): Record failure (new short transaction)
+    await withAuthenticatedTenant(session, async ({ tx }) => {
       await tx.capabilityInvocation.update({
-        where: { id: invocation.id },
+        where: { id: invocationId },
         data: {
           status: "failed",
           error: errorMsg,
           completedAt: new Date(),
         },
       });
+    });
 
-      return {
-        invocationId: invocation.id,
-        status: "failed",
-        error: errorMsg,
-        provider: "error",
-        simulated: false,
-      };
-    }
-  });
+    return {
+      invocationId,
+      status: "failed",
+      error: errorMsg,
+      provider: "error",
+      simulated: false,
+    };
+  }
 }
