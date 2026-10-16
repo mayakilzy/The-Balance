@@ -281,8 +281,8 @@ CREATE POLICY "admin_all_balance_admin" ON "tenants"
 DROP POLICY IF EXISTS "tenant_isolation_balance_app" ON "audit_log";
 CREATE POLICY "tenant_isolation_balance_app" ON "audit_log"
     FOR ALL TO balance_app
-    USING (tenant_id = current_setting('app.tenant_id', true))
-    WITH CHECK (tenant_id = current_setting('app.tenant_id', true));
+    USING ("tenantId" = current_setting('app.tenant_id', true))
+    WITH CHECK ("tenantId" = current_setting('app.tenant_id', true));
 
 DROP POLICY IF EXISTS "admin_all_balance_admin" ON "audit_log";
 CREATE POLICY "admin_all_balance_admin" ON "audit_log"
