@@ -2,13 +2,8 @@
 // middleware.ts — Security headers, rate limiting, request tracing
 // ------------------------------------------------------------
 // Applied to all routes via Next.js middleware.
-// Provides:
-//   1. Content-Security-Policy + security headers
-//   2. Rate limiting for auth + task creation + capability invocation
-//   3. Request ID generation for tracing
 // ============================================================
 import { NextRequest, NextResponse } from "next/server";
-import { createHash } from "node:crypto";
 
 // ============================================================
 // 1. SECURITY HEADERS
@@ -36,8 +31,6 @@ const SECURITY_HEADERS: Record<string, string> = {
 // ============================================================
 // 2. RATE LIMITING (in-memory, per-IP)
 // ============================================================
-// Simple in-memory rate limiter. Not suitable for multi-instance production
-// (use Redis for that), but sufficient for GROUP 00 single-instance.
 interface RateLimitEntry {
   count: number;
   resetAt: number;
@@ -45,7 +38,6 @@ interface RateLimitEntry {
 
 const rateLimitStore = new Map<string, RateLimitEntry>();
 
-// Cleanup old entries every 5 minutes
 setInterval(() => {
   const now = Date.now();
   for (const [key, entry] of rateLimitStore.entries()) {
@@ -61,10 +53,10 @@ interface RateLimitConfig {
 }
 
 const RATE_LIMITS: Record<string, RateLimitConfig> = {
-  "/api/v1/auth/signin": { maxRequests: 10, windowMs: 60_000 }, // 10 per minute
+  "/api/v1/auth/signin": { maxRequests: 10, windowMs: 60_000 },
   "/api/v1/auth/signout": { maxRequests: 10, windowMs: 60_000 },
-  "/api/v1/tasks": { maxRequests: 30, windowMs: 60_000 }, // 30 per minute for POST
-  "/api/v1/capabilities": { maxRequests: 20, windowMs: 60_000 }, // 20 per minute for invoke
+  "/api/v1/tasks": { maxRequests: 30, windowMs: 60_000 },
+  "/api/v1/capabilities": { maxRequests: 20, windowMs: 60_000 },
 };
 
 function checkRateLimit(
@@ -72,12 +64,10 @@ function checkRateLimit(
   method: string,
   ip: string
 ): { allowed: boolean; remaining: number; resetAt: number } {
-  // Only rate-limit POST/PUT/DELETE (write operations)
   if (method !== "POST" && method !== "PUT" && method !== "DELETE") {
     return { allowed: true, remaining: Infinity, resetAt: 0 };
   }
 
-  // Find matching rate limit config
   let config: RateLimitConfig | undefined;
   for (const route of Object.keys(RATE_LIMITS)) {
     if (path.startsWith(route)) {
@@ -122,15 +112,12 @@ function checkRateLimit(
 // 3. MIDDLEWARE
 // ============================================================
 export function middleware(request: NextRequest) {
-  const { pathname, origin } = request.nextUrl;
+  const { pathname } = request.nextUrl;
   const method = request.method;
   const ip = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "unknown";
 
-  // Generate request ID for tracing
-  const requestId = createHash("sha256")
-    .update(`${Date.now()}-${Math.random()}`)
-    .digest("hex")
-    .slice(0, 16);
+  // Generate request ID using Math.random (avoids node:crypto in edge runtime)
+  const requestId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
 
   // Check rate limit
   const rateLimit = checkRateLimit(pathname, method, ip);
@@ -152,7 +139,7 @@ export function middleware(request: NextRequest) {
     );
   }
 
-  // Get response (either next middleware or the actual route)
+  // Get response
   const response = NextResponse.next({
     request: {
       headers: new Headers(request.headers),
@@ -177,13 +164,6 @@ export function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all request paths except for the ones starting with:
-     * - api/auth (Auth.js handles its own security)
-     * - _next/static (static files)
-     * - _next/image (image optimization files)
-     * - favicon.ico (favicon file)
-     */
     "/((?!api/auth|_next/static|_next/image|favicon.ico).*)",
   ],
 };
