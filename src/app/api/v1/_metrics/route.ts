@@ -2,7 +2,7 @@
 // /api/v1/_metrics — Basic operational metrics
 // ============================================================
 import { NextResponse } from "next/server";
-import { getMetrics } from "@/lib/audit-observability";
+import { getMetrics } from "@/lib/metrics";
 import { auth } from "@/lib/auth";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
 

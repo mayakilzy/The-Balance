@@ -5,6 +5,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { invokeCapability } from "@/lib/capability-service";
 import { writeAudit } from "@/lib/audit";
+import { buildApiErrorResponse } from "@/lib/error-sanitizer";
+import { recordApiError } from "@/lib/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -42,7 +44,12 @@ export async function POST(
 
     return NextResponse.json(result);
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Invocation failed", detail }, { status: 500 });
+    const { status, body } = buildApiErrorResponse(
+      err,
+      `/api/v1/capabilities/${code}/invoke`,
+      "POST"
+    );
+    if (status >= 500) recordApiError();
+    return NextResponse.json(body, { status });
   }
 }

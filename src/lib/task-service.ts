@@ -14,6 +14,7 @@
 import { db } from "@/lib/db";
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { writeAudit } from "@/lib/audit";
+import { recordFailedTask } from "@/lib/metrics";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
 
@@ -340,6 +341,9 @@ export async function failTask(
         details: { error: error.slice(0, 500) } as Prisma.InputJsonValue,
       },
     });
+
+    // Single point for failed-task metric — no other call site.
+    recordFailedTask();
   });
 }
 

@@ -52,46 +52,21 @@ export function redactSensitive(data: Record<string, unknown>): Record<string, u
 }
 
 // ============================================================
-// BASIC METRICS (in-process, simple)
+// BASIC METRICS (re-exported from metrics.ts)
+// ------------------------------------------------------------
+// The counter state lives in metrics.ts which has NO pino / Node.js
+// dependency, so it is safe to import from Next.js middleware (edge
+// runtime). This module re-exports the same functions for backwards
+// compatibility with existing callers and tests.
 // ============================================================
-
-interface Metrics {
-  requestCount: number;
-  errorCount: number;
-  totalLatencyMs: number;
-  failedTasks: number;
-  rateLimitedRequests: number;
-}
-
-const metrics: Metrics = {
-  requestCount: 0,
-  errorCount: 0,
-  totalLatencyMs: 0,
-  failedTasks: 0,
-  rateLimitedRequests: 0,
-};
-
-export function recordRequest(latencyMs: number, isError: boolean): void {
-  metrics.requestCount++;
-  metrics.totalLatencyMs += latencyMs;
-  if (isError) metrics.errorCount++;
-}
-
-export function recordFailedTask(): void {
-  metrics.failedTasks++;
-}
-
-export function recordRateLimitedRequest(): void {
-  metrics.rateLimitedRequests++;
-}
-
-export function getMetrics() {
-  return {
-    ...metrics,
-    avgLatencyMs: metrics.requestCount > 0 ? Math.round(metrics.totalLatencyMs / metrics.requestCount) : 0,
-    errorRate: metrics.requestCount > 0 ? (metrics.errorCount / metrics.requestCount) * 100 : 0,
-  };
-}
+export {
+  recordRequest,
+  recordApiError,
+  recordFailedTask,
+  recordRateLimitedRequest,
+  getMetrics,
+  __resetMetricsForTesting,
+} from "@/lib/metrics";
 
 // ============================================================
 // SECURITY AUDIT HELPERS

@@ -29,6 +29,15 @@ const EnvSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
 
+  // Deployment shape — affects rate-limiting trust policy (00-09).
+  // When "true", x-forwarded-for is honored (deploy behind a known
+  // reverse proxy). When unset/"false", client-supplied IP headers
+  // are NEVER trusted and rate limits fall back to a shared bucket.
+  TRUSTED_PROXY: z
+    .enum(["true", "false", "1", "0", "yes", "no"])
+    .default("false")
+    .transform((v) => v === "true" || v === "1" || v === "yes"),
+
   // LLM Provider Abstraction
   LLM_PROVIDER: z
     .enum(["stub", "zai", "openai", "anthropic"])

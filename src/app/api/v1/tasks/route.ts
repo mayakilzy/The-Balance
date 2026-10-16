@@ -7,6 +7,8 @@ import { createTask } from "@/lib/task-service";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { writeAudit } from "@/lib/audit";
+import { buildApiErrorResponse } from "@/lib/error-sanitizer";
+import { recordApiError } from "@/lib/metrics";
 
 export const dynamic = "force-dynamic";
 
@@ -33,7 +35,9 @@ export async function GET() {
     });
     return NextResponse.json({ tasks, count: tasks.length });
   } catch (err) {
-    return NextResponse.json({ error: "Failed to list tasks" }, { status: 500 });
+    const { status, body } = buildApiErrorResponse(err, "/api/v1/tasks", "GET");
+    if (status >= 500) recordApiError();
+    return NextResponse.json(body, { status });
   }
 }
 
@@ -68,7 +72,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json(result, { status: result.created ? 201 : 200 });
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: "Failed to create task", detail }, { status: 500 });
+    const { status, body } = buildApiErrorResponse(err, "/api/v1/tasks", "POST");
+    if (status >= 500) recordApiError();
+    return NextResponse.json(body, { status });
   }
 }
