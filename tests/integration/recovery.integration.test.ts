@@ -168,11 +168,16 @@ describeIntegration("Recovery: Task Worker Crash + Reclaim", () => {
   it("crashed worker's task is reclaimed by a new worker after lease expiry", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
-    // Create a task
+    // Clean up any leftover pending/claimed/running tasks first so our
+    // high-priority task is guaranteed to be the one claimed next.
+    await adminClient.taskEvent.deleteMany({});
+    await adminClient.task.deleteMany({});
+
+    // Create a task with VERY high priority so claimTask picks THIS one
     const createResult = await createTask(session, {
       type: "crash-reclaim-recovery-test",
       goal: "Test recovery from worker crash",
-      priority: 100,
+      priority: 999999,
     });
 
     // Worker-1 claims the task with a short lease (1 second)

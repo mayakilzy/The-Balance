@@ -94,7 +94,15 @@ jobs:
       - name: Phase 1 — Fresh install verification
         env:
           PGPASSWORD: postgres
-        run: bash scripts/fresh-install-verify.sh
+        run: |
+          # CI-ONLY: grant SUPERUSER to balance_admin for CREATE EXTENSION + ALTER ROLE.
+          # In production, balance_admin is NOSUPERUSER and extensions are pre-installed.
+          # This mirrors the main CI workflow's approach.
+          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 <<'SQL'
+          ALTER ROLE balance_admin WITH SUPERUSER;
+          SQL
+
+          bash scripts/fresh-install-verify.sh
 
       # ============================================================
       # PHASE 2: RECOVERY INTEGRATION TESTS
