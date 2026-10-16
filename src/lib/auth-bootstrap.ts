@@ -32,16 +32,16 @@ let _bootstrapClient: PrismaClient | null = null;
 
 function getBootstrapClient(): PrismaClient {
   if (_bootstrapClient === null) {
-    // Construct balance_auth URL from DIRECT_URL by replacing the role.
-    // DIRECT_URL is balance_admin; we swap to balance_auth.
-    // In production, AUTH_DATABASE_URL can be set explicitly.
-    const directUrl = env.DIRECT_URL ?? "";
-    const authUrl =
-      process.env.AUTH_DATABASE_URL ??
-      directUrl
-        .replace("balance_admin", "balance_auth")
-        .replace("balance_admin_dev_only", "balance_auth_dev_only");
-
+    // Production: AUTH_DATABASE_URL MUST be set explicitly.
+    // No fallback to DIRECT_URL string swap (founder directive 00-04 pre-setup).
+    const authUrl = process.env.AUTH_DATABASE_URL;
+    if (!authUrl) {
+      throw new Error(
+        "AUTH_DATABASE_URL is not set. This env var MUST be provided " +
+          "explicitly in all environments (dev, CI, production). " +
+          "Do not rely on DIRECT_URL string substitution."
+      );
+    }
     _bootstrapClient = new PrismaClient({
       datasources: { db: { url: authUrl } },
       log: env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],

@@ -139,6 +139,8 @@ model Tenant {
   country    Country       @relation(fields: [countryId], references: [id])
   auditLogs  AuditLog[]
   memberships Membership[]
+  evidence    Evidence[]
+  evidenceEmbeddings EvidenceEmbedding[]
 
   @@map("tenants")
   @@index([status])
@@ -208,6 +210,86 @@ model Membership {
   @@index([tenantId, status])
   @@index([userId, status])
   @@map("memberships")
+}
+
+// ============================================================
+// EVIDENCE FABRIC (00-04)
+// ============================================================
+
+model Source {
+  id               String   @id @default(cuid())
+  code             String   @unique
+  displayName      String
+  // Type: "international_org" | "academic" | "government" | "media" | "ngo"
+  type             String
+  license          String?
+  url              String?
+  urlHash          String?  @unique
+  // Independence group: sources in the same group are NOT independent
+  // (e.g., syndicated news feeds). Used for dedup + independence counting.
+  independenceGroup String?
+  metadata         Json     @default("{}")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  evidence Evidence[]
+
+  @@index([type])
+  @@index([independenceGroup])
+  @@map("sources")
+}
+
+model Evidence {
+  id                String   @id @default(cuid())
+  tenantId          String
+  sourceId          String?
+  claim             String
+  summary           String?
+  // Type: "supporting" | "counter" | "neutral"
+  type              String   @default("neutral")
+  // Links to another evidence this supports/contradicts
+  relatedEvidenceId String?
+  // Verification: "unverified" | "verified" | "disputed" | "refuted"
+  verificationStatus String  @default("unverified")
+  // Provenance: when observed vs when recorded
+  observedAt        DateTime?
+  retrievedAt       DateTime @default(now())
+  extractionMethod  String?
+  // Classification: "public" | "classified" | "restricted"
+  classification    String   @default("public")
+  confidenceNotes   String?
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant     Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  source     Source?          @relation(fields: [sourceId], references: [id], onDelete: SetNull)
+  relatedTo  Evidence?        @relation("EvidenceRelations", fields: [relatedEvidenceId], references: [id], onDelete: SetNull)
+  relatedBy  Evidence[]       @relation("EvidenceRelations")
+  embedding  EvidenceEmbedding?
+
+  @@index([tenantId, type])
+  @@index([tenantId, verificationStatus])
+  @@index([tenantId, classification])
+  @@index([relatedEvidenceId])
+  @@map("evidence")
+}
+
+model EvidenceEmbedding {
+  id          String   @id @default(cuid())
+  evidenceId  String   @unique
+  tenantId    String
+  // pgvector — stored as Unsupported("vector(384)") because Prisma
+  // doesn't natively support pgvector. Read/write via raw SQL.
+  embedding   Unsupported("vector(384)")?
+  model       String
+  createdAt   DateTime @default(now())
+
+  evidence Evidence @relation(fields: [evidenceId], references: [id], onDelete: Cascade)
+  tenant   Tenant?   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@map("evidence_embeddings")
 }
 
 // NOTE: pgvector extension is enabled via the first SQL migration.

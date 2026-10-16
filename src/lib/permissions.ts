@@ -20,6 +20,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "tenant:write",
     "evidence:read",
     "evidence:write",
+    "evidence:verify",
+    "evidence:delete",
     "strategy:read",
     "strategy:write",
     "strategy:approve",
@@ -40,6 +42,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
   reviewer: [
     "tenant:read",
     "evidence:read",
+    "evidence:verify",
     "strategy:read",
     "strategy:approve",
     "audit:read",
@@ -70,6 +73,48 @@ export function requirePermission(
   permission: string
 ): void {
   if (!hasPermission(session, permission)) {
+    throw new PermissionDeniedError(permission);
+  }
+}
+
+// ============================================================
+// CURRENT-ROLE AUTHORIZATION (00-04 pre-setup)
+// ------------------------------------------------------------
+// For sensitive operations, the session roleCode may be stale.
+// This helper fetches the CURRENT role from the DB via auth-bootstrap
+// and checks permission against it, not the JWT role.
+// ============================================================
+import { loadMembershipForTenant, verifyUserActive } from "@/lib/auth-bootstrap";
+
+export async function requirePermissionWithCurrentRole(
+  session: Session | null,
+  permission: string
+): Promise<void> {
+  if (!session || !session.user) {
+    throw new PermissionDeniedError(permission);
+  }
+  const userId = session.user.id;
+  const tenantId = session.user.tenantId;
+  if (!userId || !tenantId) {
+    throw new PermissionDeniedError(permission);
+  }
+
+  // Verify user is still active
+  const userActive = await verifyUserActive(userId);
+  if (!userActive) {
+    throw new PermissionDeniedError(permission);
+  }
+
+  // Fetch CURRENT membership role from DB (not stale JWT)
+  const membership = await loadMembershipForTenant(userId, tenantId);
+  if (!membership || membership.status !== "active") {
+    throw new PermissionDeniedError(permission);
+  }
+
+  // Check permission against CURRENT role
+  const currentRoleCode = membership.roleCode;
+  const perms = ROLE_PERMISSIONS[currentRoleCode];
+  if (!perms || !perms.includes(permission)) {
     throw new PermissionDeniedError(permission);
   }
 }

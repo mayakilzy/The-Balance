@@ -189,7 +189,6 @@ async function main() {
   // ============================================================
   // 8. USERS + MEMBERSHIPS (00-03)
   // ============================================================
-  console.log("\nSeeding users + memberships...");
 
   // Hash test passwords. These are TEST FIXTURES, not secrets.
   // They are documented here for integration tests to use.
@@ -302,6 +301,153 @@ async function main() {
   console.log("  analyst@demolandia.test / test_analyst_password_00_03");
   console.log("  suspended@demolandia.test / test_suspended_password_00_03 (suspended)");
   console.log("  revoked@demolandia.test / test_revoked_password_00_03 (membership revoked)");
+
+  // ============================================================
+  // 9. EVIDENCE FABRIC (00-04)
+  // ============================================================
+  console.log("\nSeeding evidence fabric...");
+
+  // Create sources
+  const worldBankSource = await prisma.source.upsert({
+    where: { code: "WB-WDI-2025" },
+    update: {},
+    create: {
+      code: "WB-WDI-2025",
+      displayName: "World Bank WDI 2025",
+      type: "international_org",
+      license: "CC-BY-4.0",
+      url: "https://data.worldbank.org/wdi-2025",
+      independenceGroup: "world-bank",
+    },
+  });
+
+  const imfSource = await prisma.source.upsert({
+    where: { code: "IMF-WEO-2025" },
+    update: {},
+    create: {
+      code: "IMF-WEO-2025",
+      displayName: "IMF WEO October 2025",
+      type: "international_org",
+      license: "CC-BY-4.0",
+      url: "https://imf.org/weo-oct-2025",
+      independenceGroup: "imf",
+    },
+  });
+
+  // Syndicated source (same independence group — tests dedup)
+  const reutersSyndicated = await prisma.source.upsert({
+    where: { code: "REUTERS-DML-001" },
+    update: {},
+    create: {
+      code: "REUTERS-DML-001",
+      displayName: "Reuters — Demolandia Agriculture Report",
+      type: "media",
+      url: "https://reuters.com/dml-agri-001",
+      independenceGroup: "reuters-syndicate",
+    },
+  });
+
+  const apSyndicated = await prisma.source.upsert({
+    where: { code: "AP-DML-001" },
+    update: {},
+    create: {
+      code: "AP-DML-001",
+      displayName: "AP — Demolandia Agriculture (syndicated from Reuters)",
+      type: "media",
+      url: "https://apnews.com/dml-agri-001",
+      independenceGroup: "reuters-syndicate", // SAME group as Reuters!
+    },
+  });
+
+  // Create evidence for Tenant A
+  // 1. Supporting evidence
+  const evidence1 = await prisma.evidence.create({
+    data: {
+      tenantId: tenantA.id,
+      sourceId: worldBankSource.id,
+      claim: "Demolandia's agricultural GDP grew 4.2% in 2024 according to World Bank WDI.",
+      summary: "World Bank data shows agricultural sector growth in Demolandia.",
+      type: "supporting",
+      verificationStatus: "verified",
+      observedAt: new Date("2024-12-31"),
+      extractionMethod: "manual",
+      classification: "public",
+      confidenceNotes: "High confidence — official World Bank statistics.",
+    },
+  });
+
+  // 2. Supporting evidence (different independent source)
+  const evidence2 = await prisma.evidence.create({
+    data: {
+      tenantId: tenantA.id,
+      sourceId: imfSource.id,
+      claim: "IMF confirms Demolandia agricultural growth at 4.1% for 2024.",
+      summary: "IMF independent confirmation of agricultural growth.",
+      type: "supporting",
+      verificationStatus: "verified",
+      observedAt: new Date("2024-12-31"),
+      extractionMethod: "manual",
+      classification: "public",
+      confidenceNotes: "High confidence — independent IMF verification.",
+    },
+  });
+
+  // 3. Counter-evidence (linked to evidence1)
+  const counterEvidence = await prisma.evidence.create({
+    data: {
+      tenantId: tenantA.id,
+      sourceId: reutersSyndicated.id,
+      claim: "Local farmers report crop yields declined in 2024 due to drought.",
+      summary: "Contradicts official GDP growth figures.",
+      type: "counter",
+      relatedEvidenceId: evidence1.id,
+      verificationStatus: "disputed",
+      observedAt: new Date("2024-10-15"),
+      extractionMethod: "interview",
+      classification: "public",
+      confidenceNotes: "Anecdotal — needs further verification.",
+    },
+  });
+
+  // 4. Duplicate source evidence (syndicated — same independenceGroup)
+  const duplicateEvidence = await prisma.evidence.create({
+    data: {
+      tenantId: tenantA.id,
+      sourceId: apSyndicated.id,
+      claim: "AP reports Demolandia agriculture decline (syndicated from Reuters).",
+      summary: "Same story as Reuters, syndicated.",
+      type: "counter",
+      relatedEvidenceId: evidence1.id,
+      verificationStatus: "unverified",
+      observedAt: new Date("2024-10-15"),
+      extractionMethod: "wire",
+      classification: "public",
+      confidenceNotes: "Syndicated content — not independent from Reuters.",
+    },
+  });
+
+  // Create embeddings for the evidence (using StubProvider — deterministic)
+  const { getLLMProvider } = await import("../src/lib/llm");
+  const provider = getLLMProvider();
+
+  for (const ev of [evidence1, evidence2, counterEvidence, duplicateEvidence]) {
+    const embedResult = await provider.embed({
+      input: ev.claim,
+      dimensions: 384,
+    });
+    const vectorLiteral = `[${embedResult.vectors[0]!.join(",")}]`;
+    await prisma.$executeRaw`
+      INSERT INTO "evidence_embeddings" ("id", "evidenceId", "tenantId", "embedding", "model", "createdAt")
+      VALUES (gen_random_uuid()::text, ${ev.id}, ${tenantA.id}, ${vectorLiteral}::vector, ${provider.defaultEmbeddingModel}, NOW())
+    `;
+  }
+
+  console.log(`  Sources: 4 (World Bank, IMF, Reuters, AP-syndicated)`);
+  console.log(`  Evidence: 4 (2 supporting, 2 counter — 1 syndicated duplicate)`);
+  console.log(`  Embeddings: 4 (StubProvider — deterministic, SIMULATED)`);
+  console.log("\nEvidence fabric seed complete.");
+  console.log("  Note: Embeddings use StubProvider (deterministic, not real).");
+  console.log("  Real embeddings will be added in 00-06 when ZaiProvider is implemented.");
 }
 
 main()
