@@ -1,0 +1,141 @@
+name: Fresh Install + Recovery (00-10)
+
+on:
+  push:
+    branches: [main, g00/*]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fresh-install-recovery:
+    name: Fresh Install + Restart + Backup/Restore
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: balance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
+      DIRECT_URL: "postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
+      AUTH_DATABASE_URL: "postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
+      AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
+      AUTH_TRUST_HOST: "true"
+      LLM_PROVIDER: "stub"
+      LOG_LEVEL: "warn"
+      NODE_ENV: "test"
+      RUN_INTEGRATION_TESTS: "1"
+      SHOW_DEMO_CREDENTIALS: "true"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate Prisma client
+        run: bunx prisma generate
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U postgres > /dev/null 2>&1; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            echo "Waiting for Postgres... ($i/30)"
+            sleep 2
+          done
+          echo "Postgres did not become ready in time"
+          exit 1
+
+      # ============================================================
+      # PHASE 1: FRESH INSTALL — drop all tables, verify clean slate,
+      # then run the full install pipeline from scratch.
+      # ============================================================
+      - name: Phase 1 — Reset database to clean slate
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # Drop all tables + _prisma_migrations to simulate truly fresh DB
+          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 <<'SQL'
+          -- Drop all tables in public schema (CASCADE handles FKs)
+          DO $$ DECLARE
+            r RECORD;
+          BEGIN
+            FOR r IN (SELECT tablename FROM pg_tables WHERE schemaname = 'public') LOOP
+              EXECUTE 'DROP TABLE IF EXISTS public.' || quote_ident(r.tablename) || ' CASCADE';
+            END LOOP;
+          END $$;
+          -- Drop _prisma_migrations if exists
+          DROP TABLE IF EXISTS "_prisma_migrations" CASCADE;
+          SQL
+
+      - name: Phase 1 — Fresh install verification
+        env:
+          PGPASSWORD: postgres
+        run: bash scripts/fresh-install-verify.sh
+
+      # ============================================================
+      # PHASE 2: RECOVERY INTEGRATION TESTS
+      # Run the restart persistence + crash/reclaim + backup/restore
+      # integration tests against the freshly-installed DB.
+      # ============================================================
+      - name: Phase 2 — Recovery integration tests
+        run: bunx vitest run tests/integration/recovery.integration.test.ts --reporter=verbose
+        env:
+          RUN_INTEGRATION_TESTS: "1"
+          SKIP_E2E_SERVER: "1"
+
+      # ============================================================
+      # PHASE 3: APPLICATION RESTART TEST
+      # Start server, create task, stop server, restart, verify data.
+      # ============================================================
+      - name: Phase 3 — Application restart + data persistence
+        run: bash scripts/restart-verify.sh
+
+      # ============================================================
+      # PHASE 4: DATABASE BACKUP/RESTORE DRILL
+      # pg_dump → drop → restore → verify data + RLS + privileges.
+      # ============================================================
+      - name: Phase 4 — Database backup/restore drill
+        env:
+          PGPASSWORD: postgres
+        run: bash scripts/backup-restore-test.sh
+
+      # ============================================================
+      # PHASE 5: FULL TEST SUITE on restored database
+      # Verify the restored database is fully functional.
+      # ============================================================
+      - name: Phase 5 — Full test suite on restored DB
+        run: bunx vitest run --reporter=verbose
+        env:
+          RUN_INTEGRATION_TESTS: "1"
+          SKIP_E2E_SERVER: "1"
+
+      - name: Production build verification
+        run: bun run build
+        env:
+          DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
+          AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
+          LLM_PROVIDER: "stub"
