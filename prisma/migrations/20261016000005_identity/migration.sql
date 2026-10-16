@@ -118,7 +118,7 @@ CREATE POLICY "admin_all_balance_admin" ON "memberships"
 -- ============================================================
 -- 5. REVOKE UPDATE on users.passwordHash (defense in depth)
 -- ============================================================
-REVOKE UPDATE (passwordHash) ON "users" FROM balance_app;
+REVOKE UPDATE ("passwordHash") ON "users" FROM balance_app;
 
 -- ============================================================
 -- 6. VERIFY
