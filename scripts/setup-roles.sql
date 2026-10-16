@@ -18,6 +18,9 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_app') THEN
         CREATE ROLE balance_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
     END IF;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_auth') THEN
+        CREATE ROLE balance_auth WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+    END IF;
 END $$;
 
 -- ============================================================
@@ -28,12 +31,14 @@ END $$;
 -- ============================================================
 ALTER ROLE balance_admin WITH PASSWORD :'balance_admin_pw';
 ALTER ROLE balance_app   WITH PASSWORD :'balance_app_pw';
+ALTER ROLE balance_auth  WITH PASSWORD :'balance_auth_pw';
 
 -- ============================================================
 -- 3. SCHEMA PRIVILEGES
 -- ============================================================
 GRANT ALL ON SCHEMA public TO balance_admin;
 GRANT USAGE ON SCHEMA public TO balance_app;
+GRANT USAGE ON SCHEMA public TO balance_auth;
 
 -- ============================================================
 -- 4. EXTENSIONS (must be done as superuser)

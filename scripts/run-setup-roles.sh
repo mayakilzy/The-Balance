@@ -24,27 +24,27 @@ DB_SUPERUSER="${DB_SUPERUSER:-postgres}"
 # Read env vars; fall back to dev defaults if empty.
 ADMIN_PW="${PGPASSWORD_BALANCE_ADMIN:-balance_admin_dev_only}"
 APP_PW="${PGPASSWORD_BALANCE_APP:-balance_app_dev_only}"
+AUTH_PW="${PGPASSWORD_BALANCE_AUTH:-balance_auth_dev_only}"
 
 # Warn if using dev defaults
-if [ "$ADMIN_PW" = "balance_admin_dev_only" ] || [ "$APP_PW" = "balance_app_dev_only" ]; then
+if [ "$ADMIN_PW" = "balance_admin_dev_only" ] || [ "$APP_PW" = "balance_app_dev_only" ] || [ "$AUTH_PW" = "balance_auth_dev_only" ]; then
     echo "WARNING: Using dev-default passwords. NOT FOR PRODUCTION." >&2
-    echo "  Set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP for production." >&2
+    echo "  Set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP + PGPASSWORD_BALANCE_AUTH for production." >&2
 fi
 
 # Ensure non-empty (defense in depth)
 if [ -z "$ADMIN_PW" ]; then ADMIN_PW="balance_admin_dev_only"; fi
 if [ -z "$APP_PW" ]; then APP_PW="balance_app_dev_only"; fi
+if [ -z "$AUTH_PW" ]; then AUTH_PW="balance_auth_dev_only"; fi
 
 # Run the SQL script.
-# \set loads env vars into psql variables (via backtick shell execution).
-# printf '%s' avoids trailing newline.
-# setup-roles.sql reads them via :'var' which produces a quoted string literal.
 PGPASSWORD="${PGPASSWORD_POSTGRES:-postgres}" \
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
     -v ON_ERROR_STOP=1 \
     <<PSQL_EOF
 \set balance_admin_pw \`printf '%s' "$ADMIN_PW"\`
 \set balance_app_pw \`printf '%s' "$APP_PW"\`
+\set balance_auth_pw \`printf '%s' "$AUTH_PW"\`
 \i scripts/setup-roles.sql
 PSQL_EOF
 

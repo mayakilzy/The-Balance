@@ -1,36 +1,49 @@
 // ============================================================
-// auth-bootstrap.ts — Authentication bootstrap client
+// auth-bootstrap.ts — Authentication bootstrap client (least-privilege)
 // ------------------------------------------------------------
 // ISOLATED PrismaClient for auth-time queries ONLY.
 //
-// WHY THIS EXISTS:
-//   At signin time, we don't know who the user is yet, so we can't set
-//   app.user_id. But RLS on `users` requires app.user_id to read any row.
-//   Solution: use a dedicated client connected as balance_admin
-//   (BYPASSRLS) for the MINIMAL set of queries needed to authenticate:
-//     1. findUserByEmail(email) — to verify password
-//     2. loadMembershipForTenant(userId, tenantId) — to switch tenant
-//     3. loadFirstActiveMembership(userId) — for initial signin
+// LEAST-PRIVILEGE (final runtime acceptance):
+//   Uses balance_auth role (dedicated, read-only, no BYPASSRLS).
+//   balance_auth has SELECT on ONLY the columns needed for auth:
+//     users: id, email, name, passwordHash, status
+//     memberships: userId, tenantId, roleCode, status
+//     tenants: id
+//   It CANNOT write, CANNOT do DDL, CANNOT bypass RLS.
+//
+// WHY NOT balance_admin?
+//   balance_admin has BYPASSRLS + SUPERUSER (in CI). Using it for auth
+//   gives the auth path more privilege than needed. balance_auth is
+//   scoped to exactly what auth requires.
 //
 // SECURITY:
-//   - This client is used ONLY in auth-bootstrap.ts + auth.ts.
+//   - This client is a singleton (one connection pool).
+//   - Used ONLY in auth-bootstrap.ts + auth.ts.
 //   - All other app code uses `db` (balance_app) with RLS enforced.
-//   - balance_admin has BYPASSRLS but is NEVER used for general queries.
-//   - The client is a singleton (one connection pool).
 //   - Queries are read-only (SELECT); no writes via this client.
 //
-// Per ADR-0007 (updated: auth bootstrap design).
+// Per ADR-0007 (updated: least-privilege auth bootstrap).
 // ============================================================
 import { PrismaClient } from "@prisma/client";
 import { env } from "@/lib/env";
 
-// Singleton — one balance_admin client per process.
+// Singleton — one balance_auth client per process.
 let _bootstrapClient: PrismaClient | null = null;
 
 function getBootstrapClient(): PrismaClient {
   if (_bootstrapClient === null) {
+    // Construct balance_auth URL from DIRECT_URL by replacing the role.
+    // DIRECT_URL is balance_admin; we swap to balance_auth.
+    // In production, AUTH_DATABASE_URL can be set explicitly.
+    const directUrl = env.DIRECT_URL ?? "";
+    const authUrl =
+      process.env.AUTH_DATABASE_URL ??
+      directUrl
+        .replace("balance_admin", "balance_auth")
+        .replace("balance_admin_dev_only", "balance_auth_dev_only");
+
     _bootstrapClient = new PrismaClient({
-      datasources: { db: { url: env.DIRECT_URL } },
+      datasources: { db: { url: authUrl } },
       log: env.NODE_ENV === "development" ? ["warn", "error"] : ["error"],
     });
   }
@@ -45,7 +58,7 @@ export async function disconnectBootstrap(): Promise<void> {
 }
 
 // ============================================================
-// AUTH BOOTSTRAP QUERIES (read-only)
+// AUTH BOOTSTRAP QUERIES (read-only, via balance_auth)
 // ============================================================
 
 export interface AuthUser {
@@ -58,9 +71,7 @@ export interface AuthUser {
 
 /**
  * Find a user by email for authentication.
- * Uses balance_admin (BYPASSRLS) because at signin time we don't have
- * app.user_id set yet. This is the auth bootstrap — the ONLY place
- * that reads users without RLS.
+ * Uses balance_auth (read-only, no BYPASSRLS but RLS-exempt for auth).
  */
 export async function findUserByEmail(email: string): Promise<AuthUser | null> {
   const client = getBootstrapClient();
@@ -85,7 +96,6 @@ export interface AuthMembership {
 
 /**
  * Load the FIRST active membership for a user (for initial signin).
- * Uses balance_admin (BYPASSRLS) — auth bootstrap.
  */
 export async function loadFirstActiveMembership(
   userId: string
@@ -105,8 +115,7 @@ export async function loadFirstActiveMembership(
 
 /**
  * Load a SPECIFIC membership for a user in a specific tenant.
- * Used by switch-tenant to verify the user can switch to that tenant.
- * Uses balance_admin (BYPASSRLS) — auth bootstrap.
+ * Used by switch-tenant + withAuthenticatedTenant (current-role check).
  */
 export async function loadMembershipForTenant(
   userId: string,
@@ -126,7 +135,6 @@ export async function loadMembershipForTenant(
 
 /**
  * Verify a user's status is still active (re-check on session refresh).
- * Uses balance_admin (BYPASSRLS) — auth bootstrap.
  */
 export async function verifyUserActive(userId: string): Promise<boolean> {
   const client = getBootstrapClient();

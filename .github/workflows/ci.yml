@@ -35,11 +35,16 @@ jobs:
       DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
       # balance_admin role — BYPASSRLS — used by migrations + seed only
       DIRECT_URL: "postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
+      # balance_auth role — read-only, RLS-exempt for auth bootstrap
+      AUTH_DATABASE_URL: "postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
       AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
       AUTH_TRUST_HOST: "true"
       LLM_PROVIDER: "stub"
       LOG_LEVEL: "warn"
       NODE_ENV: "test"
+      # Enable E2E HTTP tests (starts real Next.js server)
+      RUN_E2E_HTTP_TESTS: "1"
+      RUN_INTEGRATION_TESTS: "1"
 
     steps:
       - uses: actions/checkout@v4

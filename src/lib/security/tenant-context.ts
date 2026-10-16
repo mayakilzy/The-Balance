@@ -162,14 +162,20 @@ interface AuthenticatedContext {
  * Verify the session is authenticated + active, then run a callback
  * inside a transaction with app.user_id + app.tenant_id set.
  *
+ * CURRENT MEMBERSHIP AUTHORIZATION (final runtime acceptance):
+ *   - Fetches the CURRENT membership from DB (not stale JWT role).
+ *   - If DB role differs from session role, uses DB role (authoritative).
+ *   - This catches role changes (admin→observer) mid-session.
+ *
  * Security:
  *   - tenantId comes from the session (JWT), NOT from client input.
  *   - The session's membershipStatus must be 'active'.
  *   - The user's status must be 'active' (checked at signin, re-checked here).
  *   - RLS policies enforce isolation at the DB level.
+ *   - roleCode in the returned context is the CURRENT DB role, not JWT role.
  *
  * Throws:
- *   - PermissionDeniedError if session is invalid or membership is not active.
+ *   - Error if session is invalid or membership is not active.
  */
 export async function withAuthenticatedTenant<T>(
   session: Session | null,
@@ -183,34 +189,16 @@ export async function withAuthenticatedTenant<T>(
   }
   const userId = session.user.id;
   const tenantId = session.user.tenantId;
-  const roleCode = session.user.roleCode;
-  if (!userId || !tenantId || !roleCode) {
-    throw new Error("Session missing required claims (userId/tenantId/roleCode)");
+  if (!userId || !tenantId) {
+    throw new Error("Session missing required claims (userId/tenantId)");
   }
 
-  // Defense in depth: re-verify membership exists + is active in the DB.
-  // This catches the case where membership was revoked AFTER the JWT was issued
-  // but BEFORE the JWT expires. The JWT maxAge is 8 hours; revocation should
-  // take effect immediately, not after 8 hours.
-  //
-  // We use balance_admin (via db singleton with DIRECT_URL... actually db uses
-  // DATABASE_URL = balance_app). Hmm, we need to query memberships WITHOUT
-  // RLS interference to verify. But balance_app can't see other tenants'
-  // memberships...
-  //
-  // Actually, the membership we're verifying is the user's OWN membership in
-  // the tenant. RLS on memberships allows balance_app to see own user's
-  // membership in current tenant. But we haven't set the context yet.
-  //
-  // Solution: query via a separate admin client. For 00-03, we use a
-  // dedicated admin PrismaClient for membership verification.
   return db.$transaction(async (tx) => {
-    // Set user context first so RLS on memberships allows the query.
+    // Set user + tenant context for RLS.
     await tx.$executeRaw`SELECT set_config('app.user_id', ${userId}, true)`;
     await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
 
-    // Now verify the membership exists + is active (RLS allows this query
-    // because app.user_id + app.tenant_id match).
+    // Verify the membership exists + is active in the DB.
     const membership = await tx.membership.findFirst({
       where: { userId, tenantId, status: "active" },
     });
@@ -224,7 +212,11 @@ export async function withAuthenticatedTenant<T>(
       throw new Error(`User account not active: ${user?.status ?? "not found"}`);
     }
 
-    return fn({ tx, userId, tenantId, roleCode });
+    // Use the CURRENT DB roleCode (authoritative), not the stale JWT role.
+    // This catches role changes (admin→observer) mid-session.
+    const currentRoleCode = membership.roleCode;
+
+    return fn({ tx, userId, tenantId, roleCode: currentRoleCode });
   });
 }
 
