@@ -148,6 +148,7 @@ model Tenant {
   events      Event[]
   tasks       Task[]
   taskEvents  TaskEvent[]
+  capabilityInvocations CapabilityInvocation[]
 
   @@map("tenants")
   @@index([status])
@@ -441,6 +442,7 @@ model Task {
 
   tenant  Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   events  TaskEvent[]
+  capabilityInvocations CapabilityInvocation[]
 
   @@index([tenantId, status])
   @@index([status, priority, createdAt])
@@ -464,4 +466,56 @@ model TaskEvent {
   @@index([taskId, at])
   @@index([tenantId, at])
   @@map("task_events")
+}
+
+// ============================================================
+// CAPABILITY REGISTRY (00-07)
+// ============================================================
+
+model Capability {
+  id                String   @id @default(cuid())
+  code              String   @unique
+  displayName       String
+  description       String
+  // Type: "tool" | "expert" | "source" | "adapter"
+  type              String
+  // Readiness: "stub" | "mock" | "live" | "untested"
+  readiness         String   @default("stub")
+  inputSchema       Json     @default("{}")
+  outputSchema      Json     @default("{}")
+  requiredPermission String
+  domains           Json     @default("[]")
+  adapterEndpoint   String?
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  invocations CapabilityInvocation[]
+
+  @@index([type])
+  @@index([readiness])
+  @@map("capabilities")
+}
+
+model CapabilityInvocation {
+  id            String    @id @default(cuid())
+  tenantId      String
+  capabilityId  String
+  taskId        String?
+  invokedBy     String
+  input         Json      @default("{}")
+  output        Json?
+  status        String    @default("pending")
+  error         String?
+  startedAt     DateTime  @default(now())
+  completedAt   DateTime?
+
+  tenant     Tenant    @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  capability Capability @relation(fields: [capabilityId], references: [id])
+  task       Task?     @relation(fields: [taskId], references: [id], onDelete: SetNull)
+
+  @@index([tenantId])
+  @@index([capabilityId])
+  @@index([taskId])
+  @@map("capability_invocations")
 }

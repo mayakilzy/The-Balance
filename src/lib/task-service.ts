@@ -356,21 +356,29 @@ export async function reclaimStaleTasks(
     // This prevents the race where a worker renews its lease between
     // our read and our update — the UPDATE will simply not match that row.
     //
-    // We use raw SQL to RETURN the reclaimed task IDs + their old
-    // claimedBy + claimGeneration, so we can record events per task.
+    // We capture oldClaimedBy/oldClaimGeneration BEFORE the UPDATE using
+    // a CTE (Common Table Expression) that selects the old values first,
+    // then updates. This preserves the pre-update state for the event log.
     const reclaimedRows = await tx.$queryRaw<
       Array<{ id: string; oldClaimedBy: string | null; oldClaimGeneration: number }>
     >`
-      UPDATE "tasks"
+      WITH stale AS (
+        SELECT id, "claimedBy" AS old_claimed_by, "claimGeneration" AS old_claim_gen
+        FROM "tasks"
+        WHERE "tenantId" = ${tenantId}
+          AND "status" IN ('claimed', 'running')
+          AND "leaseExpiresAt" IS NOT NULL
+          AND "leaseExpiresAt" < NOW()
+        FOR UPDATE
+      )
+      UPDATE "tasks" t
       SET "status" = 'pending',
           "claimedBy" = NULL,
           "leaseExpiresAt" = NULL,
           "updatedAt" = NOW()
-      WHERE "tenantId" = ${tenantId}
-        AND "status" IN ('claimed', 'running')
-        AND "leaseExpiresAt" IS NOT NULL
-        AND "leaseExpiresAt" < NOW()
-      RETURNING id, "claimedBy" AS "oldClaimedBy", "claimGeneration" AS "oldClaimGeneration"
+      FROM stale
+      WHERE t.id = stale.id
+      RETURNING t.id, stale.old_claimed_by AS "oldClaimedBy", stale.old_claim_gen AS "oldClaimGeneration"
     `;
 
     if (reclaimedRows.length === 0) {
