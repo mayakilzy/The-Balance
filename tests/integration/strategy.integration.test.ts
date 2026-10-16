@@ -327,4 +327,139 @@ describeIntegration("Strategy Contracts — Full Workflow", () => {
     const snapshot = detail.decision.supportingEvidence[0];
     expect(snapshot?.verificationStatus).toBe("unverified"); // At decision time, not current
   });
+
+  // ============================================================
+  // 12. APPROVED VERSION IMMUTABILITY — cannot UPDATE content (DB trigger)
+  // ============================================================
+  it("cannot UPDATE content of approved strategy version (DB trigger)", async () => {
+    const { withTenant } = await import("@/lib/security/tenant-context");
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // version2Id was approved in test 3
+    // Attempt to UPDATE its content via balance_app
+    await expect(
+      withTenant(tenantAId, async (tx) => {
+        await tx.strategyVersion.update({
+          where: { id: version2Id },
+          data: { content: "TAMPERED CONTENT" },
+        });
+      })
+    ).rejects.toThrow(/immutable|cannot modify/i);
+  });
+
+  // ============================================================
+  // 13. DECISION TRANSITION — cannot skip proposed → implemented
+  // ============================================================
+  it("cannot skip decision states: proposed → implemented rejected", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Create a fresh decision (status = proposed)
+    const result = await createDecision(session, {
+      title: "Transition test decision",
+      rationale: "Testing state transition rules.",
+    });
+
+    // Attempt: proposed → implemented (INVALID — must go through reviewed → approved first)
+    await expect(
+      advanceDecision(session, result.decisionId, "implemented")
+    ).rejects.toThrow(/Invalid decision state transition/i);
+  });
+
+  // ============================================================
+  // 14. DECISION TRANSITION — reversed → approved rejected
+  // ============================================================
+  it("cannot transition reversed → approved (invalid)", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Create + advance to approved + reverse
+    const result = await createDecision(session, {
+      title: "Reversal test decision",
+      rationale: "Testing reversal transition.",
+    });
+    await advanceDecision(session, result.decisionId, "reviewed");
+    await advanceDecision(session, result.decisionId, "approved");
+    await advanceDecision(session, result.decisionId, "reversed");
+
+    // Attempt: reversed → approved (INVALID — reversed can only go to proposed)
+    await expect(
+      advanceDecision(session, result.decisionId, "approved")
+    ).rejects.toThrow(/Invalid decision state transition/i);
+  });
+
+  // ============================================================
+  // 15. EVIDENCE COMPLETENESS — missing evidence ID rejected
+  // ============================================================
+  it("createDecision rejects when supporting evidence ID not found", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Use a real evidence ID + a fake one
+    await expect(
+      createDecision(session, {
+        title: "Incomplete evidence test",
+        rationale: "Should fail due to missing evidence.",
+        supportingEvidenceIds: [supportingEvidenceId, "nonexistent-evidence-id"],
+      })
+    ).rejects.toThrow(/Evidence completeness violation/i);
+  });
+
+  // ============================================================
+  // 16. EVIDENCE COMPLETENESS — cross-tenant evidence rejected
+  // ============================================================
+  it("createDecision rejects when evidence belongs to different tenant", async () => {
+    // Create evidence in Tenant B (via admin client)
+    const tenantBEvidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantBId,
+        claim: "Tenant B private evidence for cross-tenant decision test.",
+      },
+    });
+
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Attempt: create decision in Tenant A referencing Tenant B's evidence
+    await expect(
+      createDecision(session, {
+        title: "Cross-tenant evidence test",
+        rationale: "Should fail — evidence from Tenant B.",
+        supportingEvidenceIds: [tenantBEvidence.id],
+      })
+    ).rejects.toThrow(/Evidence completeness violation/i);
+
+    // Cleanup
+    await adminClient.evidence.delete({ where: { id: tenantBEvidence.id } });
+  });
+
+  // ============================================================
+  // 17. STRATEGY VERSION CROSS-TENANT — cannot link decision to other tenant's version
+  // ============================================================
+  it("createDecision rejects when strategyVersionId belongs to different tenant", async () => {
+    // Create a strategy + version in Tenant B (via admin client)
+    const tenantBStrategy = await adminClient.strategy.create({
+      data: { tenantId: tenantBId, title: "Tenant B strategy", createdBy: adminUserId },
+    });
+    const tenantBVersion = await adminClient.strategyVersion.create({
+      data: {
+        strategyId: tenantBStrategy.id,
+        tenantId: tenantBId,
+        versionNumber: 1,
+        content: "Tenant B version content",
+        createdBy: adminUserId,
+      },
+    });
+
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // Attempt: create decision in Tenant A linked to Tenant B's version
+    await expect(
+      createDecision(session, {
+        title: "Cross-tenant version test",
+        rationale: "Should fail — version from Tenant B.",
+        strategyVersionId: tenantBVersion.id,
+      })
+    ).rejects.toThrow(/not found in tenant scope/i);
+
+    // Cleanup
+    await adminClient.strategyVersion.delete({ where: { id: tenantBVersion.id } });
+    await adminClient.strategy.delete({ where: { id: tenantBStrategy.id } });
+  });
 });

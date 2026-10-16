@@ -211,7 +211,22 @@ export async function createDecision(
   return withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
     await requirePermissionWithCurrentRole(session, "strategy:write");
 
-    // Snapshot evidence at decision time
+    // Verify strategyVersionId belongs to same tenant (if provided)
+    if (input.strategyVersionId) {
+      const version = await tx.strategyVersion.findFirst({
+        where: { id: input.strategyVersionId, tenantId },
+      });
+      if (!version) {
+        throw new Error(
+          `Strategy version ${input.strategyVersionId} not found in tenant scope — ` +
+            "cannot link decision to a version from another tenant"
+        );
+      }
+    }
+
+    // EVIDENCE COMPLETENESS CHECK (founder directive 00-05 closure):
+    // ALL requested evidence IDs must exist in tenant scope.
+    // If any is missing or cross-tenant → reject the entire operation.
     let supportingSnapshots: EvidenceSnapshot[] = [];
     let counterSnapshots: EvidenceSnapshot[] = [];
 
@@ -223,6 +238,18 @@ export async function createDecision(
         },
         include: { source: { select: { code: true } } },
       });
+
+      // VERIFY: all requested IDs were found
+      if (evidence.length !== input.supportingEvidenceIds.length) {
+        const found = new Set(evidence.map((e) => e.id));
+        const missing = input.supportingEvidenceIds.filter((id) => !found.has(id));
+        throw new Error(
+          `Evidence completeness violation: ${missing.length} of ${input.supportingEvidenceIds.length} ` +
+            `supporting evidence IDs not found in tenant scope. Missing: ${missing.join(", ")}. ` +
+            "Decision creation rejected — no partial snapshots allowed."
+        );
+      }
+
       supportingSnapshots = evidence.map((e) => ({
         evidenceId: e.id,
         claim: e.claim,
@@ -240,6 +267,18 @@ export async function createDecision(
         },
         include: { source: { select: { code: true } } },
       });
+
+      // VERIFY: all requested IDs were found
+      if (evidence.length !== input.counterEvidenceIds.length) {
+        const found = new Set(evidence.map((e) => e.id));
+        const missing = input.counterEvidenceIds.filter((id) => !found.has(id));
+        throw new Error(
+          `Evidence completeness violation: ${missing.length} of ${input.counterEvidenceIds.length} ` +
+            `counter evidence IDs not found in tenant scope. Missing: ${missing.join(", ")}. ` +
+            "Decision creation rejected — no partial snapshots allowed."
+        );
+      }
+
       counterSnapshots = evidence.map((e) => ({
         evidenceId: e.id,
         claim: e.claim,
@@ -278,6 +317,30 @@ export async function createDecision(
 }
 
 // ============================================================
+// DECISION STATE TRANSITIONS (founder directive 00-05 closure)
+// ============================================================
+// Allowed transitions:
+//   proposed → reviewed
+//   reviewed → approved
+//   reviewed → proposed (send back for revision)
+//   approved → implemented
+//   approved → reversed
+//   reversed → proposed (re-proposal, rare)
+// All other transitions are rejected.
+const VALID_TRANSITIONS: Record<string, string[]> = {
+  proposed: ["reviewed"],
+  reviewed: ["approved", "proposed"],
+  approved: ["implemented", "reversed"],
+  implemented: ["reversed"],
+  reversed: ["proposed"],
+};
+
+function isValidTransition(from: string, to: string): boolean {
+  const allowed = VALID_TRANSITIONS[from];
+  return allowed ? allowed.includes(to) : false;
+}
+
+// ============================================================
 // DECISION LIFECYCLE EVENTS
 // ============================================================
 
@@ -300,6 +363,14 @@ export async function advanceDecision(
     });
     if (!decision) {
       throw new Error("Decision not found in tenant scope");
+    }
+
+    // VALIDATE TRANSITION (founder directive 00-05 closure)
+    if (!isValidTransition(decision.status, newStatus)) {
+      throw new Error(
+        `Invalid decision state transition: ${decision.status} → ${newStatus}. ` +
+          `Allowed transitions from '${decision.status}': ${(VALID_TRANSITIONS[decision.status] ?? []).join(", ")}`
+      );
     }
 
     const updated = await tx.decision.update({
