@@ -284,4 +284,164 @@ describeIntegration("RLS isolation — balance_app role (real PostgreSQL)", () =
     `;
     expect(tables.length).toBe(1);
   });
+
+  // ============================================================
+  // 11. AUDIT LOG APPEND-ONLY — UPDATE blocked even for own rows
+  // ------------------------------------------------------------
+  // Founder directive (00-02 corrective closure):
+  //   "منع UPDATE و DELETE بواسطة الدور التشغيلي على مستوى قاعدة البيانات نفسها"
+  //   (Block UPDATE and DELETE by the operational role at the DB level itself)
+  // ============================================================
+  it("Tenant A cannot UPDATE its own audit_log row (append-only)", async () => {
+    // Insert a row as Tenant A (INSERT is allowed)
+    await withTenant(tenantAId, async (tx) => {
+      await tx.auditLog.create({
+        data: { tenantId: tenantAId, actor: "to-update", action: "test.update.target" },
+      });
+    });
+
+    // Attempt to UPDATE that row — should fail (REVOKE + no UPDATE policy)
+    await expect(
+      withTenant(tenantAId, async (tx) => {
+        await tx.auditLog.updateMany({
+          where: { actor: "to-update" },
+          data: { actor: "tampered" },
+        });
+      })
+    ).rejects.toThrow();
+  });
+
+  // ============================================================
+  // 12. AUDIT LOG APPEND-ONLY — DELETE blocked even for own rows
+  // ============================================================
+  it("Tenant A cannot DELETE its own audit_log row (append-only)", async () => {
+    await withTenant(tenantAId, async (tx) => {
+      await tx.auditLog.create({
+        data: { tenantId: tenantAId, actor: "to-delete", action: "test.delete.target" },
+      });
+    });
+
+    await expect(
+      withTenant(tenantAId, async (tx) => {
+        await tx.auditLog.deleteMany({
+          where: { actor: "to-delete" },
+        });
+      })
+    ).rejects.toThrow();
+  });
+
+  // ============================================================
+  // 13. STATE HIERARCHY — parent must be in the SAME country
+  // ------------------------------------------------------------
+  // Founder directive (00-02 corrective closure):
+  //   "يجب منع ربط عنصر إداري أو مؤسسة بأب ينتمي إلى دولة أخرى"
+  //   (Must prevent linking an admin unit or institution to a parent
+  //    belonging to another country)
+  // ============================================================
+  it("StateHierarchy cannot have parent in a different country", async () => {
+    // Create a second country (Testlandia) for the cross-border test
+    const testlandia = await adminClient.country.upsert({
+      where: { iso3: "ZZT" },
+      update: {},
+      create: { iso3: "ZZT", iso2: "ZT", displayName: "Testlandia (cross-border test)" },
+    });
+
+    // Province in Testlandia
+    const testlandiaProvince = await adminClient.stateHierarchy.upsert({
+      where: { countryId_code: { countryId: testlandia.id, code: "ZZT-P" } },
+      update: {},
+      create: {
+        countryId: testlandia.id,
+        code: "ZZT-P",
+        displayName: "Testlandia Province",
+        level: "province",
+      },
+    });
+
+    // Attempt: child in Demolandia (DML) with parent in Testlandia (ZZT)
+    // → trigger should reject
+    await expect(
+      adminClient.stateHierarchy.create({
+        data: {
+          countryId: countryId, // Demolandia
+          parentId: testlandiaProvince.id, // Testlandia — DIFFERENT country
+          code: "DML-CROSS-BAD",
+          displayName: "Cross-border child (should fail)",
+          level: "district",
+        },
+      })
+    ).rejects.toThrow(/same country/i);
+
+    // Cleanup
+    await adminClient.stateHierarchy.deleteMany({ where: { code: "ZZT-P" } });
+    await adminClient.country.deleteMany({ where: { iso3: "ZZT" } });
+  });
+
+  // ============================================================
+  // 14. INSTITUTION — parent must be in the SAME country
+  // ============================================================
+  it("Institution cannot have parent in a different country", async () => {
+    const testlandia = await adminClient.country.upsert({
+      where: { iso3: "ZZT" },
+      update: {},
+      create: { iso3: "ZZT", iso2: "ZT", displayName: "Testlandia (cross-border test)" },
+    });
+
+    const testlandiaMinistry = await adminClient.institution.upsert({
+      where: { countryId_code: { countryId: testlandia.id, code: "ZZT-MOF" } },
+      update: {},
+      create: {
+        countryId: testlandia.id,
+        code: "ZZT-MOF",
+        displayName: "Testlandia Ministry of Finance",
+        type: "ministry",
+      },
+    });
+
+    // Attempt: child in Demolandia with parent in Testlandia → trigger rejects
+    await expect(
+      adminClient.institution.create({
+        data: {
+          countryId: countryId, // Demolandia
+          parentId: testlandiaMinistry.id, // Testlandia — DIFFERENT country
+          code: "DML-CROSS-INST",
+          displayName: "Cross-border institution (should fail)",
+          type: "directorate",
+        },
+      })
+    ).rejects.toThrow(/same country/i);
+
+    // Cleanup
+    await adminClient.institution.deleteMany({ where: { code: "ZZT-MOF" } });
+    await adminClient.country.deleteMany({ where: { iso3: "ZZT" } });
+  });
+
+  // ============================================================
+  // 15. AUDIT LOG — admin can still UPDATE/DELETE (maintenance path)
+  // ------------------------------------------------------------
+  // Documents the maintenance path: balance_admin (BYPASSRLS) can
+  // modify audit_log for legitimate ops (e.g., GDPR erasure).
+  // This is audited at the application layer separately.
+  // ============================================================
+  it("balance_admin can UPDATE/DELETE audit_log (documented maintenance path)", async () => {
+    // Admin inserts a row directly
+    const row = await adminClient.auditLog.create({
+      data: { tenantId: tenantAId, actor: "admin-test", action: "test.admin.maintainable" },
+    });
+
+    // Admin can UPDATE it
+    await adminClient.auditLog.update({
+      where: { id: row.id },
+      data: { actor: "admin-corrected" },
+    });
+
+    // Admin can DELETE it
+    await adminClient.auditLog.delete({
+      where: { id: row.id },
+    });
+
+    // Verify deletion
+    const exists = await adminClient.auditLog.findUnique({ where: { id: row.id } });
+    expect(exists).toBeNull();
+  });
 });

@@ -1,8 +1,16 @@
 # ADR-0005 — RLS Roles and Policy Design
 
 **Date:** 2026-10-16
-**Status:** Accepted (founder-mandated)
-**Mission:** 00-02
+**Status:** Accepted (founder-mandated); updated 00-02 corrective closure
+**Mission:** 00-02 (initial + corrective closure)
+
+## Updates in corrective closure (00-02)
+
+1. **Audit log append-only**: `balance_app` can only SELECT + INSERT on `audit_log`. UPDATE and DELETE are revoked at the GRANT level and have no RLS policy. See §"Audit log append-only enforcement" below.
+
+2. **Role setup separated from migrations**: Role creation + password management moved to `scripts/setup-roles.sql`. Migration 0002 historically created roles; going forward, this script is the canonical source. See §"Role setup separation" below.
+
+3. **CI vs production privilege distinction**: CI grants SUPERUSER to `balance_admin` for CREATE EXTENSION. Production must NOT. See §"CI vs production" below.
 
 ## Context
 
@@ -158,3 +166,65 @@ The CI workflow must:
 7. **PUBLIC writes blocked for app role:** `balance_app` cannot INSERT/UPDATE/DELETE `public_knowledge`.
 8. **Tenants table self-isolation:** Tenant A sees only its own row in `tenants`.
 9. **All tests use `balance_app` role** — not the admin/superuser role.
+
+## Audit log append-only enforcement (corrective closure)
+
+**Problem identified by founder:** The original `audit_log` RLS policy used `FOR ALL TO balance_app`, which allowed UPDATE and DELETE of the tenant's own rows. This violates the append-only contract — an operational user could delete audit evidence of their own actions.
+
+**Solution (migration 20261016000003):**
+1. Dropped the `FOR ALL` policy.
+2. Created two separate policies:
+   - `audit_log_select_balance_app` (FOR SELECT) — read own tenant's rows.
+   - `audit_log_insert_balance_app` (FOR INSERT) — write own tenant's rows.
+3. No UPDATE or DELETE policy exists for `balance_app` → RLS denies these commands entirely.
+4. `REVOKE UPDATE, DELETE ON audit_log FROM balance_app` — belt-and-suspenders at the GRANT level.
+
+**Maintenance path (balance_admin):**
+- `balance_admin` retains all privileges (BYPASSRLS).
+- For legitimate operations (e.g., GDPR erasure, court-ordered correction), an admin connects as `balance_admin` and modifies `audit_log` directly.
+- This admin action MUST be logged in a separate audit entry (recording who, when, why, what was changed).
+- The application NEVER connects as `balance_admin` at runtime.
+
+**Verified by integration tests:**
+- Test 11: "Tenant A cannot UPDATE its own audit_log row (append-only)" — proves UPDATE is blocked.
+- Test 12: "Tenant A cannot DELETE its own audit_log row (append-only)" — proves DELETE is blocked.
+- Test 15: "balance_admin can UPDATE/DELETE audit_log (documented maintenance path)" — proves the admin path works for legitimate maintenance.
+
+## Role setup separation (corrective closure)
+
+**Problem identified by founder:** Database role names + dev passwords were hardcoded inside migration 0002. This conflates schema management with security configuration, and risks dev passwords becoming permanent production settings.
+
+**Solution:**
+1. Created `scripts/setup-roles.sql` as the canonical role management script.
+2. This script:
+   - Creates `balance_admin` + `balance_app` (idempotent DO block).
+   - Sets dev-only passwords (documented as dev-only).
+   - Grants schema privileges (CREATE for admin, USAGE for app).
+   - Pre-creates pgvector extension (requires superuser).
+3. CI runs this script as the postgres superuser before migrations.
+4. Docker-compose mounts this script as `init-roles.sql` in `/docker-entrypoint-initdb.d/`.
+5. Migration 0002's role creation remains as historical bootstrap (idempotent, harmless).
+6. Future migrations (0003+) do NOT touch roles.
+
+**Production deployment:**
+- DBA runs `setup-roles.sql` with password overrides via environment.
+- DBA rotates the dev-only passwords set in migration 0002.
+- DBA pre-installs pgvector extension (no SUPERUSER grant to balance_admin).
+- `DATABASE_URL` uses `balance_app`; `DIRECT_URL` uses `balance_admin`.
+
+## CI vs production privileges (corrective closure)
+
+**Problem identified by founder:** CI grants SUPERUSER to `balance_admin` (for CREATE EXTENSION). This must NOT become a production setting.
+
+**Solution:**
+- CI workflow explicitly documents: "CI-ONLY: grant SUPERUSER to balance_admin for CREATE EXTENSION."
+- The `Verify role privileges` CI step asserts:
+  - `balance_app` is NOT superuser.
+  - `balance_app` does NOT have BYPASSRLS.
+  - `balance_app` does NOT have CREATE on schema public.
+  - `balance_app` does NOT have UPDATE/DELETE on audit_log.
+- Production checklist documented in `scripts/setup-roles.sql`:
+  - balance_admin is NOSUPERUSER (only BYPASSRLS).
+  - balance_app is NOSUPERUSER, NOBYPASSRLS, no DDL.
+  - Passwords rotated from dev defaults.
+  - pgvector pre-installed by DBA.

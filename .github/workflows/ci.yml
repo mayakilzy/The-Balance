@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lint-typecheck-test:
-    name: Lint + Typecheck + Test + Integration (RLS)
+    name: Lint + Typecheck + Test + Integration (RLS + Append-only)
     runs-on: ubuntu-latest
     timeout-minutes: 20
 
@@ -68,47 +68,68 @@ jobs:
           echo "Postgres did not become ready in time"
           exit 1
 
-      - name: Run migrations (as balance_admin via DIRECT_URL)
-        # NO `|| echo` — migration failure MUST fail CI.
-        # Migrations create the roles + RLS policies.
+      - name: Setup database roles + extensions (as postgres superuser)
+        # Uses the canonical scripts/setup-roles.sql.
+        # CI adds SUPERUSER to balance_admin so it can CREATE EXTENSION.
+        # Production should NOT grant SUPERUSER — DBA pre-installs extensions.
         env:
           PGPASSWORD: postgres
         run: |
-          # First, create the roles BEFORE running migrations, because
-          # migration 0002 references them. Connect as postgres superuser.
+          # Run the canonical setup script
+          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 -f scripts/setup-roles.sql
+
+          # CI-ONLY: grant SUPERUSER to balance_admin for CREATE EXTENSION.
+          # In production, balance_admin is NOSUPERUSER and extensions are pre-installed.
           psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 <<'SQL'
-          DO $$
-          BEGIN
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_admin') THEN
-              -- CI-only: balance_admin is SUPERUSER so it can CREATE EXTENSION (pgvector).
-              -- In production, balance_admin would be NOSUPERUSER with BYPASSRLS,
-              -- and extensions would be installed by a DBA before migrations run.
-              -- See ADR-0005 for the production role design.
-              CREATE ROLE balance_admin WITH LOGIN SUPERUSER NOCREATEDB NOCREATEROLE REPLICATION BYPASSRLS PASSWORD 'balance_admin_dev_only';
-            END IF;
-            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_app') THEN
-              CREATE ROLE balance_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'balance_app_dev_only';
-            END IF;
-          END $$;
-          -- PostgreSQL 15+ requires explicit CREATE grant on schema public.
-          GRANT ALL ON SCHEMA public TO balance_admin;
-          GRANT USAGE ON SCHEMA public TO balance_app;
-          -- Pre-create pgvector extension (so migration 0001's CREATE EXTENSION is a no-op).
-          CREATE EXTENSION IF NOT EXISTS "vector";
+          ALTER ROLE balance_admin WITH SUPERUSER;
           SQL
 
-          # Now run migrations as balance_admin (CI: SUPERUSER; prod: NOSUPERUSER with pre-installed extensions)
-          bunx prisma migrate deploy
+      - name: Run migrations (as balance_admin via DIRECT_URL)
+        # NO `|| echo` — migration failure MUST fail CI.
+        env:
+          PGPASSWORD: balance_admin_dev_only
+        run: bunx prisma migrate deploy
 
       - name: Seed ontology (as balance_admin via DIRECT_URL)
-        # Seeds Demolandia fictional country + 2 tenants + state + institutions.
         run: bun run db:seed
 
-      - name: Verify DB connection + schema + RLS
+      - name: Verify role privileges (security check)
+        # Asserts balance_app has NO SUPERUSER, NO BYPASSRLS, NO CREATE on schema.
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 -t -A <<'SQL' | while read -r line; do
+            echo "$line"
+          done
+          -- balance_app must NOT be superuser
+          SELECT CASE WHEN rolsuper THEN 'FAIL: balance_app is SUPERUSER' ELSE 'OK: balance_app not superuser' END
+          FROM pg_roles WHERE rolname = 'balance_app';
+          -- balance_app must NOT have BYPASSRLS
+          SELECT CASE WHEN rolbypassrls THEN 'FAIL: balance_app has BYPASSRLS' ELSE 'OK: balance_app no BYPASSRLS' END
+          FROM pg_roles WHERE rolname = 'balance_app';
+          -- balance_app must NOT have CREATE on schema public
+          SELECT CASE WHEN has_schema_privilege('balance_app', 'public', 'CREATE')
+            THEN 'FAIL: balance_app has CREATE on public' ELSE 'OK: balance_app no CREATE on public' END;
+          -- balance_app must NOT have UPDATE/DELETE on audit_log (append-only)
+          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'UPDATE')
+            THEN 'FAIL: balance_app has UPDATE on audit_log' ELSE 'OK: balance_app no UPDATE on audit_log' END;
+          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'DELETE')
+            THEN 'FAIL: balance_app has DELETE on audit_log' ELSE 'OK: balance_app no DELETE on audit_log' END;
+          SQL
+
+          # Re-run with strict failure: any FAIL line exits 1
+          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 -t -A <<'SQL' | grep -q "FAIL" && exit 1 || exit 0
+          SELECT CASE WHEN rolsuper THEN 'FAIL' ELSE 'OK' END FROM pg_roles WHERE rolname = 'balance_app';
+          SELECT CASE WHEN rolbypassrls THEN 'FAIL' ELSE 'OK' END FROM pg_roles WHERE rolname = 'balance_app';
+          SELECT CASE WHEN has_schema_privilege('balance_app', 'public', 'CREATE') THEN 'FAIL' ELSE 'OK' END;
+          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'UPDATE') THEN 'FAIL' ELSE 'OK' END;
+          SELECT CASE WHEN has_table_privilege('balance_app', 'audit_log', 'DELETE') THEN 'FAIL' ELSE 'OK' END;
+          SQL
+
+      - name: Verify DB connection + schema + RLS (as balance_app)
         env:
           PGPASSWORD: balance_app_dev_only
         run: |
-          # Connect as balance_app (NOT admin) to verify RLS-enforced access works.
           psql -h localhost -U balance_app -d balance -v ON_ERROR_STOP=1 <<'SQL'
           -- PUBLIC tables readable?
           SELECT count(*) AS countries_count FROM countries;
@@ -116,11 +137,14 @@ jobs:
           SELECT count(*) AS role_refs_count FROM role_references;
 
           -- PRIVATE table (audit_log) — fail-closed with no tenant context?
-          -- Expected: 0 rows (RLS blocks when app.tenant_id is unset)
           SELECT count(*) AS audit_log_count_no_tenant FROM audit_log;
 
           -- pgvector extension installed?
           SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';
+
+          -- audit_log policies: should have SELECT + INSERT only (no UPDATE/DELETE)
+          SELECT policyname, cmd FROM pg_policies
+          WHERE tablename = 'audit_log' AND 'balance_app' = ANY(roles);
           SQL
 
       - name: Lint
@@ -129,10 +153,9 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test (unit + integration with RLS on real PG)
+      - name: Test (unit + integration with RLS + append-only on real PG)
         run: bun run test
         env:
-          # Integration tests read this to know they can connect.
           RUN_INTEGRATION_TESTS: "1"
 
       - name: Build (production)
