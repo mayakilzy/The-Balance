@@ -329,7 +329,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS "decision_event_tenant_check" ON "decision_events";
-CREATE TRIGGER IF NOT EXISTS "decision_event_tenant_check"
+CREATE TRIGGER "decision_event_tenant_check"
     BEFORE INSERT OR UPDATE OF "decisionId", "tenantId" ON "decision_events"
     FOR EACH ROW EXECUTE FUNCTION enforce_decision_event_same_tenant();
 
