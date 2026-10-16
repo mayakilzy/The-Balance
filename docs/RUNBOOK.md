@@ -104,8 +104,10 @@ This creates the Demolandia fictional fixture:
 - 2 tenants (DML-MOP-TENANT, DML-CB-TENANT)
 - 4 users (admin, analyst, suspended, revoked — all @demolandia.test)
 - 4 role references (admin, analyst, reviewer, observer)
-- State hierarchy (nation → provinces → districts)
-- Institutions, sources, and test capabilities
+- 3 state hierarchy nodes (nation + 2 provinces)
+- 2 institutions
+- 3 sources (World Bank, IMF, UN Statistics)
+- Capabilities are NOT seeded here — they are registered by integration tests
 
 ### 1.7 Verify installation
 

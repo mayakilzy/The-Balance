@@ -118,10 +118,12 @@ if [ "$COUNTRY_COUNT" -lt 1 ]; then echo "FAIL: No countries seeded"; exit 1; fi
 if [ "$TENANT_COUNT" -lt 2 ]; then echo "FAIL: Expected >=2 tenants, got $TENANT_COUNT"; exit 1; fi
 if [ "$USER_COUNT" -lt 4 ]; then echo "FAIL: Expected >=4 users, got $USER_COUNT"; exit 1; fi
 if [ "$ROLE_COUNT" -lt 4 ]; then echo "FAIL: Expected >=4 roles, got $ROLE_COUNT"; exit 1; fi
-if [ "$HIERARCHY_COUNT" -lt 4 ]; then echo "FAIL: Expected >=4 hierarchy nodes, got $HIERARCHY_COUNT"; exit 1; fi
+if [ "$HIERARCHY_COUNT" -lt 3 ]; then echo "FAIL: Expected >=3 hierarchy nodes, got $HIERARCHY_COUNT"; exit 1; fi
 if [ "$INSTITUTION_COUNT" -lt 2 ]; then echo "FAIL: Expected >=2 institutions, got $INSTITUTION_COUNT"; exit 1; fi
-if [ "$SOURCE_COUNT" -lt 1 ]; then echo "FAIL: Expected >=1 sources, got $SOURCE_COUNT"; exit 1; fi
-if [ "$CAPABILITY_COUNT" -lt 2 ]; then echo "FAIL: Expected >=2 capabilities, got $CAPABILITY_COUNT"; exit 1; fi
+if [ "$SOURCE_COUNT" -lt 3 ]; then echo "FAIL: Expected >=3 sources, got $SOURCE_COUNT"; exit 1; fi
+# Capabilities are NOT seeded by seed-ontology.ts — they are registered by
+# the capability integration tests. On a truly fresh install, expect 0.
+if [ "$CAPABILITY_COUNT" -ne 0 ]; then echo "NOTE: Expected 0 capabilities on fresh install, got $CAPABILITY_COUNT (tests may have run)"; fi
 echo "  All seed counts within expected range."
 
 # ------------------------------------------------------------
