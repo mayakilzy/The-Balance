@@ -59,6 +59,11 @@ export async function disconnectBootstrap(): Promise<void> {
 
 // ============================================================
 // AUTH BOOTSTRAP QUERIES (read-only, via balance_auth)
+// ------------------------------------------------------------
+// Uses RAW SQL to select ONLY the columns granted to balance_auth.
+// Prisma's query builder requires table-level SELECT, but we revoked
+// that (founder directive: column-level only). Raw SQL respects the
+// column-level grant.
 // ============================================================
 
 export interface AuthUser {
@@ -71,21 +76,17 @@ export interface AuthUser {
 
 /**
  * Find a user by email for authentication.
- * Uses balance_auth (read-only, no BYPASSRLS but RLS-exempt for auth).
+ * Uses raw SQL to select only granted columns.
  */
 export async function findUserByEmail(email: string): Promise<AuthUser | null> {
   const client = getBootstrapClient();
-  const user = await client.user.findUnique({
-    where: { email: email.toLowerCase() },
-    select: {
-      id: true,
-      email: true,
-      name: true,
-      passwordHash: true,
-      status: true,
-    },
-  });
-  return user;
+  const rows = await client.$queryRaw<AuthUser[]>`
+    SELECT id, email, name, "passwordHash", status
+    FROM "users"
+    WHERE email = ${email.toLowerCase()}
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
 }
 
 export interface AuthMembership {
@@ -101,16 +102,14 @@ export async function loadFirstActiveMembership(
   userId: string
 ): Promise<AuthMembership | null> {
   const client = getBootstrapClient();
-  const membership = await client.membership.findFirst({
-    where: { userId, status: "active" },
-    orderBy: { createdAt: "asc" },
-    select: {
-      tenantId: true,
-      roleCode: true,
-      status: true,
-    },
-  });
-  return membership;
+  const rows = await client.$queryRaw<AuthMembership[]>`
+    SELECT "tenantId", "roleCode", status
+    FROM "memberships"
+    WHERE "userId" = ${userId} AND status = 'active'
+    ORDER BY "createdAt" ASC
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
 }
 
 /**
@@ -122,15 +121,13 @@ export async function loadMembershipForTenant(
   tenantId: string
 ): Promise<AuthMembership | null> {
   const client = getBootstrapClient();
-  const membership = await client.membership.findFirst({
-    where: { userId, tenantId, status: "active" },
-    select: {
-      tenantId: true,
-      roleCode: true,
-      status: true,
-    },
-  });
-  return membership;
+  const rows = await client.$queryRaw<AuthMembership[]>`
+    SELECT "tenantId", "roleCode", status
+    FROM "memberships"
+    WHERE "userId" = ${userId} AND "tenantId" = ${tenantId} AND status = 'active'
+    LIMIT 1
+  `;
+  return rows[0] ?? null;
 }
 
 /**
@@ -138,9 +135,8 @@ export async function loadMembershipForTenant(
  */
 export async function verifyUserActive(userId: string): Promise<boolean> {
   const client = getBootstrapClient();
-  const user = await client.user.findUnique({
-    where: { id: userId },
-    select: { status: true },
-  });
-  return user?.status === "active";
+  const rows = await client.$queryRaw<{ status: string }[]>`
+    SELECT status FROM "users" WHERE id = ${userId} LIMIT 1
+  `;
+  return rows[0]?.status === "active";
 }
