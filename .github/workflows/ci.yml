@@ -223,6 +223,7 @@ jobs:
           AUTH_TRUST_HOST: "true"
           LLM_PROVIDER: "stub"
           NODE_ENV: "development"
+          SHOW_DEMO_CREDENTIALS: "true"
 
       - name: Upload Playwright screenshots
         uses: actions/upload-artifact@v4

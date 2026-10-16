@@ -81,6 +81,8 @@ test.describe("Full Browser Journey", () => {
     await expect(detailPanel).toBeVisible({ timeout: 15_000 });
     await expect(detailPanel).toContainText("تفاصيل المهمة");
     await expect(detailPanel).toContainText("سجل الأحداث");
+    // Verify the detail panel shows the task goal we created
+    await expect(detailPanel).toContainText(taskGoal);
     await page.screenshot({ path: "test-results/screenshots/05-task-detail.png" });
 
     // Close detail

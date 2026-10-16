@@ -82,7 +82,7 @@ export default function LoginPage() {
           </button>
         </form>
 
-        {process.env.NODE_ENV === "development" && (
+        {process.env.SHOW_DEMO_CREDENTIALS === "true" && (
           <div className="mt-6 p-3 rounded-lg bg-amber-50 border border-amber-200 text-amber-700 text-xs">
             بيانات اختبار: admin@demolandia.test / test_admin_password_00_03
           </div>
