@@ -314,10 +314,12 @@ describeIntegration("Evidence Fabric", () => {
     });
 
     // Attempt: insert embedding with Tenant B's tenantId (via admin raw SQL)
+    // Use a 384-dim vector to match the column type
+    const fakeVector = "[" + Array(384).fill(0.1).join(",") + "]";
     await expect(
       adminClient.$executeRaw`
         INSERT INTO "evidence_embeddings" ("id", "evidenceId", "tenantId", "embedding", "model", "createdAt")
-        VALUES (gen_random_uuid()::text, ${result.evidenceId}, ${tenantBId}, '[0.1, 0.2]'::vector, 'test', NOW())
+        VALUES (gen_random_uuid()::text, ${result.evidenceId}, ${tenantBId}, ${fakeVector}::vector, 'test', NOW())
       `
     ).rejects.toThrow(/tenant mismatch|consistency/i);
   });
@@ -375,21 +377,25 @@ describeIntegration("Evidence Fabric", () => {
   // 12. OBSERVER cannot verify evidence (RBAC)
   // ============================================================
   it("observer role cannot verify evidence (requires evidence:verify)", async () => {
-    // Observer session
-    const observerSession = mockSession(adminUserId, tenantAId, "observer", ADMIN_EMAIL, "Test Admin");
+    // Use the analyst user (has analyst role, which lacks evidence:verify)
+    const analystUser = await adminClient.user.findUnique({ where: { email: "analyst@demolandia.test" } });
+    if (!analystUser) throw new Error("Analyst user not seeded");
+
+    // Analyst session (analyst role cannot verify)
+    const analystSession = mockSession(analystUser.id, tenantAId, "analyst", "analyst@demolandia.test", "Test Analyst");
 
     // Create evidence as admin first
     const adminSession = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
     const createResult = await createEvidence(adminSession, {
-      claim: "Evidence for observer verify test.",
+      claim: "Evidence for analyst verify test.",
     });
 
-    // Observer attempts to verify → should be rejected by requirePermissionWithCurrentRole
-    // (verifyEvidence itself doesn't check permission; the API route does.
-    // Here we test the permission check directly.)
+    // Analyst attempts to verify → should be rejected by requirePermissionWithCurrentRole
+    // The function fetches the CURRENT role from DB. Analyst's DB role is 'analyst'
+    // which doesn't have 'evidence:verify' permission.
     const { requirePermissionWithCurrentRole } = await import("@/lib/permissions");
     await expect(
-      requirePermissionWithCurrentRole(observerSession, "evidence:verify")
+      requirePermissionWithCurrentRole(analystSession, "evidence:verify")
     ).rejects.toThrow(/Permission denied/);
   });
 
