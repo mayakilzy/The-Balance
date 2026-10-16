@@ -80,19 +80,24 @@ jobs:
           DO $$
           BEGIN
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_admin') THEN
-              CREATE ROLE balance_admin WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE REPLICATION BYPASSRLS PASSWORD 'balance_admin_dev_only';
+              -- CI-only: balance_admin is SUPERUSER so it can CREATE EXTENSION (pgvector).
+              -- In production, balance_admin would be NOSUPERUSER with BYPASSRLS,
+              -- and extensions would be installed by a DBA before migrations run.
+              -- See ADR-0005 for the production role design.
+              CREATE ROLE balance_admin WITH LOGIN SUPERUSER NOCREATEDB NOCREATEROLE REPLICATION BYPASSRLS PASSWORD 'balance_admin_dev_only';
             END IF;
             IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_app') THEN
               CREATE ROLE balance_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'balance_app_dev_only';
             END IF;
           END $$;
           -- PostgreSQL 15+ requires explicit CREATE grant on schema public.
-          -- balance_admin needs CREATE to run migrations (CREATE TABLE, CREATE INDEX, etc.).
           GRANT ALL ON SCHEMA public TO balance_admin;
           GRANT USAGE ON SCHEMA public TO balance_app;
+          -- Pre-create pgvector extension (so migration 0001's CREATE EXTENSION is a no-op).
+          CREATE EXTENSION IF NOT EXISTS "vector";
           SQL
 
-          # Now run migrations as balance_admin
+          # Now run migrations as balance_admin (CI: SUPERUSER; prod: NOSUPERUSER with pre-installed extensions)
           bunx prisma migrate deploy
 
       - name: Seed ontology (as balance_admin via DIRECT_URL)

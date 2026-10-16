@@ -19,4 +19,6 @@ BEGIN
 END $$;
 
 -- Grant schema usage (tables are created + granted by migrations)
-GRANT USAGE ON SCHEMA public TO balance_app, balance_admin;
+-- PostgreSQL 15+ requires explicit CREATE grant on schema public.
+GRANT ALL ON SCHEMA public TO balance_admin;
+GRANT USAGE ON SCHEMA public TO balance_app;
