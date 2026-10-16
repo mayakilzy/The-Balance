@@ -1,45 +1,147 @@
 // The Balance — Prisma Schema
-// GROUP 00 Foundation (00-01): minimal models for platform skeleton.
-// Subsequent missions add: User (00-03), Evidence+Source (00-04),
-// Strategy+Event (00-05), Task (00-06), Capability (00-07).
+// GROUP 00 Foundation
+// 00-01: Tenant + AuditLog (initial)
+// 00-02: Country + StateHierarchy + Institution + RoleReference + SourceRegistry + PublicKnowledge
+// Future: User (00-03), Evidence+Source (00-04), Strategy+Event (00-05), Task (00-06), Capability (00-07).
 
 generator client {
   provider = "prisma-client-js"
-  // Enable unsafe checks later. For 00-01 we keep the default preview features off.
 }
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
-  // pgvector extension is declared in the first migration; Prisma reads
-  // the schema, but RLS policies + extensions are managed via raw SQL
+  // pgvector extension + RLS policies + roles are managed via raw SQL
   // migrations (see prisma/migrations/).
 }
 
 // ============================================================
-// Tenant — the isolation root. Every row in every tenant-scoped table
-// carries tenantId. PostgreSQL Row-Level Security (RLS) enforces that
-// a session scoped to tenantId=A can never see tenantId=B's rows.
-// See ADR-0003 for the full RLS policy plan.
+// PUBLIC SCOPE — Global reference data, no tenant_id
 // ============================================================
-model Tenant {
+
+model Country {
   id          String   @id @default(cuid())
-  code        String   @unique // e.g. "SY" for Syria, "JO" for Jordan
+  iso3        String   @unique // "SYR", "JOR" — ISO 3166-1 alpha-3
+  iso2        String?  @unique // "SY", "JO" — ISO 3166-1 alpha-2
   displayName String
-  // Status lifecycle: active | suspended | archived
-  status      String   @default("active")
+  status      String   @default("active") // active | suspended | archived
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  @@map("tenants")
+  tenants        Tenant[]
+  stateHierarchy StateHierarchy[]
+  institutions   Institution[]
+
+  @@map("countries")
   @@index([status])
 }
 
+model StateHierarchy {
+  id          String   @id @default(cuid())
+  countryId   String
+  parentId    String? // self-reference for nesting
+  code        String // "SY-DAM" for Damascus province
+  displayName String
+  // Level: "nation" | "province" | "district" | "municipality" | "neighborhood"
+  level       String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  country  Country          @relation(fields: [countryId], references: [id])
+  parent   StateHierarchy?  @relation("StateHierarchyTree", fields: [parentId], references: [id])
+  children StateHierarchy[] @relation("StateHierarchyTree")
+
+  @@unique([countryId, code])
+  @@index([countryId, level])
+  @@map("state_hierarchy")
+}
+
+model Institution {
+  id          String   @id @default(cuid())
+  countryId   String
+  parentId    String? // self-reference for nesting
+  code        String
+  displayName String
+  // Type: "ministry" | "agency" | "authority" | "directorate" | "council"
+  type        String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  country  Country      @relation(fields: [countryId], references: [id])
+  parent   Institution? @relation("InstitutionTree", fields: [parentId], references: [id])
+  children Institution[] @relation("InstitutionTree")
+
+  @@unique([countryId, code])
+  @@map("institutions")
+}
+
+model RoleReference {
+  id          String   @id @default(cuid())
+  code        String   @unique // "admin", "analyst", "reviewer", "observer"
+  displayName String
+  description String
+  // Catalog of permissions for this role (JSON Schema-like).
+  permissions Json  @default("{}")
+  createdAt   DateTime @default(now())
+
+  @@map("role_references")
+}
+
+model SourceRegistry {
+  id          String   @id @default(cuid())
+  code        String   @unique // "WORLD_BANK", "IMF", "UN_STATS"
+  displayName String
+  // Type: "international_org" | "academic" | "government" | "media" | "ngo"
+  type        String
+  license     String?
+  url         String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  publicKnowledge PublicKnowledge[]
+
+  @@map("source_registry")
+  @@index([type])
+}
+
+model PublicKnowledge {
+  id          String   @id @default(cuid())
+  sourceId    String? // optional FK to SourceRegistry
+  title       String
+  content     String
+  metadata    Json  @default("{}")
+  publishedAt DateTime?
+  createdAt   DateTime @default(now())
+
+  source SourceRegistry? @relation(fields: [sourceId], references: [id])
+
+  @@index([title])
+  @@index([publishedAt])
+  @@map("public_knowledge")
+}
+
 // ============================================================
-// AuditLog — append-only event log. Every privileged action writes here.
-// RLS will be configured so even admins cannot DELETE or UPDATE rows.
+// PRIVATE SCOPE — Tenant-specific data (RLS-enforced)
 // ============================================================
+
+model Tenant {
+  id          String   @id @default(cuid())
+  code        String   @unique // "SY-MIN-PLAN", "SY-CB" — independent of Country.iso3
+  displayName String
+  countryId   String
+  status      String   @default("active") // active | suspended | archived
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  country    Country    @relation(fields: [countryId], references: [id])
+  auditLogs  AuditLog[]
+
+  @@map("tenants")
+  @@index([status])
+  @@index([countryId])
+}
+
 model AuditLog {
   id          BigInt   @id @default(autoincrement())
   at          DateTime @default(now())
@@ -51,19 +153,20 @@ model AuditLog {
   // Where: request context
   route       String?
   method      String?
-  ipHash      String?  // hashed, never raw
+  ipHash      String? // hashed, never raw
   // Payload: structured details (JSONB). Secrets are stripped before insert.
   details     Json     @default("{}")
   // Outcome
   status      String   @default("ok") // ok | error | denied
   errorCode   String?
 
+  tenant Tenant? @relation(fields: [tenantId], references: [id], onDelete: SetNull)
+
   @@map("audit_log")
   @@index([tenantId, at])
   @@index([action, at])
 }
 
-// NOTE: pgvector extension is enabled via the first SQL migration:
-//   CREATE EXTENSION IF NOT EXISTS vector;
+// NOTE: pgvector extension is enabled via the first SQL migration.
 // Vector columns will be added in mission 00-04 (Evidence) on the
 // `evidence_embeddings` table, not on a Prisma model directly.

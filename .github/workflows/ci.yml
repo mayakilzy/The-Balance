@@ -11,28 +11,30 @@ permissions:
 
 jobs:
   lint-typecheck-test:
-    name: Lint + Typecheck + Test + Integration
+    name: Lint + Typecheck + Test + Integration (RLS)
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
-          POSTGRES_USER: balance
-          POSTGRES_PASSWORD: balance
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
           POSTGRES_DB: balance
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U balance"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
 
     env:
-      DATABASE_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
-      DIRECT_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
+      # balance_app role — RLS-enforced — used by app + tests
+      DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
+      # balance_admin role — BYPASSRLS — used by migrations + seed only
+      DIRECT_URL: "postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
       AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
       AUTH_TRUST_HOST: "true"
       LLM_PROVIDER: "stub"
@@ -56,7 +58,7 @@ jobs:
       - name: Wait for Postgres
         run: |
           for i in $(seq 1 30); do
-            if pg_isready -h localhost -p 5432 -U balance > /dev/null 2>&1; then
+            if pg_isready -h localhost -p 5432 -U postgres > /dev/null 2>&1; then
               echo "Postgres is ready"
               exit 0
             fi
@@ -66,25 +68,51 @@ jobs:
           echo "Postgres did not become ready in time"
           exit 1
 
-      - name: Run migrations
+      - name: Run migrations (as balance_admin via DIRECT_URL)
         # NO `|| echo` — migration failure MUST fail CI.
-        run: bunx prisma migrate deploy
-
-      - name: Verify DB connection + schema applied
+        # Migrations create the roles + RLS policies.
+        env:
+          PGPASSWORD: postgres
         run: |
-          # Smoke-test: confirm the schema is actually applied.
-          # Use psql directly (available on ubuntu-latest runners) for clarity.
-          # --url alone is what prisma db execute accepts; we drop --schema.
-          cat > /tmp/verify.sql <<'SQL'
-          -- Tables exist?
-          SELECT 'tenants' AS table_name, count(*) AS row_count FROM tenants
-          UNION ALL
-          SELECT 'audit_log', count(*) FROM audit_log;
+          # First, create the roles BEFORE running migrations, because
+          # migration 0002 references them. Connect as postgres superuser.
+          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 <<'SQL'
+          DO $$
+          BEGIN
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_admin') THEN
+              CREATE ROLE balance_admin WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE REPLICATION BYPASSRLS PASSWORD 'balance_admin_dev_only';
+            END IF;
+            IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'balance_app') THEN
+              CREATE ROLE balance_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'balance_app_dev_only';
+            END IF;
+          END $$;
+          SQL
+
+          # Now run migrations as balance_admin
+          bunx prisma migrate deploy
+
+      - name: Seed ontology (as balance_admin via DIRECT_URL)
+        # Seeds Demolandia fictional country + 2 tenants + state + institutions.
+        run: bun run db:seed
+
+      - name: Verify DB connection + schema + RLS
+        env:
+          PGPASSWORD: balance_app_dev_only
+        run: |
+          # Connect as balance_app (NOT admin) to verify RLS-enforced access works.
+          psql -h localhost -U balance_app -d balance -v ON_ERROR_STOP=1 <<'SQL'
+          -- PUBLIC tables readable?
+          SELECT count(*) AS countries_count FROM countries;
+          SELECT count(*) AS public_knowledge_count FROM public_knowledge;
+          SELECT count(*) AS role_refs_count FROM role_references;
+
+          -- PRIVATE table (audit_log) — fail-closed with no tenant context?
+          -- Expected: 0 rows (RLS blocks when app.tenant_id is unset)
+          SELECT count(*) AS audit_log_count_no_tenant FROM audit_log;
+
           -- pgvector extension installed?
           SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';
           SQL
-          # prisma db execute with --url only (not --schema).
-          bunx prisma db execute --url "$DATABASE_URL" --file /tmp/verify.sql
 
       - name: Lint
         run: bun run lint
@@ -92,7 +120,7 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
-      - name: Test (unit + integration)
+      - name: Test (unit + integration with RLS on real PG)
         run: bun run test
         env:
           # Integration tests read this to know they can connect.
@@ -101,7 +129,6 @@ jobs:
       - name: Build (production)
         run: bun run build
         env:
-          # Build-time env: Next.js reads some vars at build time.
-          DATABASE_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
+          DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
           AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
           LLM_PROVIDER: "stub"

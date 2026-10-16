@@ -22,6 +22,13 @@ const config = [
       "no-console": ["warn", { allow: ["warn", "error"] }],
     },
   },
+  {
+    // Seed scripts are CLI tools — console.log is the intended output.
+    files: ["prisma/seed-*.ts", "scripts/**/*.ts"],
+    rules: {
+      "no-console": "off",
+    },
+  },
 ];
 
 export default config;

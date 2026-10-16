@@ -14,6 +14,8 @@
     "db:generate": "prisma generate",
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
+    "db:deploy": "prisma migrate deploy",
+    "db:seed": "bunx tsx prisma/seed-ontology.ts",
     "db:studio": "prisma studio",
     "ci": "bun run lint && bun run typecheck && bun run test"
   },
@@ -41,6 +43,7 @@
     "postcss": "^8.4.49",
     "prisma": "^6.11.1",
     "tailwindcss": "^4.0.0",
+    "tsx": "^4.23.15",
     "typescript": "^5.7.2",
     "vitest": "^2.1.5"
   },
