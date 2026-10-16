@@ -22,6 +22,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "evidence:write",
     "strategy:read",
     "strategy:write",
+    "strategy:approve",
     "user:read",
     "user:write",
     "membership:read",
