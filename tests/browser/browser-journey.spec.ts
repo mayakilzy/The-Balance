@@ -55,12 +55,13 @@ test.describe("Full Browser Journey", () => {
     await page.click('[data-testid="task-create-button"]');
 
     // Step 6: See the task in the list
-    await page.waitForSelector(`text=${taskGoal}`, { timeout: 10_000 });
-    await expect(page.locator("body")).toContainText(taskGoal);
+    await page.waitForSelector('[data-testid^="task-card-"]', { timeout: 10_000 });
+    const taskCards = page.locator('[data-testid^="task-card-"]');
+    const taskCard = taskCards.filter({ hasText: taskGoal }).first();
+    await expect(taskCard).toBeVisible({ timeout: 10_000 });
     await page.screenshot({ path: "test-results/screenshots/04-task-created.png" });
 
     // Step 7: Open task detail
-    const taskCard = page.locator(`text=${taskGoal}`).locator("..").locator("..");
     await taskCard.click();
 
     // Wait for detail panel
