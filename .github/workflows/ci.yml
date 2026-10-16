@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   lint-typecheck-test:
-    name: Lint + Typecheck + Test
+    name: Lint + Typecheck + Test + Integration
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -33,7 +33,7 @@ jobs:
     env:
       DATABASE_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
       DIRECT_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
-      AUTH_SECRET: "ci_only_secret_not_for_production"
+      AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
       AUTH_TRUST_HOST: "true"
       LLM_PROVIDER: "stub"
       LOG_LEVEL: "warn"
@@ -42,26 +42,64 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: "22"
-          cache: "npm"
+          bun-version: "1.3.14"
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       - name: Generate Prisma client
-        run: npx prisma generate
+        run: bunx prisma generate
+
+      - name: Wait for Postgres
+        run: |
+          for i in $(seq 1 30); do
+            if pg_isready -h localhost -p 5432 -U balance > /dev/null 2>&1; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            echo "Waiting for Postgres... ($i/30)"
+            sleep 2
+          done
+          echo "Postgres did not become ready in time"
+          exit 1
 
       - name: Run migrations
-        run: npx prisma migrate deploy || echo "No migrations yet — skipping (00-01 skeleton)"
+        # NO `|| echo` — migration failure MUST fail CI.
+        run: bunx prisma migrate deploy
+
+      - name: Verify DB connection + schema applied
+        run: |
+          # Smoke-test: confirm the schema is actually applied.
+          # Write SQL to a temp file to avoid heredoc quoting issues.
+          cat > /tmp/verify.sql <<'SQL'
+          -- Tables exist?
+          SELECT 'tenants' AS table_name, count(*) AS row_count FROM tenants
+          UNION ALL
+          SELECT 'audit_log', count(*) FROM audit_log;
+          -- pgvector extension installed?
+          SELECT extname, extversion FROM pg_extension WHERE extname = 'vector';
+          SQL
+          bunx prisma db execute --schema prisma/schema.prisma --url "$DATABASE_URL" --file /tmp/verify.sql
 
       - name: Lint
-        run: npm run lint
+        run: bun run lint
 
       - name: Typecheck
-        run: npm run typecheck
+        run: bun run typecheck
 
-      - name: Test
-        run: npm run test
+      - name: Test (unit + integration)
+        run: bun run test
+        env:
+          # Integration tests read this to know they can connect.
+          RUN_INTEGRATION_TESTS: "1"
+
+      - name: Build (production)
+        run: bun run build
+        env:
+          # Build-time env: Next.js reads some vars at build time.
+          DATABASE_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
+          AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
+          LLM_PROVIDER: "stub"

@@ -4,8 +4,13 @@ import path from "node:path";
 export default defineConfig({
   test: {
     environment: "node",
-    include: ["tests/**/*.test.ts"],
+    include: [
+      "tests/unit/**/*.test.ts",
+      "tests/integration/**/*.test.ts",
+    ],
     exclude: ["node_modules", ".next"],
+    // Integration tests are slower (real DB round-trips) — give them more time.
+    testTimeout: 15_000,
     coverage: {
       provider: "v8",
       reporter: ["text", "json-summary"],

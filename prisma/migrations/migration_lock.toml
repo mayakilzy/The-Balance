@@ -1,0 +1,3 @@
+# Prisma migration lock file — do not edit.
+# Ensures the migration history is consistent across environments.
+provider = "postgresql"
