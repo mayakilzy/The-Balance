@@ -190,11 +190,15 @@ echo "NOT_A_VALID_PG_DUMP_FILE_THIS_IS_CORRUPT_DATA_FOR_TESTING" > "$CORRUPT_FIL
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";" >/dev/null
 
-# Attempt to restore the corrupt file — pg_restore MUST exit non-zero
+# Attempt to restore the corrupt file — pg_restore MUST exit non-zero.
+# We temporarily disable `set -e` so the expected failure doesn't kill
+# the script. The exit code is captured explicitly and asserted below.
+set +e
 pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
   --no-owner \
   "$CORRUPT_FILE" >/dev/null 2>&1
 CORRUPT_EXIT=$?
+set -e
 
 if [ "$CORRUPT_EXIT" -eq 0 ]; then
   echo "FAIL: pg_restore accepted a corrupted backup (exit code 0) — should have failed!"
