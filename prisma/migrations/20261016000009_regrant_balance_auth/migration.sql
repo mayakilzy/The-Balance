@@ -7,7 +7,8 @@
 GRANT SELECT (id, email, name, "passwordHash", status) ON "users" TO balance_auth;
 
 -- Re-grant column-level SELECT on memberships
-GRANT SELECT ("userId", "tenantId", "roleCode", status) ON "memberships" TO balance_auth;
+-- Includes "createdAt" for ORDER BY in loadFirstActiveMembership
+GRANT SELECT ("userId", "tenantId", "roleCode", status, "createdAt") ON "memberships" TO balance_auth;
 
 -- Re-grant column-level SELECT on tenants
 GRANT SELECT (id) ON "tenants" TO balance_auth;
