@@ -462,4 +462,79 @@ describeIntegration("Strategy Contracts — Full Workflow", () => {
     await adminClient.strategyVersion.delete({ where: { id: tenantBVersion.id } });
     await adminClient.strategy.delete({ where: { id: tenantBStrategy.id } });
   });
+
+  // ============================================================
+  // 18. SUPERSESSION CYCLE — approve v1, create v2, approve v2, v1 superseded
+  // ------------------------------------------------------------
+  // Founder directive (00-05 final supersession check):
+  // Prove that approving a new version supersedes the previous approved
+  // version WITHOUT modifying its content or approval records.
+  // Also verify Prisma's auto-update of `updatedAt` doesn't trigger
+  // the immutability protection.
+  // ============================================================
+  it("supersession cycle: approve v1 → create v2 → approve v2 → v1 superseded", async () => {
+    const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
+
+    // 1. Create strategy + v1
+    const createResult = await createStrategy(session, {
+      title: "Supersession Test Strategy",
+      description: "Testing approved version supersession",
+      initialContent: "V1 content — original approved version.",
+    });
+
+    // 2. Approve v1
+    const approveV1 = await approveStrategyVersion(session, createResult.versionId, "V1 approved.");
+    expect(approveV1.status).toBe("approved");
+
+    // Capture v1 state BEFORE supersession
+    const v1Before = await adminClient.strategyVersion.findUnique({
+      where: { id: createResult.versionId },
+    });
+    expect(v1Before?.status).toBe("approved");
+    expect(v1Before?.content).toBe("V1 content — original approved version.");
+    expect(v1Before?.approvedBy).toBe(adminUserId);
+    expect(v1Before?.approvedAt).toBeTruthy();
+    const v1ApprovedAt = v1Before?.approvedAt!;
+    const v1ApprovalNotes = v1Before?.approvalNotes;
+
+    // 3. Create v2
+    const v2Result = await createStrategyVersion(session, createResult.strategyId, {
+      content: "V2 content — revised version.",
+    });
+
+    // 4. Approve v2 — this should supersede v1
+    const approveV2 = await approveStrategyVersion(session, v2Result.versionId, "V2 approved, supersedes V1.");
+    expect(approveV2.status).toBe("approved");
+
+    // 5. Verify v1 is now 'superseded'
+    const v1After = await adminClient.strategyVersion.findUnique({
+      where: { id: createResult.versionId },
+    });
+    expect(v1After?.status).toBe("superseded");
+
+    // 6. Verify v1 content + approval records are UNCHANGED
+    expect(v1After?.content).toBe("V1 content — original approved version.");
+    expect(v1After?.approvedBy).toBe(adminUserId);
+    expect(v1After?.approvedAt).toEqual(v1ApprovedAt); // Exact same timestamp
+    expect(v1After?.approvalNotes).toBe(v1ApprovalNotes); // Unchanged
+
+    // 7. Verify v2 is 'approved'
+    const v2After = await adminClient.strategyVersion.findUnique({
+      where: { id: v2Result.versionId },
+    });
+    expect(v2After?.status).toBe("approved");
+    expect(v2After?.content).toBe("V2 content — revised version.");
+
+    // 8. Verify event was recorded for v2 approval
+    const events = await adminClient.event.findMany({
+      where: {
+        tenantId: tenantAId,
+        entityType: "strategy_version",
+        entityId: v2Result.versionId,
+      },
+      orderBy: { at: "asc" },
+    });
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.some((e) => e.eventType === "strategy.version_approved")).toBe(true);
+  });
 });
