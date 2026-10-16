@@ -157,11 +157,102 @@ export function getSafeErrorResponse(err: unknown): SanitizedError {
 }
 
 // ============================================================
+// LOG SANITIZER — strips secrets from free-text before pino logging
+// ------------------------------------------------------------
+// Unlike sanitizeError() (for HTTP responses) which aggressively
+// strips file paths, SQL, and stack traces, sanitizeForLog()
+// preserves diagnostic info (file paths, SQL fragments, error
+// messages) and strips ONLY secrets: passwords in URLs, Bearer
+// tokens, API keys, JWTs, Basic auth headers, password assignments.
+//
+// This is the defense-in-depth layer: even if an exception message
+// contains a connection string with a password, the pino log entry
+// will not persist it to disk/stdout.
+// ============================================================
+
+interface SecretPattern {
+  pattern: RegExp;
+  replacement: string;
+}
+
+const SECRET_PATTERNS: SecretPattern[] = [
+  // 1. Database / generic URL credentials: scheme://user:password@host
+  //    → scheme://***@host  (host preserved for diagnosis)
+  {
+    pattern: /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^\s:@/]*(?::[^\s@/]*)?@/g,
+    replacement: "$1***@",
+  },
+  // 2. Bearer tokens: "Bearer eyJ..." → "Bearer [REDACTED]"
+  {
+    pattern: /(Bearer\s+)[A-Za-z0-9\-._~+/=]+/g,
+    replacement: "$1[REDACTED]",
+  },
+  // 3. Basic auth header: "Basic dXNlcjpwYXNz" → "Basic [REDACTED]"
+  {
+    pattern: /(Basic\s+)[A-Za-z0-9+/=]+/g,
+    replacement: "$1[REDACTED]",
+  },
+  // 4. JWT tokens (three base64 segments): eyJ....eyJ....signature
+  {
+    pattern: /eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*/g,
+    replacement: "[JWT_REDACTED]",
+  },
+  // 5. Password assignments: password=..., passwd=..., pwd=..., pass=...
+  //    (in query strings, connection params, or config objects)
+  //    Excludes [ so it won't eat into [REDACTED] placeholders from earlier patterns
+  {
+    pattern: /(\b(?:password|passwd|pwd|pass)\b\s*[=:]\s*)[^\s;&,"'\]}\[]+/gi,
+    replacement: "$1[REDACTED]",
+  },
+  // 6. API key assignments: api_key=..., apikey=..., api-key=..., x-api-key: ...
+  {
+    pattern: /(\b(?:api[_-]?key|x-api-key)\b\s*[=:]\s*)[^\s;&,"'\]}\[]+/gi,
+    replacement: "$1[REDACTED]",
+  },
+  // 7. Token assignments: access_token=..., auth_token=..., token=..., secret=...
+  {
+    pattern: /(\b(?:access[_-]?token|auth[_-]?token|token|secret|private[_-]?key)\b\s*[=:]\s*)[^\s;&,"'\]}\[]+/gi,
+    replacement: "$1[REDACTED]",
+  },
+  // 8. AWS access key IDs: AKIA followed by 16 uppercase alphanumerics
+  {
+    pattern: /AKIA[0-9A-Z]{16}/g,
+    replacement: "AKIA[REDACTED]",
+  },
+  // 9. Authorization header values (catch-all for non-Bearer/non-Basic)
+  //    Negative lookahead prevents eating "Basic"/"Bearer" (handled by #2/#3)
+  {
+    pattern: /(authorization\s*[:=]\s*)(?!basic\s|bearer\s)[^\s;,"'}\]\[]+/gi,
+    replacement: "$1[REDACTED]",
+  },
+];
+
+/**
+ * Sanitize free-text for server-side logging.
+ * Strips secrets (passwords, tokens, API keys, connection strings)
+ * while preserving diagnostic info (file paths, SQL, error messages).
+ *
+ * @param text  The raw string (error message, stack trace, etc.)
+ * @returns     Sanitized string safe for pino logging
+ */
+export function sanitizeForLog(text: string): string {
+  if (!text) return text;
+  let result = text;
+  for (const { pattern, replacement } of SECRET_PATTERNS) {
+    result = result.replace(pattern, replacement);
+  }
+  return result;
+}
+
+// ============================================================
 // STRUCTURED API ERROR HANDLER
 // ------------------------------------------------------------
 // Single entry point used by API route catch blocks.
 // Returns the JSON body + HTTP status the route should send.
-// Logs the full original error to pino for server-side triage.
+// Logs the SANITIZED error to pino for server-side triage —
+// secrets (passwords, tokens, API keys) are stripped BEFORE
+// reaching the logger. Diagnostic info (file paths, SQL
+// fragments, Prisma codes, error classification) is preserved.
 // ============================================================
 
 export interface ApiErrorResponse {
@@ -195,8 +286,10 @@ function operationalStatus(err: unknown): number {
  *
  * For operational errors: returns the safe message + mapped status.
  * For unexpected errors: returns a generic "Internal server error"
- * with status 500, and logs the full original to pino. The response
- * body contains NO `detail` field — there is no leak path.
+ * with status 500, and logs the SANITIZED error to pino. The response
+ * body contains NO `detail` field — there is no leak path. The pino
+ * log entry has secrets stripped (passwords, tokens, API keys) while
+ * preserving diagnostic info (file paths, Prisma codes, error name).
  *
  * @param err     The thrown error
  * @param route   Route path (for log correlation), e.g. "/api/v1/tasks"
@@ -221,10 +314,11 @@ export function buildApiErrorResponse(
     };
   }
 
-  // Unexpected error → log full detail server-side, return generic to client
+  // Unexpected error → log SANITIZED detail server-side, return generic to client
   const errName = err instanceof Error ? err.name : typeof err;
-  const errMsg = err instanceof Error ? err.message : String(err);
-  const errStack = err instanceof Error ? err.stack : undefined;
+  const rawMsg = err instanceof Error ? err.message : String(err);
+  const errMsg = sanitizeForLog(rawMsg);
+  const errStack = err instanceof Error && err.stack ? sanitizeForLog(err.stack) : undefined;
 
   log.error(
     {
@@ -234,7 +328,7 @@ export function buildApiErrorResponse(
       errName,
       errMsg,
       errStack,
-      // Prisma-specific metadata if present
+      // Prisma-specific metadata if present (P-codes are safe to log)
       prismaCode:
         err && typeof err === "object" && "code" in err
           ? String((err as { code: unknown }).code)
