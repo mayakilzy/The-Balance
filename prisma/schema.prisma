@@ -1,0 +1,69 @@
+// The Balance — Prisma Schema
+// GROUP 00 Foundation (00-01): minimal models for platform skeleton.
+// Subsequent missions add: User (00-03), Evidence+Source (00-04),
+// Strategy+Event (00-05), Task (00-06), Capability (00-07).
+
+generator client {
+  provider = "prisma-client-js"
+  // Enable unsafe checks later. For 00-01 we keep the default preview features off.
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+  // pgvector extension is declared in the first migration; Prisma reads
+  // the schema, but RLS policies + extensions are managed via raw SQL
+  // migrations (see prisma/migrations/).
+}
+
+// ============================================================
+// Tenant — the isolation root. Every row in every tenant-scoped table
+// carries tenantId. PostgreSQL Row-Level Security (RLS) enforces that
+// a session scoped to tenantId=A can never see tenantId=B's rows.
+// See ADR-0003 for the full RLS policy plan.
+// ============================================================
+model Tenant {
+  id          String   @id @default(cuid())
+  code        String   @unique // e.g. "SY" for Syria, "JO" for Jordan
+  displayName String
+  // Status lifecycle: active | suspended | archived
+  status      String   @default("active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("tenants")
+  @@index([status])
+}
+
+// ============================================================
+// AuditLog — append-only event log. Every privileged action writes here.
+// RLS will be configured so even admins cannot DELETE or UPDATE rows.
+// ============================================================
+model AuditLog {
+  id          BigInt   @id @default(autoincrement())
+  at          DateTime @default(now())
+  // Who: tenant + actor (user id or "system")
+  tenantId    String?
+  actor       String   @default("system")
+  // What: action verb (e.g., "tenant.create", "auth.login", "evidence.read")
+  action      String
+  // Where: request context
+  route       String?
+  method      String?
+  ipHash      String?  // hashed, never raw
+  // Payload: structured details (JSONB). Secrets are stripped before insert.
+  details     Json     @default("{}")
+  // Outcome
+  status      String   @default("ok") // ok | error | denied
+  errorCode   String?
+
+  @@map("audit_log")
+  @@index([tenantId, at])
+  @@index([action, at])
+}
+
+// NOTE: pgvector extension is enabled via the first SQL migration:
+//   CREATE EXTENSION IF NOT EXISTS vector;
+// Vector columns will be added in mission 00-04 (Evidence) on the
+// `evidence_embeddings` table, not on a Prisma model directly.

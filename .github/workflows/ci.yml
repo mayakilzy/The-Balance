@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, g00/*]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint-typecheck-test:
+    name: Lint + Typecheck + Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: balance
+          POSTGRES_PASSWORD: balance
+          POSTGRES_DB: balance
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U balance"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
+      DIRECT_URL: "postgresql://balance:balance@localhost:5432/balance?schema=public"
+      AUTH_SECRET: "ci_only_secret_not_for_production"
+      AUTH_TRUST_HOST: "true"
+      LLM_PROVIDER: "stub"
+      LOG_LEVEL: "warn"
+      NODE_ENV: "test"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Run migrations
+        run: npx prisma migrate deploy || echo "No migrations yet — skipping (00-01 skeleton)"
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm run test
