@@ -86,6 +86,10 @@ jobs:
               CREATE ROLE balance_app WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS PASSWORD 'balance_app_dev_only';
             END IF;
           END $$;
+          -- PostgreSQL 15+ requires explicit CREATE grant on schema public.
+          -- balance_admin needs CREATE to run migrations (CREATE TABLE, CREATE INDEX, etc.).
+          GRANT ALL ON SCHEMA public TO balance_admin;
+          GRANT USAGE ON SCHEMA public TO balance_app;
           SQL
 
           # Now run migrations as balance_admin
