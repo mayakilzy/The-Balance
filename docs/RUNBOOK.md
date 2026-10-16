@@ -208,16 +208,18 @@ If a task worker crashes mid-execution, the lease will expire and the task is au
 pg_dump -h <host> -p 5432 -U postgres -d balance \
   --format=custom \
   --no-owner \
-  --no-privileges \
   --file=balance-backup-$(date +%Y%m%d-%H%M%S).dump
 ```
+
+**Important:** Do NOT use `--no-privileges` — RLS policies are classified as privileges in PostgreSQL, and using this flag would strip them from the backup, making the restored database insecure.
 
 **What is included:**
 - All table data (PUBLIC + PRIVATE)
 - Schema definitions
-- RLS policies
+- RLS policies (ENABLE + FORCE ROW LEVEL SECURITY)
 - Triggers
 - Indexes
+- Column-level grants
 
 **What is NOT included (cluster-level, must be re-created):**
 - Database roles (balance_admin, balance_app, balance_auth)
@@ -240,7 +242,7 @@ psql -h <host> -U postgres -d postgres -c "CREATE DATABASE balance;"
 # 3. Restore from backup
 pg_restore -h <host> -U postgres -d balance \
   --no-owner \
-  --no-privileges \
+  --clean \
   --if-exists \
   balance-backup-YYYYMMDD-HHMMSS.dump
 

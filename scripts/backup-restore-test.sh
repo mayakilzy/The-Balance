@@ -54,10 +54,13 @@ echo "  Pre-backup counts: $PRE_COUNTS"
 # STEP 2: Take logical backup (pg_dump with custom format)
 # ------------------------------------------------------------
 echo "[2/6] Taking logical backup (pg_dump)..."
+# Note: we do NOT use --no-privileges because RLS policies are classified
+# as privileges in PostgreSQL — using --no-privileges would strip them
+# from the backup, making the restore insecure. We use --no-owner to
+# avoid ownership issues, but keep privileges (RLS policies, grants).
 pg_dump -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
   --format=custom \
   --no-owner \
-  --no-privileges \
   --file="$BACKUP_FILE"
 echo "  Backup saved to: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
 
@@ -73,9 +76,10 @@ echo "  Database dropped."
 # ------------------------------------------------------------
 echo "[4/6] Recreating database + restoring from backup..."
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";"
+# Note: --no-owner keeps ownership flexible, but we do NOT use
+# --no-privileges so RLS policies are restored.
 pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
   --no-owner \
-  --no-privileges \
   --clean \
   --if-exists \
   "$BACKUP_FILE" 2>&1 || true
