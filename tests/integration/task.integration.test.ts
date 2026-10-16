@@ -61,6 +61,14 @@ beforeAll(async () => {
   tenantAId = tenantA.id;
   tenantBId = tenantB.id;
   adminUserId = adminUser.id;
+
+  // Ensure admin has membership in Tenant B (for cross-tenant tests)
+  await adminClient.membership.upsert({
+    where: { userId_tenantId: { userId: adminUserId, tenantId: tenantBId } },
+    update: {},
+    create: { userId: adminUserId, tenantId: tenantBId, roleCode: "admin", status: "active" },
+  });
+
   await adminClient.taskEvent.deleteMany({});
   await adminClient.task.deleteMany({});
 });
@@ -69,6 +77,10 @@ afterAll(async () => {
   if (adminClient) {
     await adminClient.taskEvent.deleteMany({});
     await adminClient.task.deleteMany({});
+    // Clean up Tenant B membership (added in beforeAll)
+    await adminClient.membership.deleteMany({
+      where: { userId: adminUserId, tenantId: tenantBId },
+    }).catch(() => {});
     await adminClient.$disconnect();
   }
 });
@@ -258,11 +270,12 @@ describeIntegration("Durable Task Runtime", () => {
   it("Balance Master: executeNextTask completes a pending task", async () => {
     const session = mockSession(adminUserId, tenantAId, "admin", ADMIN_EMAIL, "Test Admin");
 
-    // Create a task
+    // Create a task with HIGH priority so it gets claimed first
     const createResult = await createTask(session, {
       type: "master-test",
       goal: "Analyze economic indicators for Q3 2025.",
       input: { quarter: "Q3", year: 2025 },
+      priority: 100, // High priority
     });
 
     // Execute via Balance Master
@@ -292,9 +305,11 @@ describeIntegration("Durable Task Runtime", () => {
     const createResult = await createTask(session, {
       type: "fail-test",
       goal: "This task will fail.",
+      priority: 100, // High priority
     });
 
     const claimed = await claimTask(session, "failing-worker", 60_000);
+    expect(claimed?.taskId).toBe(createResult.taskId);
     await startTask(session, claimed!.taskId, "failing-worker");
 
     await failTask(session, claimed!.taskId, "Simulated processing error.", "failing-worker");
