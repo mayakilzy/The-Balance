@@ -95,13 +95,18 @@ jobs:
         env:
           PGPASSWORD: postgres
         run: |
-          # CI-ONLY: grant SUPERUSER to balance_admin for CREATE EXTENSION + ALTER ROLE.
+          # Step 1: Create roles (balance_admin, balance_app, balance_auth)
+          bash scripts/run-setup-roles.sh
+
+          # Step 2: CI-ONLY — grant SUPERUSER to balance_admin for CREATE EXTENSION + ALTER ROLE.
           # In production, balance_admin is NOSUPERUSER and extensions are pre-installed.
           # This mirrors the main CI workflow's approach.
           psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 <<'SQL'
           ALTER ROLE balance_admin WITH SUPERUSER;
           SQL
 
+          # Step 3: Run fresh-install-verify.sh (skips its own setup-roles call
+          # since roles already exist — the script is idempotent)
           bash scripts/fresh-install-verify.sh
 
       # ============================================================
