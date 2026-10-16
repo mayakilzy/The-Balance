@@ -43,6 +43,16 @@ GRANT SELECT ("userId", "tenantId", "roleCode", status) ON "memberships" TO bala
 GRANT SELECT (id) ON "tenants" TO balance_auth;
 
 -- ============================================================
+-- 3.5 TABLE-LEVEL SELECT GRANT (required for column-level to work)
+-- ============================================================
+-- PostgreSQL: column-level grants REQUIRE a table-level grant first.
+-- GRANT SELECT (col) implies table-level SELECT, but Prisma's findFirst
+-- may query metadata. Grant SELECT on the table to be safe.
+GRANT SELECT ON "users" TO balance_auth;
+GRANT SELECT ON "memberships" TO balance_auth;
+GRANT SELECT ON "tenants" TO balance_auth;
+
+-- ============================================================
 -- 4. RLS EXEMPTION FOR balance_auth on users + memberships
 -- ============================================================
 -- balance_auth needs to read users + memberships WITHOUT app.user_id
