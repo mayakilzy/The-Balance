@@ -151,7 +151,7 @@ describeIntegration("Durable Task Runtime", () => {
     expect(claims.length).toBe(1);
     expect(claims[0]?.taskId).toBe(createResult.taskId);
 
-    await completeTask(session, createResult.taskId, {}, "worker-A", claims[0]!.claimGeneration);
+    await completeTask(session, createResult.taskId, {}, claims[0]!.claimedBy || "worker-A", claims[0]!.claimGeneration);
   });
 
   // ============================================================
