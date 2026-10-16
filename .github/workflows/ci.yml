@@ -170,21 +170,38 @@ jobs:
 
       - name: Start Next.js server for Playwright
         run: |
-          bun run start -- -p 3001 &
+          # Start production server on port 3001
+          bunx next start -p 3001 &
           SERVER_PID=$!
+          echo "Server PID: $SERVER_PID"
+          
           # Wait for server to be ready
-          for i in $(seq 1 30); do
-            if curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/v1/meta 2>/dev/null | grep -q "200"; then
-              echo "Server ready"
+          READY=0
+          for i in $(seq 1 60); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/v1/meta 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Server ready after ${i} attempts"
+              READY=1
               break
             fi
+            echo "Waiting... (attempt $i, HTTP $HTTP_CODE)"
             sleep 2
           done
+          
+          if [ "$READY" = "0" ]; then
+            echo "ERROR: Server did not start within 120 seconds"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+          
           # Run Playwright tests
-          bunx playwright test
+          bunx playwright test --reporter=list 2>&1
           PLAYWRIGHT_EXIT=$?
+          
           # Kill server
           kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+          
           exit $PLAYWRIGHT_EXIT
         env:
           DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
