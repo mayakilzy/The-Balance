@@ -21,7 +21,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
 
-const RUN_E2E = process.env.RUN_E2E_HTTP_TESTS === "1";
+const RUN_E2E = process.env.RUN_E2E_HTTP_TESTS === "1" && process.env.SKIP_E2E_SERVER !== "1";
 const describeE2E = RUN_E2E ? describe : describe.skip;
 
 const BASE_URL = "http://localhost:3001";

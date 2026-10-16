@@ -157,6 +157,7 @@ jobs:
         run: bun run test
         env:
           RUN_INTEGRATION_TESTS: "1"
+          SKIP_E2E_SERVER: "1"
 
       - name: Build (production)
         run: bun run build

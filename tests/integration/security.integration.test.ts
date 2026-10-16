@@ -149,12 +149,9 @@ describe("Sensitive Data Redaction", () => {
 
 describeIntegration("Security: API Access Control", () => {
   it("observer cannot access admin-only metrics endpoint", async () => {
-    // Use admin user but check against observer role via the permission catalog
-    // (the user's actual DB role is admin, so we test the permission map directly)
+    // Test the permission catalog directly (no DB role lookup needed)
     const { hasPermission } = await import("@/lib/permissions");
     const observerSession = mockSession(adminUserId, tenantAId, "observer", ADMIN_EMAIL, "Test");
-
-    // observer role should NOT have audit:read
     expect(hasPermission(observerSession as any, "audit:read")).toBe(false);
   });
 
