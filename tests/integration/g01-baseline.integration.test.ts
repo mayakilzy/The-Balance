@@ -160,14 +160,23 @@ describeIntegration("Baseline observability modes (FULL / PARTIAL / LOW)", () =>
 
     const { report } = await computeBaseline(session, { countryId });
 
-    // Education + health have no tagged evidence → NOT in dimensions
+    // FIX-1 (01-01-FIX): Education + health have no evidence but appear as LOW
+    // (they're in CountryPackConfig.sectors). They are NOT absent — they show "unknown".
     const education = report.dimensions.find((d) => d.sector === "education");
     const health = report.dimensions.find((d) => d.sector === "health");
-    expect(education).toBeUndefined();
-    expect(health).toBeUndefined();
+    expect(education).toBeTruthy();
+    expect(education!.observabilityMode).toBe("LOW");
+    expect(education!.indicators).toEqual([]);
+    expect(health).toBeTruthy();
+    expect(health!.observabilityMode).toBe("LOW");
+    expect(health!.indicators).toEqual([]);
 
-    // The sourceNote should mention that sectors without tagged evidence are excluded
-    expect(report.honesty.sourceNote).toContain("without tagged evidence");
+    // unknownSectors should include education + health
+    expect(report.summary.unknownSectors).toContain("education");
+    expect(report.summary.unknownSectors).toContain("health");
+
+    // The sourceNote should mention LOW/unknown sectors
+    expect(report.honesty.sourceNote).toContain("LOW");
   });
 
   it("Tenant B: finance = FULL (2 independent + verified) + counter-evidence shown", async () => {
