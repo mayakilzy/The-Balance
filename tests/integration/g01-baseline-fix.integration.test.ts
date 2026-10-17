@@ -654,22 +654,66 @@ describeIntegration("FIX-4: Durable Task Contract", () => {
 //   5. No change → same task (idempotent)
 //   6. Tenant isolation + Durable Task Runtime still work
 describeIntegration("Cache Validity Closure (fingerprint idempotency)", () => {
+  // Save the original seeded config so we can restore it in afterAll.
+  // The Cache Validity tests modify CountryPackConfig (setTestConfig), which would
+  // leak state to other test files (g01-state-builder, g01-baseline) that rely on
+  // the seeded config having gdpPerCapitaUSD + inflationTarget in planningAssumptions.
+  let originalConfigA: {
+    sectors: unknown;
+    observability: unknown;
+    planningAssumptions: unknown;
+    metadata: unknown;
+  } | null = null;
+
+  beforeAll(async () => {
+    const config = await adminClient.countryPackConfig.findUnique({
+      where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
+    });
+    if (config) {
+      originalConfigA = {
+        sectors: config.sectors,
+        observability: config.observability,
+        planningAssumptions: config.planningAssumptions,
+        metadata: config.metadata,
+      };
+    }
+  });
+
+  afterAll(async () => {
+    // Restore the original seeded config so other test files see the expected state
+    if (originalConfigA) {
+      await adminClient.countryPackConfig.update({
+        where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
+        data: {
+          sectors: originalConfigA.sectors as never,
+          observability: originalConfigA.observability as never,
+          planningAssumptions: originalConfigA.planningAssumptions as never,
+          metadata: originalConfigA.metadata as never,
+        },
+      });
+    }
+    // Clean up test evidence + sources
+    await adminClient.evidence.deleteMany({
+      where: { claim: { contains: "[CACHE-TEST]" } },
+    });
+    await adminClient.source.deleteMany({
+      where: { code: "CACHE-TEST-SOURCE-1" },
+    });
+  });
+
   beforeEach(async () => {
     await adminClient.task.deleteMany({
       where: { type: "baseline-compute", tenantId: tenantAId },
     });
-    // Clean up test evidence + config from previous runs
     await adminClient.evidence.deleteMany({
       where: { claim: { contains: "[CACHE-TEST]" } },
-    });
-    await adminClient.countryPackConfig.deleteMany({
-      where: { metadata: { path: ["seededBy"], equals: "[CACHE-TEST]" } as never },
     });
   });
 
   // Helper: create a fresh CountryPackConfig for testing (overrides the seeded one)
+  // Returns the updated config so tests can verify the change took effect.
   async function setTestConfig(sectors: string[]) {
-    await adminClient.countryPackConfig.upsert({
+    const updated = await adminClient.countryPackConfig.upsert({
       where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
       update: {
         sectors: sectors as never,
@@ -686,6 +730,12 @@ describeIntegration("Cache Validity Closure (fingerprint idempotency)", () => {
         metadata: { seededBy: "[CACHE-TEST]" } as never,
       },
     });
+    // Small delay to ensure updatedAt differs from any previous config write
+    // (Prisma @updatedAt has millisecond precision; rapid back-to-back writes
+    // could produce the same timestamp, though sectors change is enough to
+    // change the fingerprint regardless).
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    return updated;
   }
 
   it("1. changing CountryPackConfig sectors produces a new report", async () => {

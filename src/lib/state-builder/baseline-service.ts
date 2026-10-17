@@ -605,13 +605,47 @@ async function computeBaselineFingerprint(
     countryPackConfig: configPart,
   };
 
-  // Canonical JSON (sorted keys for determinism)
-  const canonicalJson = JSON.stringify(fingerprintInput, Object.keys(fingerprintInput).sort());
+  // Canonical JSON with deep key sorting for full determinism.
+  // We use a recursive sort so nested objects + arrays are consistently ordered.
+  const canonicalJson = JSON.stringify(sortKeysDeep(fingerprintInput));
 
   // SHA-256 hash, truncated to 32 chars (128 bits — more than enough collision resistance)
   const hash = createHash("sha256").update(canonicalJson).digest("hex").slice(0, 32);
 
   return hash;
+}
+
+// ============================================================
+// HELPER: deep key sorting for deterministic JSON serialization
+// ============================================================
+// Recursively sorts object keys + array elements (for arrays of objects/primitives)
+// so the same data in any order produces the same canonical JSON.
+// For arrays of strings (like sectors), we sort the strings.
+// For arrays of objects (like evidence), we sort by their canonical JSON.
+
+function sortKeysDeep<T>(value: T): T {
+  if (value === null || value === undefined) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    // Sort array elements: if they're objects/primitives, sort by their sorted JSON
+    const sorted = value.map(sortKeysDeep);
+    sorted.sort((a, b) => {
+      const aJson = JSON.stringify(a);
+      const bJson = JSON.stringify(b);
+      return aJson < bJson ? -1 : aJson > bJson ? 1 : 0;
+    });
+    return sorted as unknown as T;
+  }
+  if (typeof value === "object") {
+    const sortedObj: Record<string, unknown> = {};
+    const keys = Object.keys(value as Record<string, unknown>).sort();
+    for (const key of keys) {
+      sortedObj[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
+    }
+    return sortedObj as unknown as T;
+  }
+  return value;
 }
 
 // ============================================================
