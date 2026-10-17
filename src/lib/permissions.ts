@@ -39,6 +39,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "gap:read",
     // G01 (01-04): Institutional Design
     "program:read",
+    // G01 (01-06): Budget & Financing Estimates
+    "budget:read",
+    "budget:compute",
   ],
   analyst: [
     "tenant:read",
@@ -56,6 +59,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "gap:read",
     // G01 (01-04): Institutional Design
     "program:read",
+    // G01 (01-06): Budget & Financing Estimates
+    "budget:read",
+    "budget:compute",
   ],
   reviewer: [
     "tenant:read",
@@ -71,6 +77,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "gap:read",
     // G01 (01-04): Institutional Design — read-only for reviewers
     "program:read",
+    // G01 (01-06): Budget & Financing Estimates — read-only for reviewers
+    "budget:read",
   ],
   observer: [
     "tenant:read",

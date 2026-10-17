@@ -674,6 +674,7 @@ model BudgetLine {
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   program Program @relation(fields: [programId], references: [id], onDelete: Cascade)
 
+  @@unique([tenantId, programId, modelVersion])
   @@index([tenantId, programId])
   @@map("budget_lines")
 }

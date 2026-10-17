@@ -81,8 +81,8 @@ SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL;
 SQL
 )
 echo "  Applied migrations: $MIGRATION_COUNT"
-if [ "$MIGRATION_COUNT" -lt 19 ]; then
-  echo "FAIL: Expected at least 17 migrations (16 G00 + 3 G01), found $MIGRATION_COUNT"
+if [ "$MIGRATION_COUNT" -lt 20 ]; then
+  echo "FAIL: Expected at least 20 migrations (16 G00 + 4 G01), found $MIGRATION_COUNT"
   exit 1
 fi
 
