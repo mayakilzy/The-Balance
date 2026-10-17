@@ -161,6 +161,12 @@ model Tenant {
   dependencies       Dependency[]
   riskRegisters      RiskRegister[]
   assumptions        Assumption[]
+  // G02 (migration 0021): tenant-scoped State Observatory data
+  indicatorDefinitions IndicatorDefinition[]
+  observationPeriods   ObservationPeriod[]
+  observations         Observation[]
+  varianceRecords      VarianceRecord[]
+  alerts               Alert[]
 
   @@map("tenants")
   @@index([status])
@@ -257,6 +263,8 @@ model Source {
   updatedAt        DateTime @updatedAt
 
   evidence Evidence[]
+  // G02 (migration 0021): observations referencing this source
+  observations Observation[]
 
   @@index([type])
   @@index([independenceGroup])
@@ -292,6 +300,8 @@ model Evidence {
   relatedTo  Evidence?        @relation("EvidenceRelations", fields: [relatedEvidenceId], references: [id], onDelete: SetNull)
   relatedBy  Evidence[]       @relation("EvidenceRelations")
   embedding  EvidenceEmbedding?
+  // G02 (migration 0021): observations referencing this evidence
+  observations Observation[]
 
   @@index([tenantId, type])
   @@index([tenantId, verificationStatus])
@@ -368,6 +378,11 @@ model StrategyVersion {
   programs      Program[]
   riskRegisters RiskRegister[]
   assumptions   Assumption[]
+  // G02 (migration 0021): State Observatory entities referencing this version (read-only FK)
+  indicatorDefinitions IndicatorDefinition[]
+  observations         Observation[]
+  varianceRecords      VarianceRecord[]
+  alerts               Alert[]
 
   @@unique([strategyId, versionNumber])
   @@index([tenantId, status])
@@ -578,6 +593,8 @@ model Objective {
 
   tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   country Country  @relation(fields: [countryId], references: [id])
+  // G02 (migration 0021): indicators referencing this objective
+  indicatorDefinitions IndicatorDefinition[]
 
   @@index([tenantId, countryId])
   @@index([tenantId, status])
@@ -628,6 +645,8 @@ model Program {
   budgetLines     BudgetLine[]
   dependenciesFrom Dependency[] @relation("DependencyFrom")
   dependenciesTo   Dependency[] @relation("DependencyTo")
+  // G02 (migration 0021): indicators referencing this program
+  indicatorDefinitions IndicatorDefinition[]
 
   @@index([tenantId, strategyVersionId])
   @@index([tenantId, sector])
@@ -741,4 +760,234 @@ model Assumption {
 
   @@index([tenantId, strategyVersionId])
   @@map("assumptions")
+}
+
+// ============================================================
+// G02 STATE OBSERVATORY (02-00) — 5 new PRIVATE tables
+// ------------------------------------------------------------
+// All tenant-scoped, RLS ENABLE + FORCE (see migration 0021).
+// Per REV-5 FINAL CORRECTED MISSION spec:
+//   - Q1-Q15 (architecture) + R1-R5 (refinements) + E1-E8 (execution)
+//     + F1-F6 (final fixes) — all frozen.
+//
+// Key invariants:
+//   - StrategyVersion referenced as READ-ONLY FK (never modified).
+//   - Observations are append-only with correction chains (R4).
+//   - isCurrent uniqueness enforced via partial unique index with
+//     COALESCE(geo_ref_id, '') for NULL safety (F1).
+//   - Chain integrity (no branching, no cycles, no self-reference,
+//     same indicator+period+geo) enforced via DB trigger (F3).
+//   - VarianceRecord.observationId is NULLABLE (null when unknown) (F4).
+//   - plannedValueSourceKind/SourceId are NULLABLE (null when
+//     plannedValueType="none") (F4).
+//   - Alert separates lifecycle from executionStatus; verifyExecution
+//     requires verifiedAction + evidenceSource (F6).
+//   - attributionLevel = "descriptive" always (no causal claims).
+// ============================================================
+
+model IndicatorDefinition {
+  id                          String   @id @default(cuid())
+  tenantId                    String
+  code                        String
+  displayName                 String
+  description                 String?
+  // Blueprint §5.2 — full indicator definition
+  unit                        String
+  formula                     String?
+  preferredDirection          String // "increase" | "decrease" | "stable"
+  preferredDirectionRationale String?
+  geographicLevels            Json     @default("[]")
+  coverage                    String?
+  frequency                   String? // "yearly" | "quarterly" | "monthly"
+  methodologyDate             DateTime?
+  measurementConstraints      Json     @default("{}")
+  uncertaintyMethod           String?
+  usedBy                      Json     @default("[]")
+  // Read-only FK to G01 approved entities
+  objectiveId                 String?
+  programId                   String?
+  strategyVersionId           String?
+  // R2 — temporal targets
+  defaultTargetValue          Decimal? @db.Decimal(20, 4)
+  targetTimeHorizon           String   @default("annual") // "period" | "annual" | "multi_year"
+  periodMilestones            Json     @default("[]")
+  // R3 + E5 — structured alert thresholds (max 2 rules; [] = no auto-alert)
+  alertThresholds             Json     @default("[]")
+  status                      String   @default("draft") // "draft" | "active" | "retired"
+  createdBy                   String
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  tenant           Tenant?          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  objective        Objective?       @relation(fields: [objectiveId], references: [id])
+  program          Program?         @relation(fields: [programId], references: [id])
+  strategyVersion  StrategyVersion? @relation(fields: [strategyVersionId], references: [id])
+  observations     Observation[]
+  varianceRecords  VarianceRecord[]
+  alerts           Alert[]
+
+  @@unique([tenantId, code])
+  @@index([tenantId, status])
+  @@index([tenantId, strategyVersionId])
+  @@index([tenantId, objectiveId])
+  @@map("indicator_definitions")
+}
+
+model ObservationPeriod {
+  id          String   @id @default(cuid())
+  tenantId    String
+  periodType  String // "yearly" | "quarterly" | "monthly"
+  periodValue String // "2026" | "2026-Q1" | "2026-03"
+  startAt     DateTime
+  endAt       DateTime
+  status      String   @default("open") // "open" | "closed"
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant       Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  observations Observation[]
+  varianceRecords VarianceRecord[]
+
+  @@unique([tenantId, periodType, periodValue])
+  @@index([tenantId, status])
+  @@map("observation_periods")
+}
+
+model Observation {
+  id                      String   @id @default(cuid())
+  tenantId                String
+  indicatorDefinitionId   String
+  strategyVersionId       String? // read-only FK
+  observationPeriodId     String
+  // The measured value (null = "unknown" — Blueprint §1.1)
+  observedValue           Decimal? @db.Decimal(20, 4)
+  // R1 — origin SEPARATE FROM verification
+  originType              String // "observed" | "derived" | "synthetic"
+  verificationStatus      String   @default("unverified") // "unverified"|"verified"|"disputed"|"rejected"
+  derivationMethod        String? // required when originType = "derived"
+  sourceId                String? // FK Source (G00), required when originType = "observed"
+  evidenceId              String? // FK Evidence (G00), optional
+  // Demolandia flag (separate from originType) — E6
+  isSynthetic             Boolean  @default(true)
+  observedAt              DateTime?
+  retrievedAt             DateTime @default(now())
+  qualityNotes            Json     @default("{}")
+  // Geographic scope (E3 + future-proofing for subnational monitoring)
+  geoLevel                String   @default("national") // "national"|"sectoral"|"institutional"|"subnational"
+  geoRefId                String?
+  // R4 + E2 — append-only correction chain
+  supersedesId            String? @unique // FK self — the previous version (unique: one successor per obs)
+  supersededById          String? // FK self — the next version (set when superseded)
+  correctionReason        String?
+  correctedById           String?
+  correctedAt             DateTime?
+  isCurrent               Boolean  @default(true)
+  createdBy               String
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  indicatorDefinition   IndicatorDefinition @relation(fields: [indicatorDefinitionId], references: [id], onDelete: Cascade)
+  observationPeriod     ObservationPeriod   @relation(fields: [observationPeriodId], references: [id], onDelete: Cascade)
+  strategyVersion       StrategyVersion?    @relation(fields: [strategyVersionId], references: [id])
+  source                Source?             @relation(fields: [sourceId], references: [id])
+  evidence              Evidence?           @relation(fields: [evidenceId], references: [id])
+  // Self-relation for correction chain — supersedesId is unique (one successor per observation)
+  supersedes            Observation?        @relation("ObservationChain", fields: [supersedesId], references: [id])
+  supersededBy          Observation?        @relation("ObservationChain")
+  varianceRecords       VarianceRecord[]
+
+  @@index([tenantId, indicatorDefinitionId, observationPeriodId, isCurrent], map: "observations_current_idx")
+  @@index([tenantId, indicatorDefinitionId, observationPeriodId, geoLevel, geoRefId, isCurrent], map: "observations_geo_current_idx")
+  @@index([tenantId, supersedesId], map: "observations_supersedes_idx")
+  @@map("observations")
+}
+
+model VarianceRecord {
+  id                       String   @id @default(cuid())
+  tenantId                 String
+  strategyVersionId        String
+  indicatorDefinitionId    String
+  observationPeriodId      String
+  // E3 + F4 — observationId is NULLABLE (null when observation is unknown)
+  observationId            String?
+  observationSnapshot      Json     @default("{}")
+  // R2 + F4 — planned value source is structured and NULLABLE when no target
+  plannedValue             Decimal? @db.Decimal(20, 4)
+  plannedValueType         String   // "period_milestone"|"interim"|"final"|"none"
+  plannedValueSourceKind   String?  // NULLABLE — null when plannedValueType="none" (F4)
+  plannedValueSourceId     String?  // NULLABLE — null when plannedValueType="none" (F4)
+  plannedValueAtPeriodId   String?
+  plannedValueSnapshot     Json     @default("{}")
+  // Deterministic computation (no LLM)
+  varianceAbsolute         Decimal? @db.Decimal(20, 4) // null when unknown
+  varianceDirection        String   // "better"|"worse"|"neutral"|"unknown"
+  // R2 — comparison validity flag
+  comparisonValid          Boolean
+  // Blueprint §3.2 — no causal claims without evidence
+  attributionLevel         String   @default("descriptive") // always "descriptive" in 02-00
+  notes                    String?
+  metadata                 Json     @default("{}")
+  createdBy                String
+  createdAt                DateTime @default(now())
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  strategyVersion     StrategyVersion     @relation(fields: [strategyVersionId], references: [id], onDelete: Cascade)
+  indicatorDefinition IndicatorDefinition @relation(fields: [indicatorDefinitionId], references: [id], onDelete: Cascade)
+  observationPeriod   ObservationPeriod   @relation(fields: [observationPeriodId], references: [id], onDelete: Cascade)
+  observation         Observation?        @relation(fields: [observationId], references: [id])
+  alerts              Alert[]
+
+  @@index([tenantId, strategyVersionId, observationPeriodId])
+  @@index([tenantId, indicatorDefinitionId, observationPeriodId])
+  @@map("variance_records")
+}
+
+model Alert {
+  id                          String   @id @default(cuid())
+  tenantId                    String
+  strategyVersionId           String
+  indicatorDefinitionId       String?
+  varianceRecordId            String?
+  title                       String
+  description                 String
+  severity                    String // "info"|"watch"|"warning"|"critical"
+  // R5 — lifecycle separated from execution verification
+  lifecycleStage              String   @default("detected")
+  // "detected"|"notified"|"reviewed"|"decision_documented"|"closed"
+  // Human decision documentation (does NOT prove execution)
+  decisionDescription         String?
+  decidedById                 String?
+  decidedAt                   DateTime?
+  // Execution verification block (separate from lifecycle)
+  executionStatus             String   @default("not_applicable")
+  // "not_applicable"|"pending"|"verified"|"disputed"
+  // F6 — verifiedAction describes the SPECIFIC action verified (not a policy outcome)
+  executionVerifiedAction     String?
+  executionVerifiedAt         DateTime?
+  executionVerificationSource String?
+  executionVerifiedById       String?
+  executionNotes              String?
+  // Human sovereignty
+  requiresHumanAction         Boolean  @default(true)
+  createdBy                   String // "system" or userId
+  reviewedBy                  String?
+  reviewedAt                  DateTime?
+  reviewNotes                 String?
+  closedBy                    String?
+  closedAt                    DateTime?
+  closureReason               String?
+  isAutoGenerated             Boolean  @default(false)
+  metadata                    Json     @default("{}")
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  tenant              Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  strategyVersion     StrategyVersion     @relation(fields: [strategyVersionId], references: [id], onDelete: Cascade)
+  indicatorDefinition IndicatorDefinition? @relation(fields: [indicatorDefinitionId], references: [id])
+  varianceRecord     VarianceRecord?      @relation(fields: [varianceRecordId], references: [id])
+
+  @@index([tenantId, strategyVersionId, lifecycleStage])
+  @@index([tenantId, indicatorDefinitionId])
+  @@map("alerts")
 }

@@ -1,0 +1,615 @@
+// ============================================================
+// tests/unit/state-observatory/alert-service.test.ts
+// ------------------------------------------------------------
+// Unit tests for AlertService — uses mocked Prisma client.
+//
+// Covers:
+//   U-16: evaluateAndRaise returns null when alertThresholds=[]
+//   U-17: 2-rule "and"/"or" logic (evaluator covered separately, here via service)
+//   U-19: documentDecision sets "decision_documented" + leaves executionStatus unchanged
+//   U-20 (F6): verifyExecution changes executionStatus but NOT lifecycleStage
+//   U-21: closeAlert does not require executionStatus="verified"
+//   R3 + F6 + R5 invariants
+// ============================================================
+import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import type { Session } from "next-auth";
+
+vi.mock("@/lib/permissions", () => ({
+  requirePermissionWithCurrentRole: vi.fn().mockResolvedValue(undefined),
+  PermissionDeniedError: class PermissionDeniedError extends Error {
+    readonly permission: string;
+    constructor(permission: string) {
+      super(`Permission denied: ${permission}`);
+      this.name = "PermissionDeniedError";
+      this.permission = permission;
+    }
+  },
+}));
+
+const mockWriteAuditTx = vi.fn().mockResolvedValue(undefined);
+vi.mock("@/lib/audit", () => ({
+  writeAuditTx: (...args: unknown[]) => mockWriteAuditTx(...args),
+}));
+
+const mockTx = {
+  varianceRecord: { findFirst: vi.fn() },
+  indicatorDefinition: { findFirst: vi.fn() },
+  alert: {
+    create: vi.fn(),
+    update: vi.fn(),
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+  },
+};
+
+vi.mock("@/lib/security/tenant-context", () => ({
+  withAuthenticatedTenant: vi.fn(
+    async (
+      _session: Session | null,
+      fn: (ctx: {
+        tx: typeof mockTx;
+        userId: string;
+        tenantId: string;
+        roleCode: string;
+      }) => Promise<unknown>
+    ) => {
+      return fn({
+        tx: mockTx,
+        userId: "user_1",
+        tenantId: "tenant_1",
+        roleCode: "reviewer",
+      });
+    }
+  ),
+}));
+
+import {
+  evaluateAndRaise,
+  markReviewed,
+  documentDecision,
+  updateExecutionStatus,
+  verifyExecution,
+  closeAlert,
+} from "@/lib/state-observatory/alert-service";
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockWriteAuditTx.mockResolvedValue(undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+
+const baseVarianceRecord = {
+  id: "vr_1",
+  tenantId: "tenant_1",
+  strategyVersionId: "sv_1",
+  indicatorDefinitionId: "ind_1",
+  observationPeriodId: "period_1",
+  observationId: "obs_1",
+  plannedValue: 7.0,
+  varianceAbsolute: 2.0,
+  varianceDirection: "worse",
+  comparisonValid: true,
+};
+
+const baseIndicator = {
+  id: "ind_1",
+  tenantId: "tenant_1",
+  code: "INFLATION_RATE",
+  displayName: "Inflation Rate",
+  preferredDirection: "decrease",
+  alertThresholds: [],
+};
+
+describe("AlertService.evaluateAndRaise — U-16 (empty thresholds → no alert)", () => {
+  it("returns null when alertThresholds is empty", async () => {
+    mockTx.varianceRecord.findFirst.mockResolvedValue(baseVarianceRecord);
+    mockTx.indicatorDefinition.findFirst.mockResolvedValue(baseIndicator);
+
+    const result = await evaluateAndRaise(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "vr_1"
+    );
+
+    expect(result).toBeNull();
+    expect(mockTx.alert.create).not.toHaveBeenCalled();
+  });
+
+  it("returns null when thresholds do not match", async () => {
+    mockTx.varianceRecord.findFirst.mockResolvedValue({
+      ...baseVarianceRecord,
+      varianceAbsolute: 0.5, // below threshold of 1.5
+    });
+    mockTx.indicatorDefinition.findFirst.mockResolvedValue({
+      ...baseIndicator,
+      alertThresholds: [
+        {
+          metric: "varianceAbsolute",
+          operator: "gt",
+          value: 1.5,
+          severity: "warning",
+          rationale: "Demo threshold — 1.5pp above milestone",
+          sourceRef: "synthetic:demolandia-test-policy-2026-001",
+        },
+      ],
+    });
+
+    const result = await evaluateAndRaise(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "vr_1"
+    );
+
+    expect(result).toBeNull();
+    expect(mockTx.alert.create).not.toHaveBeenCalled();
+  });
+
+  it("creates alert when single rule matches", async () => {
+    mockTx.varianceRecord.findFirst.mockResolvedValue(baseVarianceRecord); // varianceAbsolute=2.0
+    mockTx.indicatorDefinition.findFirst.mockResolvedValue({
+      ...baseIndicator,
+      alertThresholds: [
+        {
+          metric: "varianceAbsolute",
+          operator: "gt",
+          value: 1.5,
+          severity: "warning",
+          rationale: "Demo threshold — 1.5pp above milestone",
+          sourceRef: "synthetic:demolandia-test-policy-2026-001",
+        },
+      ],
+    });
+    mockTx.alert.create.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "detected",
+      isAutoGenerated: true,
+      executionStatus: "not_applicable",
+    });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "notified",
+      isAutoGenerated: true,
+      executionStatus: "not_applicable",
+    });
+
+    const result = await evaluateAndRaise(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "vr_1"
+    );
+
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe("alert_1");
+    expect(result!.lifecycleStage).toBe("notified"); // auto-transitioned
+    expect(result!.isAutoGenerated).toBe(true);
+    expect(result!.executionStatus).toBe("not_applicable");
+
+    // Verify create payload
+    const createCall = mockTx.alert.create.mock.calls[0]![0];
+    expect(createCall.data.lifecycleStage).toBe("detected");
+    expect(createCall.data.severity).toBe("warning");
+    expect(createCall.data.createdBy).toBe("system");
+    expect(createCall.data.isAutoGenerated).toBe(true);
+
+    // Verify audit log
+    expect(mockWriteAuditTx).toHaveBeenCalledOnce();
+    const auditCall = mockWriteAuditTx.mock.calls[0]![1];
+    expect(auditCall.action).toBe("observatory.alert.raised");
+  });
+
+  it("U-17: creates alert when 2 'and' rules both match", async () => {
+    mockTx.varianceRecord.findFirst.mockResolvedValue(baseVarianceRecord);
+    mockTx.indicatorDefinition.findFirst.mockResolvedValue({
+      ...baseIndicator,
+      alertThresholds: [
+        {
+          metric: "varianceAbsolute",
+          operator: "gt",
+          value: 1.5,
+          logicalOp: "and",
+          severity: "warning",
+          rationale: "Demo threshold — 1.5pp above milestone",
+          sourceRef: "synthetic:demolandia-test-policy-2026-001",
+        },
+        {
+          metric: "varianceDirection",
+          operator: "eq",
+          value: "worse",
+          severity: "warning",
+          rationale: "Only raise when direction is worse",
+          sourceRef: "synthetic:demolandia-test-policy-2026-001",
+        },
+      ],
+    });
+    mockTx.alert.create.mockResolvedValue({ id: "alert_1", lifecycleStage: "detected" });
+    mockTx.alert.update.mockResolvedValue({ id: "alert_1", lifecycleStage: "notified" });
+
+    const result = await evaluateAndRaise(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "vr_1"
+    );
+
+    expect(result).not.toBeNull();
+    expect(mockTx.alert.create).toHaveBeenCalledOnce();
+  });
+
+  it("U-17: returns null when 2 'and' rules but only one matches", async () => {
+    mockTx.varianceRecord.findFirst.mockResolvedValue({
+      ...baseVarianceRecord,
+      varianceDirection: "better", // does NOT match "worse" rule
+    });
+    mockTx.indicatorDefinition.findFirst.mockResolvedValue({
+      ...baseIndicator,
+      alertThresholds: [
+        {
+          metric: "varianceAbsolute",
+          operator: "gt",
+          value: 1.5,
+          logicalOp: "and",
+          severity: "warning",
+          rationale: "Demo threshold — 1.5pp above milestone",
+          sourceRef: "synthetic:demolandia-test-policy-2026-001",
+        },
+        {
+          metric: "varianceDirection",
+          operator: "eq",
+          value: "worse",
+          severity: "warning",
+          rationale: "Only raise when direction is worse",
+          sourceRef: "synthetic:demolandia-test-policy-2026-001",
+        },
+      ],
+    });
+
+    const result = await evaluateAndRaise(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "vr_1"
+    );
+
+    expect(result).toBeNull();
+    expect(mockTx.alert.create).not.toHaveBeenCalled();
+  });
+
+  it("throws NotFoundError when variance record not found", async () => {
+    mockTx.varianceRecord.findFirst.mockResolvedValue(null);
+
+    await expect(
+      evaluateAndRaise(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "vr_nonexistent"
+      )
+    ).rejects.toThrow(/not found/);
+  });
+});
+
+describe("AlertService.markReviewed", () => {
+  it("transitions detected → reviewed", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "notified",
+    });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "reviewed",
+    });
+
+    const result = await markReviewed(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "alert_1",
+      "will review with ministry"
+    );
+
+    expect(result.lifecycleStage).toBe("reviewed");
+    const updateCall = mockTx.alert.update.mock.calls[0]![0];
+    expect(updateCall.data.lifecycleStage).toBe("reviewed");
+    expect(updateCall.data.reviewedBy).toBe("user_1");
+  });
+
+  it("rejects transition from 'decision_documented'", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "decision_documented",
+    });
+
+    await expect(
+      markReviewed(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        "notes"
+      )
+    ).rejects.toThrow(/Cannot mark reviewed/);
+  });
+
+  it("rejects empty notes", async () => {
+    await expect(
+      markReviewed(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        ""
+      )
+    ).rejects.toThrow(/notes/i);
+  });
+});
+
+describe("AlertService.documentDecision — U-19 (R5)", () => {
+  it("sets lifecycleStage='decision_documented' + leaves executionStatus unchanged", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      tenantId: "tenant_1",
+      lifecycleStage: "reviewed",
+      executionStatus: "not_applicable",
+    });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "decision_documented",
+      executionStatus: "not_applicable", // unchanged
+      decisionDescription: "raise memo to ministry",
+    });
+
+    const result = await documentDecision(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "alert_1",
+      "raise memo to ministry"
+    );
+
+    expect(result.lifecycleStage).toBe("decision_documented");
+    expect(result.executionStatus).toBe("not_applicable"); // unchanged
+
+    // Verify the update payload — executionStatus NOT touched
+    const updateCall = mockTx.alert.update.mock.calls[0]![0];
+    expect(updateCall.data.lifecycleStage).toBe("decision_documented");
+    expect(updateCall.data.decisionDescription).toBe("raise memo to ministry");
+    expect(updateCall.data.executionStatus).toBeUndefined();
+  });
+
+  it("rejects transition from non-reviewed stage", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "notified", // too early
+    });
+
+    await expect(
+      documentDecision(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        "decision"
+      )
+    ).rejects.toThrow(/Cannot document decision/);
+  });
+
+  it("rejects empty decision description", async () => {
+    await expect(
+      documentDecision(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        ""
+      )
+    ).rejects.toThrow(/description/i);
+  });
+});
+
+describe("AlertService.updateExecutionStatus — F6", () => {
+  it("F6: rejects verified without verifiedAction", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({ id: "alert_1" });
+
+    await expect(
+      updateExecutionStatus(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        {
+          executionStatus: "verified",
+          evidenceSource: "receipt",
+          // missing verifiedAction
+        }
+      )
+    ).rejects.toThrow(/verifiedAction/);
+  });
+
+  it("F6: rejects verified without evidenceSource", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({ id: "alert_1" });
+
+    await expect(
+      updateExecutionStatus(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        {
+          executionStatus: "verified",
+          verifiedAction: "receipt of memo",
+          // missing evidenceSource
+        }
+      )
+    ).rejects.toThrow(/evidenceSource/);
+  });
+
+  it("F6: accepts verified with both verifiedAction + evidenceSource", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "decision_documented",
+    });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      executionStatus: "verified",
+      executionVerifiedAction: "receipt of memo #X",
+    });
+
+    const result = await updateExecutionStatus(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "alert_1",
+      {
+        executionStatus: "verified",
+        verifiedAction: "receipt of memo #X by Ministry of Finance",
+        evidenceSource: "official receipt issued by Ministry",
+      }
+    );
+
+    expect(result.executionStatus).toBe("verified");
+
+    const updateCall = mockTx.alert.update.mock.calls[0]![0];
+    expect(updateCall.data.executionStatus).toBe("verified");
+    expect(updateCall.data.executionVerifiedAction).toBe(
+      "receipt of memo #X by Ministry of Finance"
+    );
+    expect(updateCall.data.executionVerificationSource).toBe(
+      "official receipt issued by Ministry"
+    );
+    expect(updateCall.data.executionVerifiedAt).toBeDefined();
+    // R5: lifecycleStage NOT changed
+    expect(updateCall.data.lifecycleStage).toBeUndefined();
+  });
+
+  it("accepts pending without verifiedAction", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({ id: "alert_1" });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      executionStatus: "pending",
+    });
+
+    const result = await updateExecutionStatus(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "alert_1",
+      { executionStatus: "pending" }
+    );
+
+    expect(result.executionStatus).toBe("pending");
+  });
+});
+
+describe("AlertService.verifyExecution — U-20 (F6)", () => {
+  it("F6: changes executionStatus to verified + sets verifiedAction, does NOT change lifecycleStage", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "decision_documented",
+      executionStatus: "pending",
+    });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "decision_documented", // unchanged
+      executionStatus: "verified",
+      executionVerifiedAction: "receipt of memo #DEMO-2026-042",
+      executionVerificationSource: "receipt from Ministry of Finance",
+    });
+
+    const result = await verifyExecution(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "alert_1",
+      {
+        verifiedAction: "receipt of memo #DEMO-2026-042 by Ministry of Finance",
+        evidenceSource: "receipt issued by Ministry of Finance — Demolandia synthetic",
+        notes: "memo delivered and signed for",
+      }
+    );
+
+    expect(result.executionStatus).toBe("verified");
+    expect(result.executionVerifiedAction).toContain("memo #DEMO-2026-042");
+    // R5/F6: lifecycleStage unchanged
+    expect(result.lifecycleStage).toBe("decision_documented");
+
+    const updateCall = mockTx.alert.update.mock.calls[0]![0];
+    expect(updateCall.data.lifecycleStage).toBeUndefined();
+    expect(updateCall.data.executionStatus).toBe("verified");
+  });
+
+  it("F6: rejects missing verifiedAction", async () => {
+    await expect(
+      verifyExecution(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        {
+          // missing verifiedAction
+          evidenceSource: "receipt",
+        } as any
+      )
+    ).rejects.toThrow(/verifiedAction/);
+  });
+
+  it("F6: rejects missing evidenceSource", async () => {
+    await expect(
+      verifyExecution(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        {
+          verifiedAction: "receipt of memo",
+          // missing evidenceSource
+        } as any
+      )
+    ).rejects.toThrow(/evidenceSource/);
+  });
+});
+
+describe("AlertService.closeAlert — U-21", () => {
+  it("U-21: can close from 'reviewed' stage with executionStatus='not_applicable'", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "reviewed",
+      executionStatus: "not_applicable", // not verified — still closeable
+    });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "closed",
+    });
+
+    const result = await closeAlert(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "alert_1",
+      "reviewed and noted"
+    );
+
+    expect(result.lifecycleStage).toBe("closed");
+  });
+
+  it("can close from 'decision_documented' stage", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "decision_documented",
+    });
+    mockTx.alert.update.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "closed",
+    });
+
+    const result = await closeAlert(
+      { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+      "alert_1",
+      "decision executed"
+    );
+
+    expect(result.lifecycleStage).toBe("closed");
+  });
+
+  it("rejects close from 'notified' (too early)", async () => {
+    mockTx.alert.findFirst.mockResolvedValue({
+      id: "alert_1",
+      lifecycleStage: "notified", // too early
+    });
+
+    await expect(
+      closeAlert(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        "reason"
+      )
+    ).rejects.toThrow(/Cannot close/);
+  });
+
+  it("rejects empty closure reason", async () => {
+    await expect(
+      closeAlert(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_1",
+        ""
+      )
+    ).rejects.toThrow(/reason/i);
+  });
+
+  it("throws NotFoundError when alert not found", async () => {
+    mockTx.alert.findFirst.mockResolvedValue(null);
+
+    await expect(
+      closeAlert(
+        { user: { id: "user_1", tenantId: "tenant_1", membershipStatus: "active" } } as unknown as Session,
+        "alert_nonexistent",
+        "reason"
+      )
+    ).rejects.toThrow(/not found/);
+  });
+});

@@ -46,6 +46,15 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "roadmap:read",
     // G01 (01-08): Scenario Comparison Engine
     "comparison:read",
+    // G02 (02-00): State Observatory permissions
+    "observatory:indicator:read",
+    "observatory:indicator:write",
+    "observatory:observation:read",
+    "observatory:observation:ingest",
+    "observatory:variance:read",
+    "observatory:alert:read",
+    "observatory:alert:review",
+    "observatory:alert:act",
   ],
   analyst: [
     "tenant:read",
@@ -70,6 +79,13 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "roadmap:read",
     // G01 (01-08): Scenario Comparison Engine
     "comparison:read",
+    // G02 (02-00): State Observatory permissions
+    "observatory:indicator:read",
+    "observatory:indicator:write",
+    "observatory:observation:read",
+    "observatory:observation:ingest",
+    "observatory:variance:read",
+    "observatory:alert:read",
   ],
   reviewer: [
     "tenant:read",
@@ -91,6 +107,13 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "roadmap:read",
     // G01 (01-08): Scenario Comparison Engine — read-only for reviewers
     "comparison:read",
+    // G02 (02-00): State Observatory permissions — reviewer can review + act on alerts
+    "observatory:indicator:read",
+    "observatory:observation:read",
+    "observatory:variance:read",
+    "observatory:alert:read",
+    "observatory:alert:review",
+    "observatory:alert:act",
   ],
   observer: [
     "tenant:read",
@@ -101,6 +124,11 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "baseline:read",
     // G01 (01-02): Gap Analysis — NOT available to observer (per mission pack §6)
     // G01 (01-04): Institutional Design — NOT available to observer (per mission pack §6)
+    // G02 (02-00): State Observatory permissions — observer sees snapshots only
+    "observatory:indicator:read",
+    "observatory:observation:read",
+    "observatory:variance:read",
+    "observatory:alert:read",
   ],
 };
 
