@@ -317,6 +317,7 @@ interface CompositionContext {
   baselineTaskId: string;
   gapTaskId: string;
   objectiveIds: string[];
+  countryId: string;
 }
 
 function gatherEvidenceFromBaseline(
@@ -426,7 +427,7 @@ function generateAlternativeA(ctx: CompositionContext): Omit<StrategyAlternative
     simulated: true,
     provider: "stub",
     compositionBatchId,
-    inputSnapshot: { countryId: input.countryId, baselineTaskId, gapTaskId, objectiveIds, constraints },
+    inputSnapshot: { countryId: ctx.countryId, baselineTaskId, gapTaskId, objectiveIds, constraints },
   };
 }
 
@@ -536,7 +537,7 @@ function generateAlternativeB(ctx: CompositionContext): Omit<StrategyAlternative
     simulated: true,
     provider: "stub",
     compositionBatchId,
-    inputSnapshot: { countryId: input.countryId, baselineTaskId, gapTaskId, objectiveIds, constraints },
+    inputSnapshot: { countryId: ctx.countryId, baselineTaskId, gapTaskId, objectiveIds, constraints },
   };
 }
 
@@ -724,6 +725,7 @@ export async function composeStrategies(
       baselineTaskId: baseline.taskId,
       gapTaskId: gaps.taskId,
       objectiveIds: input.objectiveIds,
+      countryId: input.countryId,
     };
 
     // FIX-3: Apply constraints to the composition context
