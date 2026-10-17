@@ -99,7 +99,7 @@ async function getComposedVersionId(
   const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
   const result = await composeStrategies(session, { countryId, objectiveIds });
   // Return the first alternative's versionId
-  return result.alternatives[0]!.versionId;
+  return result.alternatives.find((a) => a.programs.length > 0)?.versionId ?? result.alternatives[0]!.versionId;
 }
 
 // ============================================================
