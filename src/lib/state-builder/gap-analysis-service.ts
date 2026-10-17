@@ -36,7 +36,7 @@ import {
   completeTask,
   failTask,
 } from "@/lib/task-service";
-import { getLatestBaseline } from "@/lib/state-builder/baseline-service";
+import { computeBaseline, getLatestBaseline } from "@/lib/state-builder/baseline-service";
 import type { BaselineReport, BaselineIndicator, ObservabilityMode } from "@/lib/state-builder/baseline-service";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
@@ -115,24 +115,53 @@ export interface ComputeGapsInput {
 }
 
 // ============================================================
-// HELPERS — metric matching + unit detection
+// HELPERS — metric matching + strict unit detection + numeric parsing
 // ============================================================
+// FIX-3: stricter unit detection + numeric parsing
 
 function normalizeMetricName(name: string): string {
   return name.toLowerCase().replace(/[_-]/g, " ").trim();
 }
 
+// FIX-3: stricter percentage detection — value must END with %
+// (not just contain % somewhere, which could be part of a larger string)
 function isPercentage(value: string): boolean {
-  return /%\s*$/.test(value.trim());
+  const trimmed = value.trim();
+  // Must end with %, optionally preceded by a number
+  return /^-?\d+\.?\d*\s*%$/.test(trimmed);
 }
 
+// FIX-3: stricter numeric extraction — the ENTIRE value (after removing %)
+// must be a valid number. No extracting 2024 from "production fell in 2024".
 function extractNumericValue(value: string): number | null {
-  const match = value.match(/(\d+\.?\d*)/);
-  if (match && match[1]) {
-    const num = parseFloat(match[1]);
+  const trimmed = value.trim();
+
+  // If it's a percentage, extract the number before %
+  const percentMatch = trimmed.match(/^(-?\d+\.?\d*)\s*%$/);
+  if (percentMatch && percentMatch[1]) {
+    const num = parseFloat(percentMatch[1]);
     return isNaN(num) ? null : num;
   }
+
+  // FIX-3: For non-percentage values, the ENTIRE string must be a number
+  // (optionally with a sign). We do NOT extract numbers from mixed strings.
+  // e.g., "42" → 42, "42 units" → null (not just 42), "2024" → 2024 but only if it's the whole value
+  const plainNumberMatch = trimmed.match(/^(-?\d+\.?\d*)$/);
+  if (plainNumberMatch && plainNumberMatch[1]) {
+    const num = parseFloat(plainNumberMatch[1]);
+    return isNaN(num) ? null : num;
+  }
+
+  // Not a clean numeric value
   return null;
+}
+
+// FIX-3: detect unit type for comparison
+// Returns "percentage" | "plain-number" | "incomparable"
+function getUnitType(value: string): "percentage" | "plain-number" | "incomparable" {
+  if (isPercentage(value)) return "percentage";
+  if (extractNumericValue(value) !== null) return "plain-number";
+  return "incomparable";
 }
 
 function isUnparsable(value: string): boolean {
@@ -140,15 +169,16 @@ function isUnparsable(value: string): boolean {
 }
 
 // ============================================================
-// GAP CLASSIFICATION
+// FIX-3: GAP CLASSIFICATION — with conflict detection + stricter units
 // ============================================================
 // Principles:
 //   - LOW baseline → unknown (Principle 1)
 //   - Unparsed indicator → unknown (Principle 1)
-//   - Unit mismatch → unknown (Principle 3)
+//   - Unit mismatch / incomparable → unknown (Principle 3, FIX-3 stricter)
+//   - Conflicting indicator readings → partial (FIX-3: no silent selection)
+//   - Counter-evidence for same metric → partial (FIX-3: FULL ≠ undisputed)
 //   - PARTIAL baseline → partial (even if gap is computable)
-//   - FULL baseline + matching units → measurable
-//   - Counter-evidence → partial + blocker (Principle 5)
+//   - FULL baseline + matching units + no conflicts → measurable
 
 interface GapClassification {
   gapType: GapType;
@@ -156,146 +186,179 @@ interface GapClassification {
   gapDirection: "above" | "below" | null;
   unitMatch: boolean;
   notes: string[];
+  // FIX-3: track whether the classification was downgraded due to conflicts
+  downgradedDueToConflict: boolean;
 }
 
 function classifyGap(
   baselineMode: ObservabilityMode | "none",
-  indicator: BaselineIndicator | null,
-  targetValue: string
+  matchResult: IndicatorMatchResult,
+  targetValue: string,
+  hasCounterEvidenceForMetric: boolean
 ): GapClassification {
   const notes: string[] = [];
+  const indicator = matchResult.primary;
 
   // Principle 1: LOW baseline or no matching sector → unknown
   if (baselineMode === "none") {
     return {
-      gapType: "unknown",
-      gapSize: null,
-      gapDirection: null,
-      unitMatch: false,
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
       notes: ["No matching sector found in the baseline for this objective's target metric."],
+      downgradedDueToConflict: false,
     };
   }
 
   if (baselineMode === "LOW") {
     return {
-      gapType: "unknown",
-      gapSize: null,
-      gapDirection: null,
-      unitMatch: false,
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
       notes: ["Baseline observability is LOW for this sector — insufficient data to assess the gap. Result is 'unknown'."],
+      downgradedDueToConflict: false,
     };
   }
 
   // Principle 1: No matching indicator → unknown
   if (!indicator) {
     return {
-      gapType: "unknown",
-      gapSize: null,
-      gapDirection: null,
-      unitMatch: false,
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
       notes: ["No indicator in the baseline matches this objective's target metric. Result is 'unknown'."],
+      downgradedDueToConflict: false,
     };
   }
 
   // Principle 1: Unparsed indicator value → unknown
   if (indicator.valueConfidence === "unparsed" || isUnparsable(indicator.value)) {
     return {
-      gapType: "unknown",
-      gapSize: null,
-      gapDirection: null,
-      unitMatch: false,
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
       notes: ["The baseline indicator value could not be reliably extracted from the evidence. Result is 'unknown' — no fabricated gap value."],
+      downgradedDueToConflict: false,
     };
   }
 
-  // Principle 3: Unit matching — both must be percentages or both plain numbers
-  const currentIsPercent = isPercentage(indicator.value);
-  const targetIsPercent = isPercentage(targetValue);
+  // FIX-3: Stricter unit matching — use getUnitType for both values
+  const currentUnitType = getUnitType(indicator.value);
+  const targetUnitType = getUnitType(targetValue);
 
-  if (currentIsPercent !== targetIsPercent) {
+  if (currentUnitType === "incomparable" || targetUnitType === "incomparable") {
     return {
-      gapType: "unknown",
-      gapSize: null,
-      gapDirection: null,
-      unitMatch: false,
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
       notes: [
-        `Unit mismatch: current value "${indicator.value}" and target value "${targetValue}" use different units. Cannot compute a meaningful gap. Result is 'unknown'.`,
+        `Unit incomparable: current value "${indicator.value}" (type: ${currentUnitType}) and target value "${targetValue}" (type: ${targetUnitType}) cannot be compared. Result is 'unknown'.`,
       ],
+      downgradedDueToConflict: false,
     };
   }
 
-  // Both are percentages or both are plain numbers → compute gap
+  if (currentUnitType !== targetUnitType) {
+    return {
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
+      notes: [
+        `Unit mismatch: current value "${indicator.value}" (${currentUnitType}) and target value "${targetValue}" (${targetUnitType}) use different unit types. Cannot compute a meaningful gap. Result is 'unknown'.`,
+      ],
+      downgradedDueToConflict: false,
+    };
+  }
+
+  // Both are the same unit type (percentage or plain-number) → compute gap
   const currentNum = extractNumericValue(indicator.value);
   const targetNum = extractNumericValue(targetValue);
 
   if (currentNum === null || targetNum === null) {
     return {
-      gapType: "unknown",
-      gapSize: null,
-      gapDirection: null,
-      unitMatch: true,
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: true,
       notes: ["Could not parse numeric values from the current and target values. Result is 'unknown'."],
+      downgradedDueToConflict: false,
     };
   }
 
   const difference = currentNum - targetNum;
   const absDifference = Math.abs(difference);
-  const direction = difference > 0 ? "above" : difference < 0 ? "below" : "above"; // 0 = at target
-  const unitLabel = currentIsPercent ? "percentage points" : "units (verify compatibility)";
+  const direction = difference > 0 ? "above" : difference < 0 ? "below" : "above";
+  const unitLabel = currentUnitType === "percentage" ? "percentage points" : "units (same unit type assumed — verify compatibility)";
 
   const gapSize = `${absDifference.toFixed(1)} ${unitLabel}`;
   const gapDirection: "above" | "below" = direction;
 
-  // Principle 4: No fake precision — we use 1 decimal place, not more
   notes.push(`Gap computed: current ${indicator.value} is ${absDifference.toFixed(1)} ${unitLabel} ${direction} target ${targetValue}.`);
-
-  // Principle 2: Don't extract trajectory from a single measurement
   notes.push("This gap is a point-in-time comparison. No trajectory or trend is inferred from a single baseline measurement.");
+
+  // FIX-3: If there are conflicting readings for the same metric → downgrade to partial
+  let downgradedDueToConflict = false;
+  if (matchResult.hasConflictingValues) {
+    notes.push(
+      `CONFLICT DETECTED: ${matchResult.all.length} indicators match the target metric "${targetValue}" but report ${matchResult.distinctValues.length} distinct values: ${matchResult.distinctValues.map((v) => `"${v}"`).join(", ")}. The primary value "${indicator.value}" is used for computation, but the gap is downgraded to 'partial' due to conflicting readings.`
+    );
+    downgradedDueToConflict = true;
+  }
+
+  // FIX-3: If there's counter-evidence specifically for this metric → downgrade to partial
+  // FULL observability means evidence COVERAGE is sufficient, not that the value is UNDISPUTED.
+  if (hasCounterEvidenceForMetric) {
+    notes.push(
+      "Counter-evidence exists for this metric. FULL observability indicates sufficient evidence coverage, but does not mean the indicator value is undisputed. Gap downgraded to 'partial' due to conflicting evidence."
+    );
+    downgradedDueToConflict = true;
+  }
 
   // If baseline is PARTIAL → gap is partial (uncertain)
   if (baselineMode === "PARTIAL") {
     return {
-      gapType: "partial",
-      gapSize,
-      gapDirection,
-      unitMatch: true,
+      gapType: "partial", gapSize, gapDirection, unitMatch: true,
       notes: [...notes, "Baseline observability is PARTIAL — the gap value is computed but carries uncertainty due to insufficient evidence quality or coverage."],
+      downgradedDueToConflict,
     };
   }
 
-  // FULL baseline → measurable
-  return {
-    gapType: "measurable",
-    gapSize,
-    gapDirection,
-    unitMatch: true,
-    notes,
-  };
+  // FULL baseline → measurable UNLESS downgraded due to conflicts
+  if (downgradedDueToConflict) {
+    return { gapType: "partial", gapSize, gapDirection, unitMatch: true, notes, downgradedDueToConflict };
+  }
+
+  return { gapType: "measurable", gapSize, gapDirection, unitMatch: true, notes, downgradedDueToConflict: false };
 }
 
 // ============================================================
-// FIND MATCHING INDICATOR
+// FIX-3: FIND MATCHING INDICATORS (plural — detect conflicting readings)
 // ============================================================
-// Match objective.targetMetric to baseline indicator name (both normalized)
+// Returns ALL matching indicators for the target metric, not just one.
+// The caller can then detect conflicts (different values for the same metric).
 
-function findMatchingIndicator(
+interface IndicatorMatchResult {
+  // The "best" indicator by confidence priority (for display)
+  primary: BaselineIndicator | null;
+  // ALL matching indicators (for conflict detection)
+  all: BaselineIndicator[];
+  // True if matching indicators have DIFFERENT numeric values (conflict)
+  hasConflictingValues: boolean;
+  // The distinct values among matching indicators
+  distinctValues: string[];
+}
+
+function findMatchingIndicators(
   indicators: BaselineIndicator[],
   targetMetric: string
-): BaselineIndicator | null {
+): IndicatorMatchResult {
   const normalizedTarget = normalizeMetricName(targetMetric);
 
-  // Find all matching indicators
   const matching = indicators.filter(
     (ind) => normalizeMetricName(ind.name) === normalizedTarget
   );
 
-  if (matching.length === 0) return null;
+  if (matching.length === 0) {
+    return { primary: null, all: [], hasConflictingValues: false, distinctValues: [] };
+  }
 
-  // Prefer structured > extracted > unparsed
+  // Prefer structured > extracted > unparsed for the primary display
   const priority = { structured: 0, extracted: 1, unparsed: 2 };
-  matching.sort((a, b) => priority[a.valueConfidence] - priority[b.valueConfidence]);
+  const sorted = [...matching].sort(
+    (a, b) => priority[a.valueConfidence] - priority[b.valueConfidence]
+  );
+  const primary = sorted[0]!;
 
-  return matching[0]!;
+  // FIX-3: Detect conflicting values — different numeric values for the same metric
+  const distinctValues = [...new Set(matching.map((m) => m.value))];
+  const hasConflictingValues = distinctValues.length > 1;
+
+  return { primary, all: matching, hasConflictingValues, distinctValues };
 }
 
 // ============================================================
@@ -317,6 +380,30 @@ async function runGapAnalysis(
     },
   });
 
+  // FIX-1: Verify ALL requested objectives exist AND belong to the requested country
+  // A tenant may operate on multiple countries — we must not silently include
+  // an objective from country B in the gap analysis for country A.
+  const foundIds = new Set(objectives.map((o) => o.id));
+  const missingIds = objectiveIds.filter((id) => !foundIds.has(id));
+  if (missingIds.length > 0) {
+    throw new Error(
+      `Objective integrity violation: ${missingIds.length} of ${objectiveIds.length} requested objective ID(s) not found in tenant scope. ` +
+      `Missing: ${missingIds.join(", ")}. ` +
+      `Gap analysis rejected — no partial report with silently dropped objectives.`
+    );
+  }
+
+  // FIX-1: Verify all objectives belong to the requested country
+  const wrongCountryObjectives = objectives.filter((o) => o.countryId !== countryId);
+  if (wrongCountryObjectives.length > 0) {
+    const details = wrongCountryObjectives.map((o) => `"${o.title}" (id=${o.id}, countryId=${o.countryId})`).join("; ");
+    throw new Error(
+      `Country mismatch: ${wrongCountryObjectives.length} objective(s) belong to a different country than the requested countryId "${countryId}". ` +
+      `Offending objectives: ${details}. ` +
+      `Gap analysis rejected — no cross-country mixing.`
+    );
+  }
+
   // 2. For each objective, compute the gap
   const gaps: GapItem[] = [];
 
@@ -328,13 +415,21 @@ async function runGapAnalysis(
     const baselineDim = baseline.dimensions.find((d) => d.sector === sector);
     const baselineMode: ObservabilityMode | "none" = baselineDim?.observabilityMode ?? "none";
 
-    // Find the matching indicator within the dimension
-    const indicator = baselineDim
-      ? findMatchingIndicator(baselineDim.indicators, obj.targetMetric)
-      : null;
+    // FIX-3: Find ALL matching indicators (not just one) — detect conflicts
+    const matchResult = baselineDim
+      ? findMatchingIndicators(baselineDim.indicators, obj.targetMetric)
+      : { primary: null, all: [], hasConflictingValues: false, distinctValues: [] };
+    const indicator = matchResult.primary;
 
-    // Classify the gap
-    const classification = classifyGap(baselineMode, indicator, obj.targetValue);
+    // FIX-3: Check for counter-evidence specifically for the MATCHING metric
+    // (not just sector-level counter-evidence). If any indicator matching the
+    // target metric has supportStance="contradicts", that's a direct conflict.
+    const hasCounterEvidenceForMetric = matchResult.all.some(
+      (ind) => ind.supportStance === "contradicts"
+    );
+
+    // Classify the gap (FIX-3: pass matchResult + counter-evidence flag)
+    const classification = classifyGap(baselineMode, matchResult, obj.targetValue, hasCounterEvidenceForMetric);
 
     // Gather evidence (supporting + counter) from the baseline dimension
     const supportingEvidence: EvidenceRef[] = [];
@@ -551,13 +646,11 @@ export async function computeGaps(
     throw new Error("objectiveIds is required (at least one objective)");
   }
 
-  // 1. Get the latest baseline for this country (must exist)
-  const baselineResult = await getLatestBaseline(session, input.countryId);
-  if (!baselineResult) {
-    throw new Error(
-      `No baseline found for country ${input.countryId}. Compute a baseline first using computeBaseline().`
-    );
-  }
+  // FIX-2: Ensure the baseline is FRESH (represents current evidence + config state).
+  // computeBaseline() is idempotent — if nothing changed since the last baseline,
+  // it returns the cached task. If evidence or CountryPackConfig changed, it
+  // computes a fresh baseline. This prevents gap analysis from using a stale baseline.
+  const baselineResult = await computeBaseline(session, { countryId: input.countryId });
   const baseline = baselineResult.report;
 
   // 2. Compute the gap fingerprint
