@@ -44,6 +44,7 @@ let countryId: string;
 let analystUserId: string;
 let reviewerUserId: string;
 let adminUserId: string;
+let tenantBAnalystUserId: string;
 
 // Cached G01 entities that 02-00 builds on
 let strategyVersionId: string;
@@ -129,6 +130,30 @@ beforeAll(async () => {
     },
   });
   reviewerUserId = reviewer.id;
+
+  // Create a tenant B analyst user for cross-tenant isolation tests
+  // (the seeded analyst only has membership in tenant A)
+  const tenantBAnalyst = await adminClient.user.upsert({
+    where: { email: "g02-tenantb-analyst@demolandia.test" },
+    update: {},
+    create: {
+      email: "g02-tenantb-analyst@demolandia.test",
+      name: "G02 Tenant B Analyst",
+      passwordHash: await hashPassword("Test1234!"),
+      status: "active",
+    },
+  });
+  await adminClient.membership.upsert({
+    where: { userId_tenantId: { userId: tenantBAnalyst.id, tenantId: tenantBId } },
+    update: { status: "active", roleCode: "analyst" },
+    create: {
+      userId: tenantBAnalyst.id,
+      tenantId: tenantBId,
+      roleCode: "analyst",
+      status: "active",
+    },
+  });
+  tenantBAnalystUserId = tenantBAnalyst.id;
 
   // Fetch (or create) an approved StrategyVersion for Tenant A
   // GROUP 01's seed does NOT create one; we create minimal test fixtures.
@@ -504,7 +529,7 @@ describeIntegration("I-02: T2-slice positive path — full lifecycle", () => {
     expect(pending.lifecycleStage).toBe("decision_documented"); // R5: unchanged
 
     // F6: verifyExecution requires verifiedAction + evidenceSource
-    const verified = await verifyExecution(analystSession, alert!.id, {
+    const verified = await verifyExecution(reviewerSession, alert!.id, {
       verifiedAction: "استلام وزارة المالية للمذكرة رقم #DEMO-2026-042",
       evidenceSource: "إيصال استلام صادر عن وزارة المالية — Demolandia synthetic",
       notes: "تم تسليم المذكرة وتوقيع الاستلام",
@@ -831,7 +856,7 @@ describeIntegration("I-06: RLS cross-tenant isolation", () => {
       membershipStatus: "active",
     });
     const tenantBSession = makeSession({
-      id: analystUserId, // same user, different tenant session (hypothetical)
+      id: tenantBAnalystUserId, // different user with membership in tenant B
       tenantId: tenantBId,
       roleCode: "analyst",
       membershipStatus: "active",
@@ -1051,7 +1076,7 @@ describeIntegration("I-08: writeAuditTx atomic for every operation", () => {
 
     await markReviewed(reviewerSession, alert!.id, "review notes");
     await documentDecision(reviewerSession, alert!.id, "decision text");
-    await verifyExecution(analystSession, alert!.id, {
+    await verifyExecution(reviewerSession, alert!.id, {
       verifiedAction: "receipt of memo",
       evidenceSource: "receipt",
     });
@@ -1425,11 +1450,18 @@ describeIntegration("I-13: F4 — observationId=null when unknown", () => {
       roleCode: "reviewer",
       membershipStatus: "active",
     });
+    const analystSession = makeSession({
+      id: analystUserId,
+      tenantId: tenantAId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
 
     // Indicator with NO defaultTargetValue and NO periodMilestones
-    const indicator = await defineIndicator(reviewerSession, {
+    // (use analystSession — reviewer doesn't have indicator:write)
+    const indicator = await defineIndicator(analystSession, {
       code: "INDICATOR_I13_NO_TARGET",
       displayName: "Indicator Without Target (I-13)",
       unit: "count",

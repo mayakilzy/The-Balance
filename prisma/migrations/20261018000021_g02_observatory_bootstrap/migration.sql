@@ -421,20 +421,25 @@ BEGIN
 
     -- (c) when supersedes_id present: validate chain integrity
     IF NEW."supersedesId" IS NOT NULL THEN
-        -- F3: forbid branching — target must not have a direct successor yet
-        SELECT "supersededById" INTO target_superseded_by
-        FROM "observations"
-        WHERE "id" = NEW."supersedesId" AND "tenantId" = NEW."tenantId";
+        -- F3: forbid branching — but ONLY when this is a NEW claim:
+        --   - INSERT: always check (new observation claiming a predecessor)
+        --   - UPDATE: only check if supersedesId changed (avoid false positive
+        --     when updating isCurrent on an already-linked observation)
+        IF TG_OP = 'INSERT' OR (TG_OP = 'UPDATE' AND OLD."supersedesId" IS DISTINCT FROM NEW."supersedesId") THEN
+            SELECT "supersededById" INTO target_superseded_by
+            FROM "observations"
+            WHERE "id" = NEW."supersedesId" AND "tenantId" = NEW."tenantId";
 
-        IF NOT FOUND THEN
-            RAISE EXCEPTION 'supersedes_id references non-existent observation in same tenant';
+            IF NOT FOUND THEN
+                RAISE EXCEPTION 'supersedes_id references non-existent observation in same tenant';
+            END IF;
+
+            IF target_superseded_by IS NOT NULL THEN
+                RAISE EXCEPTION 'Branching forbidden: target observation % already has a direct successor', NEW."supersedesId";
+            END IF;
         END IF;
 
-        IF target_superseded_by IS NOT NULL THEN
-            RAISE EXCEPTION 'Branching forbidden: target observation % already has a direct successor', NEW."supersedesId";
-        END IF;
-
-        -- cycle detection (bounded depth 100)
+        -- cycle detection (bounded depth 100) — always check for safety
         ancestor_id := NEW."supersedesId";
         FOR i IN 1..100 LOOP
             IF ancestor_id = NEW."id" THEN
@@ -444,7 +449,7 @@ BEGIN
             EXIT WHEN ancestor_id IS NULL;
         END LOOP;
 
-        -- same indicator + period + geo
+        -- same indicator + period + geo — always check for safety
         IF NOT EXISTS (
             SELECT 1 FROM "observations"
             WHERE "id" = NEW."supersedesId"
