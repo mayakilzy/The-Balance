@@ -37,6 +37,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "baseline:compute",
     // G01 (01-02): Gap Analysis — read-only for reviewer
     "gap:read",
+    // G01 (01-04): Institutional Design
+    "program:read",
   ],
   analyst: [
     "tenant:read",
@@ -52,6 +54,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "baseline:compute",
     // G01 (01-02): Gap Analysis
     "gap:read",
+    // G01 (01-04): Institutional Design
+    "program:read",
   ],
   reviewer: [
     "tenant:read",
@@ -65,6 +69,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "baseline:read",
     // G01 (01-02): Gap Analysis — read-only for reviewers
     "gap:read",
+    // G01 (01-04): Institutional Design — read-only for reviewers
+    "program:read",
   ],
   observer: [
     "tenant:read",
@@ -74,6 +80,7 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     // G01 (01-01): State Baseline — read-only for observers
     "baseline:read",
     // G01 (01-02): Gap Analysis — NOT available to observer (per mission pack §6)
+    // G01 (01-04): Institutional Design — NOT available to observer (per mission pack §6)
   ],
 };
 
