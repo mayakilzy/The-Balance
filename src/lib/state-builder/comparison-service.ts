@@ -204,17 +204,19 @@ export async function compareScenarios(
   }
   // Must have ≥2 distinct alternatives
   const distinctIds = new Set(input.alternativeIds);
+  // Check duplicates FIRST (before the count check) so the error message
+  // is specific: [a, a] → "duplicates" not "at least 2".
+  if (input.alternativeIds.length !== distinctIds.size) {
+    throw new ComparisonValidationError(
+      `alternativeIds contains duplicates. Each alternative must appear at most once. ` +
+      `Received ${input.alternativeIds.length} IDs but only ${distinctIds.size} are distinct.`
+    );
+  }
   if (distinctIds.size < 2) {
     throw new ComparisonValidationError(
       `compareScenarios requires at least 2 DISTINCT alternatives. ` +
       `Received ${input.alternativeIds.length} alternativeId(s) with ${distinctIds.size} distinct value(s). ` +
       `Comparison is meaningless with fewer than 2 alternatives.`
-    );
-  }
-  if (input.alternativeIds.length !== distinctIds.size) {
-    throw new ComparisonValidationError(
-      `alternativeIds contains duplicates. Each alternative must appear at most once. ` +
-      `Received ${input.alternativeIds.length} IDs but only ${distinctIds.size} are distinct.`
     );
   }
 
