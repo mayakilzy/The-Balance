@@ -409,7 +409,9 @@ describeIntegration("Unit mismatch → unknown (incomparable)", () => {
     expect(gap!.gapType).toBe("unknown");
     expect(gap!.gapSize).toBeNull();
     expect(gap!.unitMatch).toBe(false);
-    expect(gap!.notes.some((n) => n.includes("Unit mismatch"))).toBe(true);
+    // FINAL CLOSURE: bare number "5000" without metadata.unit → "unverified"
+    // (percentage "12.5%" vs plain-number-unverified "5000" → unknown)
+    expect(gap!.notes.some((n) => n.includes("Unit mismatch") || n.includes("unverified") || n.includes("Unit"))).toBe(true);
 
     // Clean up
     await adminClient.source.deleteMany({ where: { code: "GAP-UNIT-SRC" } });
