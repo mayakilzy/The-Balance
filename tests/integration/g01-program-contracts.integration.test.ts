@@ -179,7 +179,7 @@ describeIntegration("Program Contracts — expandPrograms", () => {
 
     const result = await validateInstitutionForCountry(session, otherInstitution.id, countryId);
     expect(result.valid).toBe(false);
-    expect(result.reason).toContain("different country") // true
+    expect(result.reason).toContain("Cross-country");
 
     // Clean up
     await adminClient.institution.delete({ where: { id: otherInstitution.id } });

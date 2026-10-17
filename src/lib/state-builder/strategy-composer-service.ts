@@ -96,6 +96,7 @@ export interface StrategyAlternative {
   provider: string;
   compositionBatchId: string;
   inputSnapshot: {
+    countryId: string;
     baselineTaskId: string;
     gapTaskId: string;
     objectiveIds: string[];
@@ -425,7 +426,7 @@ function generateAlternativeA(ctx: CompositionContext): Omit<StrategyAlternative
     simulated: true,
     provider: "stub",
     compositionBatchId,
-    inputSnapshot: { baselineTaskId, gapTaskId, objectiveIds, constraints },
+    inputSnapshot: { countryId: input.countryId, baselineTaskId, gapTaskId, objectiveIds, constraints },
   };
 }
 
@@ -535,7 +536,7 @@ function generateAlternativeB(ctx: CompositionContext): Omit<StrategyAlternative
     simulated: true,
     provider: "stub",
     compositionBatchId,
-    inputSnapshot: { baselineTaskId, gapTaskId, objectiveIds, constraints },
+    inputSnapshot: { countryId: input.countryId, baselineTaskId, gapTaskId, objectiveIds, constraints },
   };
 }
 
