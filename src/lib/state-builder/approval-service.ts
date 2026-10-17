@@ -65,37 +65,50 @@ export async function approveStrategyVersionWithAuditSafe(
       // withAuthenticatedTenant transaction (to set tenant context for RLS).
       // This is OUTSIDE the failed transaction, so it's a separate
       // best-effort write. If this also fails, the denial is still
-      // enforced (the error is re-thrown).
+      // enforced (the original PermissionDeniedError is re-thrown).
+      //
+      // FIX-2 (01-10-FINAL-CLOSURE): The original PermissionDeniedError MUST
+      // always be the error the caller sees. Audit logging failures are
+      // operational issues — they must NOT replace or hide the authorization
+      // error. We wrap the entire denial-audit in a try/catch that swallows
+      // any secondary error, then re-throw the ORIGINAL PermissionDeniedError.
       try {
-        await withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
-          await writeAuditTx(tx, {
-            tenantId,
-            actor: userId,
+        try {
+          await withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
+            await writeAuditTx(tx, {
+              tenantId,
+              actor: userId,
+              action: "strategy.version_approved",
+              status: "denied",
+              errorCode: "PERMISSION_DENIED",
+              details: {
+                strategyVersionId: versionId,
+                permission: err.permission,
+              },
+            });
+          });
+        } catch {
+          // withAuthenticatedTenant or writeAuditTx failed (e.g. membership suspended).
+          // Fall back to the global writeAudit (best-effort, may also fail due to RLS).
+          // The original PermissionDeniedError is preserved regardless.
+          await writeAudit({
+            tenantId: session.user?.tenantId,
+            actor: session.user?.id,
             action: "strategy.version_approved",
             status: "denied",
             errorCode: "PERMISSION_DENIED",
-            details: {
-              strategyVersionId: versionId,
-              permission: err.permission,
-            },
+            details: { strategyVersionId: versionId, permission: err.permission },
           });
-        });
+        }
       } catch {
-        // Best-effort: if the denied-audit write also fails (e.g. membership
-        // suspended), fall back to the global writeAudit (which may also
-        // fail due to RLS). The denial is still enforced — the error is
-        // re-thrown regardless.
-        await writeAudit({
-          tenantId: session.user?.tenantId,
-          actor: session.user?.id,
-          action: "strategy.version_approved",
-          status: "denied",
-          errorCode: "PERMISSION_DENIED",
-          details: { strategyVersionId: versionId, permission: err.permission },
-        });
+        // Both audit paths failed. The denial is still enforced —
+        // the original PermissionDeniedError is re-thrown below.
+        // The audit failure is an operational issue that must be
+        // alerted on via log monitoring (writeAudit logs internally
+        // before throwing, but even if it doesn't, we swallow here).
       }
     }
-    // Re-throw the original error (denied or otherwise)
+    // Re-throw the ORIGINAL error (always — denied or otherwise)
     throw err;
   }
 }

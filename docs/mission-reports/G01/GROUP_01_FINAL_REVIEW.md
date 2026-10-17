@@ -4,80 +4,45 @@
 
 **Group:** 01 — State Builder
 **Missions:** 01-00 through 01-10
-**Final SHA:** (pending CI approval)
-**Total Tests:** 521+ (10 skipped HTTP E2E in non-browser contexts)
-**CI:** PASS
-**Recovery:** PASS
+**Final SHA:** `4aa7de238f01a318c040c3775785788664ee7baf`
+**CI:** PASS — https://github.com/mayakilzy/The-Balance/actions/runs/39053060987
+**Recovery:** PASS — https://github.com/mayakilzy/The-Balance/actions/runs/39053060971
+**Total Tests:** 532 passed | 10 skipped (HTTP E2E in non-browser contexts) | 0 failed
 
 ## Mission Status
 
 | Mission | Title | Status | Approved SHA |
 |---------|-------|--------|-------------|
-| 01-00 | G01 Bootstrap + Country Pack | APPROVED | (in git history) |
-| 01-01 | State Baseline | APPROVED | (in git history) |
-| 01-02 | Gap Analysis | APPROVED | (in git history) |
-| 01-03 | Strategy Composer | APPROVED | (in git history) |
-| 01-04 | Institutional Program Contracts | APPROVED | 84942cc |
-| 01-05 | Portfolio & Dependency Graph | APPROVED | 72999e5 |
-| 01-06 | Budget & Financing Estimates | APPROVED | 7dd3653 |
-| 01-07 | Implementation Roadmap & Timeline | APPROVED | a7d113a |
-| 01-08 | Scenario Comparison Engine | APPROVED | 110ed14 |
-| 01-09 | Development Advisor v1 | APPROVED | bc61940 |
-| 01-10 | Human Approval Workflow + T1 Integration | PENDING_REVIEW | (current) |
+| 01-00 | G01 Bootstrap + Country Pack | APPROVED | `a6b162e` |
+| 01-01 | State Baseline | APPROVED | `6d981e7` |
+| 01-02 | Gap Analysis | APPROVED | `dd1fff1` |
+| 01-03 | Strategy Composer | APPROVED | `0927d11` |
+| 01-04 | Institutional Program Contracts | APPROVED | `84942cc` |
+| 01-05 | Portfolio & Dependency Graph | APPROVED | `72999e5` |
+| 01-06 | Budget & Financing Estimates | APPROVED | `7dd3653` |
+| 01-07 | Implementation Roadmap & Timeline | APPROVED | `a7d113a` |
+| 01-08 | Scenario Comparison Engine | APPROVED | `110ed14` |
+| 01-09 | Development Advisor v1 | APPROVED | `bc61940` |
+| 01-10 | Human Approval Workflow + T1 Integration | PENDING_REVIEW | `4aa7de2` |
 
-## Key Accomplishments
+## T1 Integration Test Results
 
-### 1. Evidence-Based State Intelligence
-- State Baseline (01-01): FULL/PARTIAL/LOW observability modes per sector
-- Gap Analysis (01-02): measurable/partial/unknown gap classification
-- Evidence Fabric integration: fail-closed validation (no unattributed evidence)
+### API/Service-Level Integration (g01-t1-integration.integration.test.ts)
+- **T1.1–T1.9 (Positive journey):** PASS — full chain from country pack → evidence → objectives → baseline → gap analysis → compose ≥2 alternatives → expand programs → portfolio → budget → roadmap → comparison → advisor
+- **T1.10 (Unauthorized approval):** PASS — analyst rejected + audit_log with status="denied"
+- **T1.11 (Authorized approval):** PASS — reviewer approves + atomic audit_log + domain event
+- **T1.12 (Immutability):** PASS — re-approval rejected + supersession works
+- **T1.13 (Handover):** PASS — new reviewer can view approved strategy + audit trail
+- **T1.N1–T1.N5 (Negative tests):** PASS — no auto-approval, cross-tenant RLS, insufficient evidence, contradictory evidence, revoked membership
+- **FIX-1 (Contiguous chain):** PASS — same version from compose to approval, including buildRoadmap
+- **FIX-1b (Atomic rollback):** PASS — re-approval rejected atomically, no partial state
+- **FIX-2 (Error preservation):** PASS — PermissionDeniedError always re-thrown, not audit error
+- **FIX-2b (Suspended membership):** PASS — denied + authorization error preserved
+- **Audit Independence:** PASS — audit_log and events are different tables with different structures
 
-### 2. Multi-Alternative Strategy Composition
-- Strategy Composer (01-03): ≥2 alternatives per composition run, same compositionBatchId
-- All alternatives labeled `simulated: true` (StubProvider)
-- P2002 recovery for concurrent composition (deterministic, no recursive retry)
-
-### 3. Institutional Design & Program Contracts
-- FIX-1: No automatic institution assignment (honest gap documentation)
-- FIX-2: KPI only when exactly one objective matches sector
-- FIX-3: Unique index on (tenantId, strategyVersionId, title) + P2002 recovery
-
-### 4. Dependency Graph & Cycle Detection
-- Portfolio & Dependency Graph (01-05): topological sort, cycle rejection
-- FIX-1: Evidence-reference validation for documented edges
-- FIX-2: Direction convention consistency (A → B = A is prerequisite)
-- pg_advisory_xact_lock for concurrent edge insertion
-
-### 5. Financial Honesty
-- Budget Estimates (01-06): conditional ranges (min/max, never point estimates)
-- FIX-1: No default variance (0.9/1.15 removed — explicit variance required)
-- FIX-2: Prisma.Decimal arithmetic (no JS floating-point)
-- FIX-3: ISO 4217 currency whitelist + sourceType provenance
-- FINAL PROVENANCE CLOSURE: evidence-reference validation for documented cost inputs
-
-### 6. Timeline Integrity
-- Implementation Roadmap (01-07): topological layering, no fabricated dates
-- FIX: Temporal dependency integrity (reversed/overlapping dates rejected)
-
-### 7. Neutral Comparison
-- Scenario Comparison (01-08): neutral tradeoffs, no winner declared
-- FIX-1: Evidence counts ≠ claim support (supportAssessment = "not-assessed")
-- FIX-2: Temporal status computed (not hardcoded false)
-
-### 8. Conditional Advisory
-- Development Advisor (01-09): conditional recommendations, abstention when evidence insufficient
-- FIX-1: Objective scope integrity (existence + country + linkage)
-- FIX-2: Actual counter-evidence vs data-quality warnings
-- FIX-3: Removed arbitrary 50% abstention threshold
-- FINAL: Unresolved counter-evidence references → risks (not counterEvidence)
-
-### 9. Human Approval Workflow
-- 01-10: Atomic approval + audit (writeAuditTx inside the same transaction)
-- Three independent evidence layers: authorization, domain event, audit_log
-- Denied-attempt audit logging (best-effort, outside failed transaction)
-- RBAC current-role enforcement (revoked membership → denied even with stale JWT)
-- Version immutability (approved versions cannot be modified)
-- Supersession (new version approval auto-supersedes previous)
+### Browser E2E (t1-state-builder.spec.ts)
+- **Login + Navigation:** PASS — analyst/admin login, page navigation, screenshot capture
+- **Full T1 Journey via Browser UI:** NOT IMPLEMENTED — GROUP 01 does not include dedicated UI pages for each State Builder step. The full journey is tested at the API level. A browser-based UI for the full journey would be built in a future group.
 
 ## Simulated vs Live
 
@@ -102,3 +67,9 @@
 - Version immutability (approved versions cannot be modified)
 - No secrets in Git
 - No silent policy mutation
+
+## GROUP 01 Acceptance
+
+**GROUP_01_ACCEPTANCE = PENDING_REVIEW**
+
+This document does NOT self-declare GROUP 01 as PASS. The decision is the human reviewer's.
