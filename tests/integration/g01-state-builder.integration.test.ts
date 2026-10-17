@@ -274,63 +274,21 @@ describeIntegration("Cross-tenant Objective isolation (RLS, balance_app)", () =>
 // ============================================================
 // 3. CROSS-TENANT COUNTRY_PACK_CONFIG ISOLATION (THE KEY TEST for Correction A)
 // ============================================================
+// The seed already created CountryPackConfig for (tenantA, country) and (tenantB, country)
+// with DIFFERENT sectors + planning assumptions. We test isolation READ-ONLY against
+// these seeded configs — we do NOT modify them (modifying seeded data leaks state
+// across test files and breaks the seed verification tests below).
+//
+// Seeded data (from prisma/seed-ontology.ts):
+//   Tenant A: sectors = ["agriculture","finance","education","health"]
+//             planningAssumptions = { note: NOT set, but baselineYear=2025, ... }
+//   Tenant B: sectors = ["finance","monetary","external"]
+//             planningAssumptions = { inflationTarget: 5.0, ... }
 describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", () => {
-  beforeEach(async () => {
-    // Clean up test configs from previous runs.
-    // The seed creates CountryPackConfig for (tenantA, country) and (tenantB, country),
-    // so we can't `create` new ones — we use `upsert` in the tests to override
-    // the seeded configs with test-specific data. The cleanup here restores the
-    // seeded state by deleting any config with seededBy=[TEST-01-00] metadata.
-    // (The seeded configs have metadata.seededBy = "01-00-seed", so they're not touched.)
-    await adminClient.countryPackConfig.deleteMany({
-      where: { metadata: { path: ["seededBy"], equals: "[TEST-01-00]" } as never },
-    });
-  });
-
-  it("two tenants in the same country have DIFFERENT PRIVATE CountryPackConfigs", async () => {
+  it("two tenants in the same country have DIFFERENT PRIVATE CountryPackConfigs (read seeded)", async () => {
     // This is THE test for Correction A: same country, two tenants, each with
     // their own PRIVATE config. RLS must prevent cross-tenant visibility.
-    //
-    // The seed already created configs for (tenantA, country) and (tenantB, country).
-    // We UPSERT (override) them with test-specific data tagged with seededBy=[TEST-01-00]
-    // so beforeEach can clean them up on re-runs.
-
-    // Override Tenant A's config
-    await adminClient.countryPackConfig.upsert({
-      where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
-      update: {
-        sectors: ["agriculture", "education"] as never,
-        observability: { agriculture: "FULL" } as never,
-        planningAssumptions: { note: "Tenant A's private plan" } as never,
-        metadata: { seededBy: "[TEST-01-00]" } as never,
-      },
-      create: {
-        tenantId: tenantAId,
-        countryId,
-        sectors: ["agriculture", "education"] as never,
-        observability: { agriculture: "FULL" } as never,
-        planningAssumptions: { note: "Tenant A's private plan" } as never,
-        metadata: { seededBy: "[TEST-01-00]" } as never,
-      },
-    });
-    // Override Tenant B's config
-    await adminClient.countryPackConfig.upsert({
-      where: { tenantId_countryId: { tenantId: tenantBId, countryId } },
-      update: {
-        sectors: ["finance", "monetary"] as never,
-        observability: { finance: "FULL" } as never,
-        planningAssumptions: { note: "Tenant B's private plan" } as never,
-        metadata: { seededBy: "[TEST-01-00]" } as never,
-      },
-      create: {
-        tenantId: tenantBId,
-        countryId,
-        sectors: ["finance", "monetary"] as never,
-        observability: { finance: "FULL" } as never,
-        planningAssumptions: { note: "Tenant B's private plan" } as never,
-        metadata: { seededBy: "[TEST-01-00]" } as never,
-      },
-    });
+    // We test against the SEEDED configs (read-only — no modification).
 
     // Act: Tenant A queries country_pack_configs.
     await appClient.$transaction(async (tx) => {
@@ -341,10 +299,10 @@ describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", (
       // Tenant A should see ONLY its own config (1 row), not Tenant B's.
       expect(configsA.length).toBe(1);
       expect(configsA[0]!.tenantId).toBe(tenantAId);
-      // Verify the sectors are Tenant A's, not Tenant B's.
+      // Verify the sectors are Tenant A's (seeded), not Tenant B's.
       const sectors = configsA[0]!.sectors as unknown as string[];
       expect(sectors).toContain("agriculture");
-      expect(sectors).not.toContain("monetary");
+      expect(sectors).not.toContain("monetary"); // Tenant B's sector
     });
 
     // Act: Tenant B queries country_pack_configs.
@@ -358,44 +316,41 @@ describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", (
       expect(configsB[0]!.tenantId).toBe(tenantBId);
       const sectors = configsB[0]!.sectors as unknown as string[];
       expect(sectors).toContain("monetary");
-      expect(sectors).not.toContain("agriculture");
+      expect(sectors).not.toContain("agriculture"); // Tenant A's sector
     });
   });
 
   it("Tenant A cannot read Tenant B's CountryPackConfig planning assumptions", async () => {
-    // Setup: Override Tenant B's config with private planning assumptions.
-    // (The seed already created a config for (tenantB, country); we upsert to override.)
-    await adminClient.countryPackConfig.upsert({
-      where: { tenantId_countryId: { tenantId: tenantBId, countryId } },
-      update: {
-        sectors: ["finance"] as never,
-        observability: {} as never,
-        planningAssumptions: { secret: "TENANT_B_CONFIDENTIAL" } as never,
-        metadata: { seededBy: "[TEST-01-00]" } as never,
-      },
-      create: {
-        tenantId: tenantBId,
-        countryId,
-        sectors: ["finance"] as never,
-        observability: {} as never,
-        planningAssumptions: { secret: "TENANT_B_CONFIDENTIAL" } as never,
-        metadata: { seededBy: "[TEST-01-00]" } as never,
-      },
-    });
+    // Tenant B's seeded config has planningAssumptions.inflationTarget = 5.0.
+    // Tenant A must NOT see this value.
 
-    // Act: Tenant A queries configs for the same country.
-    // Tenant A's seeded config has sectors ["agriculture","finance","education","health"],
-    // so it should see exactly 1 config (its own). Tenant B's config must NOT be visible.
     await appClient.$transaction(async (tx) => {
       await setTenantContext(tx, tenantAId);
       const configs = await tx.countryPackConfig.findMany({ where: { countryId } });
-      // Tenant A should see ONLY its own config (1 row).
-      // Tenant B's config must NOT be visible (RLS blocks it).
+      // Tenant A sees ONLY its own config (1 row).
       expect(configs.length).toBe(1);
       expect(configs[0]!.tenantId).toBe(tenantAId);
-      // Verify Tenant A's config does NOT contain Tenant B's secret.
+      // Verify Tenant A's config does NOT contain Tenant B's inflationTarget.
       const planningAssumptions = configs[0]!.planningAssumptions as unknown as Record<string, unknown>;
-      expect(planningAssumptions.secret).toBeUndefined();
+      expect(planningAssumptions.inflationTarget).toBeUndefined();
+      // Tenant A's planningAssumptions has gdpPerCapitaUSD (seeded), not inflationTarget.
+      expect(planningAssumptions.gdpPerCapitaUSD).toBeDefined();
+    });
+  });
+
+  it("Tenant B cannot read Tenant A's CountryPackConfig planning assumptions", async () => {
+    // Tenant A's seeded config has planningAssumptions.gdpPerCapitaUSD = 3200.
+    // Tenant B must NOT see this value.
+
+    await appClient.$transaction(async (tx) => {
+      await setTenantContext(tx, tenantBId);
+      const configs = await tx.countryPackConfig.findMany({ where: { countryId } });
+      expect(configs.length).toBe(1);
+      expect(configs[0]!.tenantId).toBe(tenantBId);
+      const planningAssumptions = configs[0]!.planningAssumptions as unknown as Record<string, unknown>;
+      // Tenant B's config has inflationTarget (seeded), not gdpPerCapitaUSD.
+      expect(planningAssumptions.gdpPerCapitaUSD).toBeUndefined();
+      expect(planningAssumptions.inflationTarget).toBeDefined();
     });
   });
 });
