@@ -17,23 +17,33 @@
 // }
 //
 // Edge types (per mission pack §2):
-//   - requires  — program A requires program B's outputs to proceed
-//   - enables   — program A's outputs make program B feasible
-//   - conflicts — programs A and B are mutually exclusive (resource/policy clash)
+//   - requires  — ordering: A → B means A is the PREREQUISITE, B depends on A.
+//                 Semantically: "B requires A to be done first" or "A is required by B".
+//   - enables   — ordering: A → B means A is the ENABLER, B is enabled by A.
+//                 Semantically: "A's outputs enable B" or "B is enabled by A".
+//   - conflicts — non-ordering: A and B are mutually exclusive (resource/policy clash).
+//                 Direction is informational; bidirectional conflicts are allowed.
 //
-// Direction convention (kept consistent across the codebase):
-//   For `requires` and `enables`: edge from A → B means "A → B"
-//   i.e. A is the prerequisite / enabler, B is the dependent.
-//   So if A `requires` B (A needs B done first), the edge is B → A
-//   (B is the prerequisite, A depends on B).
+// Direction convention (FIX-2 — kept consistent across the codebase):
+//   For `requires` and `enables`:
+//     edge fromProgramId → toProgramId means:
+//       - fromProgramId is the PREREQUISITE / ENABLER (comes first in execution order)
+//       - toProgramId is the DEPENDENT (comes after, depends on fromProgramId's outputs)
+//     So a chain A → B → C means: A precedes B, B precedes C, in execution order.
+//     This matches the standard topological-sort convention (edges point from
+//     earlier to later) and is what the critical-path computation assumes.
 //
-//   To keep this unambiguous at the API surface, callers specify:
-//     fromProgramId = the source of the directed edge
-//     toProgramId   = the target of the directed edge
-//   And the rationale MUST describe the direction in plain language
-//   (e.g. "B's irrigation output is required before A can expand
-//   agricultural production"). The service does not second-guess
-//   the caller's direction — it only validates structural integrity.
+//   For `conflicts`:
+//     Direction is informational only — conflicts do NOT participate in cycle
+//     detection or critical-path computation. Both A → B and B → A conflicts
+//     edges are allowed (and may coexist) to express mutual exclusion.
+//
+//   Callers specify fromProgramId + toProgramId explicitly. The rationale MUST
+//   describe the direction in plain language consistent with this convention
+//   (e.g. "Program A's irrigation outputs are a prerequisite for Program B's
+//   agricultural expansion" for a requires edge A → B). The service does not
+//   second-guess the caller's direction — it validates structural integrity
+//   and provenance only.
 //
 // Cycle detection (per mission pack §4):
 //   - Only `requires` + `enables` participate in dependency ordering.
@@ -79,6 +89,22 @@
 //   - `simulated: boolean` is derived: true iff source === "simulated".
 //   - The buildPortfolio output exposes both for clarity.
 //
+// Provenance enforcement (FIX-1):
+//   - source="human"      — a human-supplied assertion. NO evidence required.
+//                           Treated as an opinion, not a verified fact.
+//   - source="documented" — REQUIRES an evidenceRef pointing to a real Evidence
+//                           row in the same tenant + country scope. The evidence
+//                           is validated (exists, has metadata.countryId matching
+//                           the strategy version's country). The evidenceRef is
+//                           stored in the edge's metadata and exposed via
+//                           PortfolioEdge.evidenceRef.
+//                           IMPORTANT: an evidence reference is EXAMINABLE SUPPORT,
+//                           not proof of causality. It means "a human cited this
+//                           evidence when documenting the relation" — it does NOT
+//                           mean the evidence proves the relation is causal.
+//   - source="simulated"  — a test/fictional relation. NO evidence required.
+//                           Used for fixtures and LLM-simulated inferences.
+//
 // Per ADR-0013. Reuses G00 + 01-00 + 01-03 + 01-04 contracts.
 // No new migration — `dependencies` table + unique index + RLS + cross-tenant
 // trigger already exist from migration 0017.
@@ -98,6 +124,15 @@ export type DependencyType = "requires" | "enables" | "conflicts";
 // from human-supplied and from LLM-simulated inferences.
 export type DependencySource = "human" | "documented" | "simulated";
 
+// Evidence reference attached to a `documented` edge.
+// Reuses the same shape as strategy-composer-service's EvidenceRef so the
+// provenance vocabulary stays consistent across the platform.
+export interface DependencyEvidenceRef {
+  evidenceId: string;
+  claim: string;              // what the evidence says that supports this edge
+  sourceCode: string | null;  // optional source code (e.g. "REUTERS", "WORLD_BANK")
+}
+
 export interface PortfolioNode {
   programId: string;
   title: string;
@@ -115,6 +150,9 @@ export interface PortfolioEdge {
   rationale: string | null;
   source: DependencySource;
   simulated: boolean; // true iff source === "simulated"
+  // evidenceRef is present ONLY when source === "documented". Null otherwise.
+  // An evidence reference is examinable support, NOT proof of causality.
+  evidenceRef: DependencyEvidenceRef | null;
   createdAt: Date;
 }
 
@@ -134,6 +172,11 @@ export interface AddDependencyInput {
   type: DependencyType;
   rationale: string;
   source: DependencySource;
+  // evidenceRef is REQUIRED when source === "documented".
+  // Must be null/undefined for source === "human" | "simulated".
+  // When provided, the evidence is validated against the strategy version's
+  // tenant + country scope (fail-closed, same as strategy-composer-service.ts).
+  evidenceRef?: DependencyEvidenceRef | null;
 }
 
 // ============================================================
@@ -199,6 +242,19 @@ function toPortfolioEdge(d: {
 }): PortfolioEdge {
   const meta = (d.metadata ?? {}) as Record<string, unknown>;
   const source = (meta.source as DependencySource) ?? "simulated";
+  // evidenceRef is stored in metadata only for documented edges.
+  // For human/simulated edges, it's null.
+  let evidenceRef: DependencyEvidenceRef | null = null;
+  if (source === "documented") {
+    const raw = meta.evidenceRef as Record<string, unknown> | undefined;
+    if (raw && typeof raw.evidenceId === "string" && typeof raw.claim === "string") {
+      evidenceRef = {
+        evidenceId: raw.evidenceId,
+        claim: raw.claim,
+        sourceCode: typeof raw.sourceCode === "string" ? raw.sourceCode : null,
+      };
+    }
+  }
   return {
     id: d.id,
     fromProgramId: d.fromProgramId,
@@ -207,6 +263,7 @@ function toPortfolioEdge(d: {
     rationale: d.rationale,
     source,
     simulated: source === "simulated",
+    evidenceRef,
     createdAt: d.createdAt,
   };
 }
@@ -567,6 +624,12 @@ export async function buildPortfolio(
 //      (DFS check on existing ordering edges)
 //   6. Idempotent: if the same (from, to, type) edge exists, return it
 //      (P2002 recovery pattern — same as program-service)
+//   7. FIX-1: If source="documented", an evidenceRef MUST be provided and
+//      validated against the strategy version's tenant + country scope
+//      (fail-closed — evidence without metadata.countryId is rejected,
+//      same as strategy-composer-service.ts). The evidenceRef is stored
+//      in the edge's metadata and exposed via PortfolioEdge.evidenceRef.
+//      An evidence reference is examinable support, NOT proof of causality.
 //
 // Concurrency:
 //   pg_advisory_xact_lock(hashtext(strategyAlternativeId)) serializes
@@ -610,6 +673,37 @@ export async function addDependency(
     throw new DependencyValidationError(
       `Invalid source: "${input.source}". Must be one of: human, documented, simulated.`
     );
+  }
+
+  // === FIX-1: PROVENANCE ENFORCEMENT (pre-transaction structural check) ===
+  // - source="documented" REQUIRES a non-empty evidenceRef with evidenceId + claim.
+  // - source="human" | "simulated" must NOT carry an evidenceRef (would be misleading).
+  // - The actual evidence existence + country-scope check happens inside the
+  //   transaction below (needs the strategy version's countryId).
+  if (input.source === "documented") {
+    if (!input.evidenceRef ||
+        !input.evidenceRef.evidenceId ||
+        input.evidenceRef.evidenceId.trim().length === 0 ||
+        !input.evidenceRef.claim ||
+        input.evidenceRef.claim.trim().length === 0) {
+      throw new DependencyValidationError(
+        `source="documented" requires an evidenceRef with a non-empty evidenceId and claim. ` +
+        `A rationale text alone does not constitute documentation — a verifiable evidence ` +
+        `reference is required. Use source="human" for human-supplied assertions without ` +
+        `evidence, or source="simulated" for test/fictional relations.`
+      );
+    }
+  } else {
+    // source is "human" or "simulated" — evidenceRef must NOT be provided.
+    // Allowing it would blur the provenance distinction: a "human" edge with
+    // an evidenceRef might be mistaken for a "documented" edge.
+    if (input.evidenceRef) {
+      throw new DependencyValidationError(
+        `source="${input.source}" must not include an evidenceRef. ` +
+        `evidenceRef is reserved for source="documented" edges. ` +
+        `If you have evidence to cite, use source="documented" instead.`
+      );
+    }
   }
 
   try {
@@ -664,6 +758,93 @@ export async function addDependency(
         );
       }
 
+      // === FIX-1: EVIDENCE VALIDATION (for source="documented") ===
+      // Fail-closed policy, same as strategy-composer-service.ts:
+      //   1. Fetch the strategy version to get the countryId from
+      //      metadata.inputSnapshot.countryId.
+      //   2. Verify the cited evidence exists in the same tenant (RLS-enforced).
+      //   3. Verify the evidence has metadata.countryId matching the strategy
+      //      version's country. Evidence WITHOUT metadata.countryId is REJECTED
+      //      (unattributed evidence cannot be used as documentation).
+      //   4. Cross-country evidence is REJECTED.
+      //
+      // IMPORTANT: this validates that the evidence EXISTS and is in scope.
+      // It does NOT verify that the evidence actually proves the causal
+      // relation between the two programs. An evidence reference is examinable
+      // support — a human cited it — not proof of causality.
+      let validatedEvidenceRef: DependencyEvidenceRef | null = null;
+      if (input.source === "documented") {
+        // We already checked input.evidenceRef is non-empty in the pre-transaction
+        // validation. Re-assert here for type narrowing.
+        const ref = input.evidenceRef!;
+
+        // 1. Fetch the strategy version to get countryId
+        const strategyVersion = await tx.strategyVersion.findFirst({
+          where: { id: input.strategyAlternativeId, tenantId },
+          select: { id: true, metadata: true },
+        });
+        if (!strategyVersion) {
+          throw new DependencyValidationError(
+            `Strategy version ${input.strategyAlternativeId} not found in tenant ${tenantId}. ` +
+            `Cannot validate evidence scope without the strategy version.`
+          );
+        }
+        const svMeta = (strategyVersion.metadata ?? {}) as Record<string, unknown>;
+        const inputSnapshot = (svMeta.inputSnapshot ?? {}) as Record<string, unknown>;
+        const strategyCountryId = typeof inputSnapshot.countryId === "string"
+          ? inputSnapshot.countryId : null;
+        if (!strategyCountryId) {
+          throw new DependencyValidationError(
+            `Strategy version ${input.strategyAlternativeId} has no countryId in metadata.inputSnapshot. ` +
+            `Cannot validate evidence country scope. This indicates a corrupted strategy version ` +
+            `(composer should always set inputSnapshot.countryId).`
+          );
+        }
+
+        // 2. Verify the evidence exists in tenant scope (RLS enforces tenant isolation)
+        const evidence = await tx.evidence.findFirst({
+          where: { id: ref.evidenceId, tenantId },
+          select: { id: true, metadata: true, sourceId: true, source: { select: { code: true } } },
+        });
+        if (!evidence) {
+          throw new DependencyValidationError(
+            `Evidence ${ref.evidenceId} not found in tenant ${tenantId}. ` +
+            `Cannot use a non-existent evidence reference as documentation. ` +
+            `Cross-tenant evidence references are not allowed.`
+          );
+        }
+
+        // 3. Fail-closed: evidence MUST have metadata.countryId
+        const evMeta = (evidence.metadata ?? {}) as Record<string, unknown>;
+        const evidenceCountryId = typeof evMeta.countryId === "string"
+          ? evMeta.countryId : null;
+        if (!evidenceCountryId) {
+          throw new DependencyValidationError(
+            `Evidence ${ref.evidenceId} has no metadata.countryId. ` +
+            `Fail-closed policy: evidence must be explicitly attributed to a country. ` +
+            `Unattributed evidence cannot be used as documentation for a dependency edge.`
+          );
+        }
+
+        // 4. Cross-country evidence is rejected
+        if (evidenceCountryId !== strategyCountryId) {
+          throw new DependencyValidationError(
+            `Evidence ${ref.evidenceId} belongs to country ${evidenceCountryId}, ` +
+            `but strategy version ${input.strategyAlternativeId} is for country ${strategyCountryId}. ` +
+            `Cross-country evidence references are not allowed.`
+          );
+        }
+
+        // Evidence is valid and in scope. Normalize the evidenceRef for storage.
+        // Use the source code from the evidence's source if available (more
+        // reliable than the caller-supplied sourceCode).
+        validatedEvidenceRef = {
+          evidenceId: ref.evidenceId,
+          claim: ref.claim,
+          sourceCode: evidence.source?.code ?? ref.sourceCode ?? null,
+        };
+      }
+
       // === IDEMPOTENT RESUME — check if the same edge already exists ===
       const existing = await tx.dependency.findFirst({
         where: {
@@ -709,6 +890,22 @@ export async function addDependency(
 
       // === INSERT ===
       try {
+        const metadata: Record<string, unknown> = {
+          source: input.source,
+          simulated: input.source === "simulated",
+          strategyVersionId: input.strategyAlternativeId, // denormalized for audit
+          createdAt: new Date().toISOString(),
+        };
+        // FIX-1: store the validated evidenceRef in metadata for documented edges.
+        // This is the verifiable provenance trail — anyone reading the edge
+        // can follow the evidenceId to the actual Evidence row.
+        if (validatedEvidenceRef) {
+          metadata.evidenceRef = {
+            evidenceId: validatedEvidenceRef.evidenceId,
+            claim: validatedEvidenceRef.claim,
+            sourceCode: validatedEvidenceRef.sourceCode,
+          };
+        }
         const created = await tx.dependency.create({
           data: {
             tenantId,
@@ -716,12 +913,7 @@ export async function addDependency(
             toProgramId: input.toProgramId,
             type: input.type,
             rationale: input.rationale,
-            metadata: {
-              source: input.source,
-              simulated: input.source === "simulated",
-              strategyVersionId: input.strategyAlternativeId, // denormalized for audit
-              createdAt: new Date().toISOString(),
-            } as unknown as Prisma.InputJsonValue,
+            metadata: metadata as unknown as Prisma.InputJsonValue,
           },
         });
         return toPortfolioEdge(created);

@@ -243,14 +243,17 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     // Need at least 2 programs to add an edge
     expect(programs.length).toBeGreaterThanOrEqual(2);
 
-    // Add one edge to verify the edge contract
+    // Add one edge to verify the edge contract.
+    // FIX-2 direction convention: fromProgramId (p1) is the PREREQUISITE,
+    // toProgramId (p2) is the DEPENDENT. So edge p1 → p2 (requires) means
+    // p1 must be done before p2; "p2 requires p1's outputs".
     const [p1, p2] = programs;
     const edge = await addDependency(session, {
       strategyAlternativeId: versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
-      rationale: "[FICTIONAL TEST FIXTURE] p1 requires p2's outputs before it can proceed.",
+      rationale: "[FICTIONAL TEST FIXTURE] p1 is a prerequisite for p2 — p2 requires p1's outputs before it can proceed.",
       source: "simulated",
     });
 
@@ -262,6 +265,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     expect(edge.rationale).toBeTruthy();
     expect(edge.source).toBe("simulated");
     expect(edge.simulated).toBe(true);
+    expect(edge.evidenceRef).toBeNull(); // FIX-1: simulated edges have no evidenceRef
     expect(edge.createdAt).toBeInstanceOf(Date);
 
     // Rebuild portfolio and verify nodes + edges
@@ -307,7 +311,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
-      rationale: "[FICTIONAL] Program p1 requires p2's irrigation outputs before expanding cultivation.",
+      rationale: "[FICTIONAL] p1 is a prerequisite for p2 — p2 requires p1's irrigation outputs before expanding cultivation.",
       source: "simulated",
     });
 
@@ -495,23 +499,26 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
 
     const [p1, p2] = programs;
 
-    // Add p1 → p2 (requires) — should succeed
+    // Add p1 → p2 (requires) — should succeed.
+    // FIX-2: edge p1 → p2 means p1 is prerequisite, p2 depends on p1.
     await addDependency(session, {
       strategyAlternativeId: versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
-      rationale: "[FICTIONAL] p1 requires p2's outputs.",
+      rationale: "[FICTIONAL] p1 is a prerequisite for p2 — p2 depends on p1's outputs.",
       source: "simulated",
     });
 
-    // Now try p2 → p1 (requires) — should fail (would close a cycle)
+    // Now try p2 → p1 (requires) — should fail (would close a cycle).
+    // This edge would assert "p2 is a prerequisite for p1", but p1 is already
+    // a prerequisite for p2. Adding it creates a circular dependency.
     await expect(addDependency(session, {
       strategyAlternativeId: versionId,
       fromProgramId: p2!.programId,
       toProgramId: p1!.programId,
       type: "requires",
-      rationale: "[FICTIONAL] p2 requires p1's outputs — but this would create a cycle.",
+      rationale: "[FICTIONAL] p2 is a prerequisite for p1 — but this would create a cycle (p1 → p2 → p1).",
       source: "simulated",
     })).rejects.toThrow(/cycle/i);
 
@@ -538,14 +545,16 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     const programs = await ensureProgramCount(session, setup.versionId, 3);
     expect(programs.length).toBeGreaterThanOrEqual(3);
 
-    // Build a chain p1 → p2 → p3 (requires)
+    // Build a chain p1 → p2 → p3 (requires).
+    // FIX-2 direction convention: each edge A → B means A is prerequisite, B is dependent.
+    // So p1 precedes p2, p2 precedes p3, in execution order.
     const [p1, p2, p3] = programs;
     await addDependency(session, {
       strategyAlternativeId: setup.versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
-      rationale: "[FICTIONAL] p1 → p2",
+      rationale: "[FICTIONAL] p1 is a prerequisite for p2 (p1 precedes p2 in execution order).",
       source: "simulated",
     });
     await addDependency(session, {
@@ -553,13 +562,14 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       fromProgramId: p2!.programId,
       toProgramId: p3!.programId,
       type: "requires",
-      rationale: "[FICTIONAL] p2 → p3",
+      rationale: "[FICTIONAL] p2 is a prerequisite for p3 (p2 precedes p3 in execution order).",
       source: "simulated",
     });
 
     const portfolio = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
 
-    // Critical path should be the longest chain: p1 → p2 → p3
+    // Critical path should be the longest chain: p1 → p2 → p3 (topological order).
+    // p1 is first (no prerequisites), p2 depends on p1, p3 depends on p2.
     expect(portfolio.criticalPath.length).toBe(3);
     expect(portfolio.criticalPath[0]).toBe(p1!.programId);
     expect(portfolio.criticalPath[1]).toBe(p2!.programId);
@@ -799,7 +809,9 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
 
     const [p1, p2] = programs;
 
-    // FICTIONAL `requires` example: p1 requires p2's outputs.
+    // FICTIONAL `requires` example.
+    // FIX-2 direction convention: edge p1 → p2 (requires) means p1 is the
+    // PREREQUISITE and p2 is the DEPENDENT. So "p2 requires p1's outputs".
     // This is simulated — Demolandia does not have documented cross-program
     // dependency relations. The rationale explicitly says so.
     const requiresEdge = await addDependency(session, {
@@ -808,8 +820,9 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       toProgramId: p2!.programId,
       type: "requires",
       rationale:
-        "[FICTIONAL FIXTURE] Simulated: program '" + p1!.title + "' is assumed to require " +
-        "outputs of program '" + p2!.title + "' before it can scale. " +
+        "[FICTIONAL FIXTURE] Simulated: program '" + p1!.title + "' is assumed to be a prerequisite " +
+        "for program '" + p2!.title + "' — p2 is assumed to require p1's outputs before it can scale. " +
+        "Direction: fromProgramId (p1) is the prerequisite, toProgramId (p2) is the dependent. " +
         "No real-world documentation supports this relation — it is a placeholder " +
         "for testing the portfolio engine and would be replaced by evidence-grounded " +
         "relations in a real deployment.",
@@ -817,8 +830,11 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     });
     expect(requiresEdge.simulated).toBe(true);
     expect(requiresEdge.source).toBe("simulated");
+    expect(requiresEdge.evidenceRef).toBeNull(); // FIX-1: simulated edges have no evidenceRef
 
-    // FICTIONAL `conflicts` example: p1 and p2 conflict (resource competition).
+    // FICTIONAL `conflicts` example: p2 and p1 conflict (resource competition).
+    // For conflicts, direction is informational only — both directions are
+    // allowed and do NOT participate in cycle detection.
     const conflictsEdge = await addDependency(session, {
       strategyAlternativeId: setup.versionId,
       fromProgramId: p2!.programId,
@@ -827,12 +843,14 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       rationale:
         "[FICTIONAL FIXTURE] Simulated: programs '" + p2!.title + "' and '" + p1!.title + "' " +
         "are assumed to compete for the same resource pool. No real-world documentation " +
-        "supports this conflict — it is a placeholder for testing the conflicts edge type.",
+        "supports this conflict — it is a placeholder for testing the conflicts edge type. " +
+        "Direction is informational for conflicts; bidirectional conflict edges are allowed.",
       source: "simulated",
     });
     expect(conflictsEdge.simulated).toBe(true);
     expect(conflictsEdge.source).toBe("simulated");
     expect(conflictsEdge.type).toBe("conflicts");
+    expect(conflictsEdge.evidenceRef).toBeNull(); // FIX-1: simulated edges have no evidenceRef
 
     // Verify the portfolio reflects both edges correctly.
     const portfolio = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
@@ -852,5 +870,345 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     expect(portfolio.criticalPath.length).toBe(2);
     expect(portfolio.criticalPath[0]).toBe(p1!.programId);
     expect(portfolio.criticalPath[1]).toBe(p2!.programId);
+  });
+
+  // ============================================================
+  // 14. FIX-2: CHAIN ORDERING — A → B → C means A precedes B, B precedes C
+  // ------------------------------------------------------------
+  // Explicit verification of the direction convention. This test
+  // documents the semantic contract: in a requires/enables chain
+  // A → B → C, A is the earliest prerequisite and C is the latest
+  // dependent. The critical path returns programIds in topological
+  // order (earliest first).
+  // ============================================================
+  it("14. FIX-2: chain A → B → C means A precedes B, B precedes C (topological order)", async () => {
+    const { addDependency, buildPortfolio } = await import("@/lib/state-builder/portfolio-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
+    );
+    // Need 3 programs for a 3-node chain
+    const programs = await ensureProgramCount(session, setup.versionId, 3);
+    expect(programs.length).toBeGreaterThanOrEqual(3);
+
+    const [A, B, C] = programs;
+
+    // Build chain A → B → C using `enables` (alternative ordering type).
+    // FIX-2: A → B (enables) means A's outputs enable B. A is the enabler
+    // (prerequisite), B is enabled (dependent). Same direction convention
+    // as `requires`.
+    await addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: A!.programId,
+      toProgramId: B!.programId,
+      type: "enables",
+      rationale: "[FICTIONAL FIX-2] A's outputs enable B — A is the enabler, B is enabled by A.",
+      source: "simulated",
+    });
+    await addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: B!.programId,
+      toProgramId: C!.programId,
+      type: "enables",
+      rationale: "[FICTIONAL FIX-2] B's outputs enable C — B is the enabler, C is enabled by B.",
+      source: "simulated",
+    });
+
+    const portfolio = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
+
+    // The critical path MUST be [A, B, C] — topological order, earliest first.
+    // This is the FIX-2 contract: A precedes B, B precedes C.
+    expect(portfolio.criticalPath).toEqual([A!.programId, B!.programId, C!.programId]);
+
+    // The reverse direction (C → B → A) would be WRONG and indicates a bug.
+    expect(portfolio.criticalPath).not.toEqual([C!.programId, B!.programId, A!.programId]);
+
+    // No cycles in a clean chain.
+    expect(portfolio.cycles).toEqual([]);
+
+    // Now verify that adding C → A (which would close a cycle A → B → C → A)
+    // is rejected. This confirms the direction convention is enforced: C is
+    // the LATEST dependent, it cannot be a prerequisite for A (the earliest).
+    await expect(addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: C!.programId,
+      toProgramId: A!.programId,
+      type: "requires",
+      rationale: "[FICTIONAL FIX-2] C as prerequisite for A — would close cycle A → B → C → A.",
+      source: "simulated",
+    })).rejects.toThrow(/cycle/i);
+
+    // Verify the cycle-creating edge was NOT stored — portfolio still has 2 edges.
+    const portfolio2 = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
+    expect(portfolio2.edges.length).toBe(2);
+    expect(portfolio2.cycles).toEqual([]);
+  });
+
+  // ============================================================
+  // 15. FIX-1: source="documented" REQUIRES an evidenceRef
+  // ------------------------------------------------------------
+  // Rejects documented edges with no evidence, empty evidenceId,
+  // or empty claim. A rationale text alone does not constitute
+  // documentation.
+  // ============================================================
+  it("15. FIX-1: rejects source='documented' without a valid evidenceRef", async () => {
+    const { addDependency } = await import("@/lib/state-builder/portfolio-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [p1, p2] = programs;
+
+    // 15a. No evidenceRef at all
+    await expect(addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "documented relation without evidence — should be rejected",
+      source: "documented",
+      // evidenceRef omitted
+    })).rejects.toThrow(/source="documented" requires an evidenceRef/i);
+
+    // 15b. evidenceRef with empty evidenceId
+    await expect(addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "documented relation with empty evidenceId — should be rejected",
+      source: "documented",
+      evidenceRef: { evidenceId: "", claim: "some claim", sourceCode: null },
+    })).rejects.toThrow(/source="documented" requires an evidenceRef/i);
+
+    // 15c. evidenceRef with empty claim
+    await expect(addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "documented relation with empty claim — should be rejected",
+      source: "documented",
+      evidenceRef: { evidenceId: "some-id", claim: "  ", sourceCode: null },
+    })).rejects.toThrow(/source="documented" requires an evidenceRef/i);
+  });
+
+  // ============================================================
+  // 16. FIX-1: source="human" / "simulated" must NOT carry evidenceRef
+  // ------------------------------------------------------------
+  // Allowing evidenceRef on non-documented edges would blur the
+  // provenance distinction.
+  // ============================================================
+  it("16. FIX-1: rejects evidenceRef on source='human' or 'simulated' edges", async () => {
+    const { addDependency } = await import("@/lib/state-builder/portfolio-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [p1, p2] = programs;
+
+    // 16a. source="human" with evidenceRef — rejected
+    await expect(addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "human assertion with evidence — should be rejected (use source=documented)",
+      source: "human",
+      evidenceRef: { evidenceId: "fake-id", claim: "fake claim", sourceCode: null },
+    })).rejects.toThrow(/source="human" must not include an evidenceRef/i);
+
+    // 16b. source="simulated" with evidenceRef — rejected
+    await expect(addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "simulated relation with evidence — should be rejected",
+      source: "simulated",
+      evidenceRef: { evidenceId: "fake-id", claim: "fake claim", sourceCode: null },
+    })).rejects.toThrow(/source="simulated" must not include an evidenceRef/i);
+
+    // 16c. source="human" WITHOUT evidenceRef — accepted (human assertion, no evidence)
+    const humanEdge = await addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "[FICTIONAL] human assertion — p1 is a prerequisite for p2 (no evidence cited).",
+      source: "human",
+    });
+    expect(humanEdge.source).toBe("human");
+    expect(humanEdge.simulated).toBe(false);
+    expect(humanEdge.evidenceRef).toBeNull();
+  });
+
+  // ============================================================
+  // 17. FIX-1: source="documented" with non-existent evidence is rejected
+  // ============================================================
+  it("17. FIX-1: rejects source='documented' with non-existent evidenceId", async () => {
+    const { addDependency } = await import("@/lib/state-builder/portfolio-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [p1, p2] = programs;
+
+    await expect(addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "documented relation citing non-existent evidence — should be rejected",
+      source: "documented",
+      evidenceRef: {
+        evidenceId: "nonexistent-evidence-id-12345",
+        claim: "this evidence does not exist",
+        sourceCode: null,
+      },
+    })).rejects.toThrow(/not found in tenant/i);
+  });
+
+  // ============================================================
+  // 18. FIX-1: source="documented" with out-of-scope (cross-country) evidence is rejected
+  // ============================================================
+  it("18. FIX-1: rejects source='documented' with cross-country evidence", async () => {
+    const { addDependency } = await import("@/lib/state-builder/portfolio-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [p1, p2] = programs;
+
+    // Create evidence in a DIFFERENT country (P04 Testland from test 3 pattern)
+    const otherCountry = await adminClient.country.upsert({
+      where: { iso3: "P04" },
+      update: {},
+      create: { iso3: "P04", iso2: "P4", displayName: "P04 Testland", status: "active" },
+    });
+    const otherEvidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId, // same tenant!
+        claim: "Cross-country evidence for FIX-1 test",
+        type: "neutral",
+        verificationStatus: "unverified",
+        metadata: {
+          countryId: otherCountry.id, // different country!
+          sector: "agriculture",
+          fictional: true,
+          seededBy: "01-05-FIX-1-test",
+        } as never,
+      },
+    });
+
+    try {
+      // The strategy version is for Demolandia (countryId from inputSnapshot),
+      // but the evidence is for P04 Testland. Must be rejected.
+      await expect(addDependency(session, {
+        strategyAlternativeId: setup.versionId,
+        fromProgramId: p1!.programId,
+        toProgramId: p2!.programId,
+        type: "requires",
+        rationale: "documented relation citing cross-country evidence — should be rejected",
+        source: "documented",
+        evidenceRef: {
+          evidenceId: otherEvidence.id,
+          claim: "this evidence belongs to a different country",
+          sourceCode: null,
+        },
+      })).rejects.toThrow(/Cross-country evidence references are not allowed/i);
+    } finally {
+      await adminClient.evidence.delete({ where: { id: otherEvidence.id } });
+      await adminClient.country.deleteMany({ where: { iso3: "P04" } });
+    }
+  });
+
+  // ============================================================
+  // 19. FIX-1: source="documented" with valid in-scope evidence is ACCEPTED
+  //            and the evidenceRef is stored + exposed on the edge
+  // ============================================================
+  it("19. FIX-1: accepts source='documented' with valid in-scope evidence + stores evidenceRef", async () => {
+    const { addDependency, buildPortfolio } = await import("@/lib/state-builder/portfolio-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [p1, p2] = programs;
+
+    // Fetch a real Demolandia evidence (same tenant + same country).
+    // The strategy version's countryId comes from metadata.inputSnapshot.countryId,
+    // which the composer sets to the Demolandia countryId.
+    const realEvidence = await adminClient.evidence.findFirst({
+      where: { tenantId: tenantAId },
+    });
+    if (!realEvidence) {
+      throw new Error("Test setup failed: no evidence seeded for tenantA");
+    }
+    // Verify the evidence has a countryId in metadata (it should — seed sets it)
+    const evMeta = (realEvidence.metadata ?? {}) as Record<string, unknown>;
+    expect(typeof evMeta.countryId).toBe("string");
+
+    // Add a documented edge citing this real evidence.
+    // FIX-2 direction: p1 → p2 means p1 is prerequisite, p2 depends on p1.
+    const edge = await addDependency(session, {
+      strategyAlternativeId: setup.versionId,
+      fromProgramId: p1!.programId,
+      toProgramId: p2!.programId,
+      type: "requires",
+      rationale: "[DOCUMENTED] p1 is a prerequisite for p2 — evidence cited as examinable support.",
+      source: "documented",
+      evidenceRef: {
+        evidenceId: realEvidence.id,
+        claim: "This evidence supports the documented prerequisite relation between p1 and p2.",
+        sourceCode: null,
+      },
+    });
+
+    // The edge MUST expose the validated evidenceRef
+    expect(edge.source).toBe("documented");
+    expect(edge.simulated).toBe(false);
+    expect(edge.evidenceRef).not.toBeNull();
+    expect(edge.evidenceRef!.evidenceId).toBe(realEvidence.id);
+    expect(edge.evidenceRef!.claim).toBeTruthy();
+
+    // Rebuild portfolio and verify the evidenceRef survives the round-trip
+    const portfolio = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
+    const portEdge = portfolio.edges.find((e) => e.id === edge.id);
+    expect(portEdge).toBeDefined();
+    expect(portEdge!.source).toBe("documented");
+    expect(portEdge!.simulated).toBe(false);
+    expect(portEdge!.evidenceRef).not.toBeNull();
+    expect(portEdge!.evidenceRef!.evidenceId).toBe(realEvidence.id);
+
+    // Verify the evidenceRef is also persisted in the DB metadata
+    const dbDep = await adminClient.dependency.findUnique({ where: { id: edge.id } });
+    const dbMeta = (dbDep!.metadata ?? {}) as Record<string, unknown>;
+    expect(dbMeta.source).toBe("documented");
+    expect(dbMeta.evidenceRef).toBeDefined();
+    const dbEvRef = dbMeta.evidenceRef as Record<string, unknown>;
+    expect(dbEvRef.evidenceId).toBe(realEvidence.id);
   });
 });
