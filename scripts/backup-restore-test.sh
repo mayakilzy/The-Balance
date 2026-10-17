@@ -210,12 +210,23 @@ rm -f "$CORRUPT_FILE"
 
 # Restore the valid backup again so the database is in a usable state
 # for any subsequent CI phases (e.g. full test suite).
+# This re-restore MUST succeed — if it fails, subsequent phases would
+# run against an empty/corrupt DB and produce misleading results.
+# We do NOT use `|| true` here: a failure must surface explicitly.
 echo "  Re-restoring valid backup for subsequent phases..."
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "DROP DATABASE IF EXISTS \"$DB_NAME\";" >/dev/null
 psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d postgres -c "CREATE DATABASE \"$DB_NAME\";" >/dev/null
+set +e
 pg_restore -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
   --no-owner \
-  "$BACKUP_FILE" >/dev/null 2>&1 || true
+  "$BACKUP_FILE" >/dev/null 2>&1
+RESTORE2_EXIT=$?
+set -e
+if [ "$RESTORE2_EXIT" -ne 0 ]; then
+  echo "FAIL: Re-restore of valid backup failed (exit code $RESTORE2_EXIT)"
+  rm -f "$BACKUP_FILE"
+  exit 1
+fi
 bash scripts/run-setup-roles.sh >/dev/null 2>&1
 
 # Cleanup
