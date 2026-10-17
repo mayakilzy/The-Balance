@@ -374,7 +374,7 @@ async function main() {
       extractionMethod: "manual",
       classification: "public",
       confidenceNotes: "High confidence — official World Bank statistics.",
-      metadata: { countryId: country.id, sector: "agriculture", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
+      metadata: { countryId: country.id, sector: "agriculture", indicatorName: "agricultural_gdp_growth_rate", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -391,7 +391,7 @@ async function main() {
       extractionMethod: "manual",
       classification: "public",
       confidenceNotes: "High confidence — independent IMF verification.",
-      metadata: { countryId: country.id, sector: "agriculture", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
+      metadata: { countryId: country.id, sector: "agriculture", indicatorName: "agricultural_gdp_growth_rate", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -409,7 +409,7 @@ async function main() {
       extractionMethod: "interview",
       classification: "public",
       confidenceNotes: "Anecdotal — needs further verification.",
-      metadata: { countryId: country.id, sector: "agriculture", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
+      metadata: { countryId: country.id, sector: "agriculture", indicatorName: "crop_yield", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -427,7 +427,7 @@ async function main() {
       extractionMethod: "wire",
       classification: "public",
       confidenceNotes: "Syndicated content — not independent from Reuters.",
-      metadata: { countryId: country.id, sector: "agriculture", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
+      metadata: { countryId: country.id, sector: "agriculture", indicatorName: "crop_yield", fictional: true, seededBy: "00-04-seed" } as unknown as Prisma.InputJsonValue,
     },
   });
 
@@ -543,7 +543,7 @@ async function main() {
       description:
         "Fictional objective: reduce Demolandia's unemployment rate from a fictional 14.5% baseline to 10% by 2030.",
       targetMetric: "unemployment_rate",
-      targetValue: "10",
+      targetValue: "10%",
       horizon: 5,
       status: "active",
       createdBy: adminUser.id,
@@ -556,7 +556,7 @@ async function main() {
       description:
         "Fictional objective: raise Demolandia's agricultural GDP growth from a fictional 4.2% to 6% per year.",
       targetMetric: "agricultural_gdp_growth_rate",
-      targetValue: "6",
+      targetValue: "6%",
       horizon: 5,
       status: "active",
       createdBy: adminUser.id,
@@ -569,7 +569,7 @@ async function main() {
       description:
         "Fictional objective: raise Demolandia's primary school enrollment from a fictional 88% to 95%.",
       targetMetric: "primary_school_enrollment_rate",
-      targetValue: "95",
+      targetValue: "95%",
       horizon: 7,
       status: "draft",
       createdBy: adminUser.id,
@@ -595,7 +595,7 @@ async function main() {
       description:
         "Fictional objective: keep Demolandia's annual inflation rate below 5% (coordinated with Central Bank).",
       targetMetric: "inflation_rate",
-      targetValue: "5",
+      targetValue: "5%",
       horizon: 3,
       status: "active",
       createdBy: adminUser.id,
@@ -636,7 +636,7 @@ async function main() {
       description:
         "Fictional objective: constrain Demolandia's monetary base growth to ≤8% per year.",
       targetMetric: "monetary_base_growth_rate",
-      targetValue: "8",
+      targetValue: "8%",
       horizon: 3,
       status: "active",
       createdBy: adminUser.id,
