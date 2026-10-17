@@ -437,11 +437,76 @@ export async function expandPrograms(
       summary,
     };
   }).catch(async (err) => {
-    // FIX-3: Handle P2002 outside the failed transaction (same pattern as Strategy Composer)
+    // FIX-3-LAST: Handle P2002 outside the failed transaction.
+    // The transaction is ABORTED in PostgreSQL — we cannot query within it.
+    // Instead of recursively re-calling expandPrograms (which could loop),
+    // we open a NEW transaction, find the winning program by (tenantId, strategyVersionId, title),
+    // and return the full result by reading all programs for this version.
     if (err && typeof err === "object" && "_p2002" in err) {
-      // Re-run expandPrograms — the idempotent findFirst will find the existing program
-      // This is safe because the second call will find the program created by the concurrent worker
-      return expandPrograms(session, input);
+      // New transaction to read the existing programs (created by the concurrent worker)
+      return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+        // Read ALL programs for this strategy version — the concurrent worker
+        // may have created some or all of them.
+        const allPrograms = await tx.program.findMany({
+          where: { tenantId, strategyVersionId: input.strategyAlternativeId },
+          orderBy: { title: "asc" },
+        });
+
+        if (allPrograms.length === 0) {
+          // The concurrent worker hasn't finished yet, or something went wrong.
+          // We do NOT retry — we return an honest error.
+          throw new Error(
+            `P2002 recovery: concurrent expansion detected but no existing programs found ` +
+            `for strategy version ${input.strategyAlternativeId}. The concurrent worker may ` +
+            `still be in progress. No retry loop — please retry manually.`
+          );
+        }
+
+        // Build the result from existing programs (same logic as getPrograms but inline)
+        const institutionIds = [...new Set(allPrograms.map((p) => p.owningInstitutionId).filter(Boolean))] as string[];
+        const institutions = institutionIds.length > 0
+          ? await tx.institution.findMany({ where: { id: { in: institutionIds } } })
+          : [];
+        const institutionMap = new Map(institutions.map((i) => [i.id, i]));
+
+        const programContracts: ProgramContract[] = allPrograms.map((p) => {
+          const meta = (p.metadata ?? {}) as unknown as Record<string, unknown>;
+          const inst = p.owningInstitutionId ? institutionMap.get(p.owningInstitutionId) : null;
+          return {
+            programId: p.id,
+            title: p.title,
+            sector: p.sector,
+            strategyVersionId: p.strategyVersionId,
+            owningInstitutionId: p.owningInstitutionId,
+            owningInstitutionCode: inst?.code ?? null,
+            owningInstitutionName: inst?.displayName ?? null,
+            legalMandateRef: p.legalMandateRef,
+            mandateGap: (meta.mandateGap as boolean) ?? true,
+            institutionAssignmentGap: (meta.institutionAssignmentGap as boolean) ?? true,
+            requiredCapabilities: (meta.requiredCapabilities as RequiredCapability[]) ?? [],
+            kpis: (meta.kpis as KPI[]) ?? [],
+            rationale: p.rationale ?? "",
+            evidenceRefs: (meta.evidenceRefs as ProgramContract["evidenceRefs"]) ?? [],
+            counterEvidence: (meta.counterEvidence as ProgramContract["counterEvidence"]) ?? [],
+            simulated: (meta.simulated as boolean) ?? true,
+            status: p.status,
+          };
+        });
+
+        const summary = {
+          totalPrograms: programContracts.length,
+          withInstitution: programContracts.filter((p) => p.owningInstitutionId !== null).length,
+          withMandateGap: programContracts.filter((p) => p.mandateGap).length,
+          withoutInstitution: programContracts.filter((p) => p.owningInstitutionId === null).length,
+          withInstitutionAssignmentGap: programContracts.filter((p) => p.institutionAssignmentGap).length,
+        };
+
+        return {
+          strategyVersionId: input.strategyAlternativeId,
+          programs: programContracts,
+          summary,
+        };
+      });
     }
     throw err;
   });

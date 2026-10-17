@@ -550,4 +550,48 @@ describeIntegration("01-04-FIX: Integrity Closure", () => {
     });
     expect(dbPrograms.length).toBe(result1.programs.length);
   });
+
+  // FIX-3-LAST: True concurrent expansion test
+  it("FIX-3-LAST: two concurrent expandPrograms calls → no duplicates, no partials", async () => {
+    const { expandPrograms } = await import("@/lib/state-builder/program-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const versionId = await getComposedVersionId(session, [objectiveAgricultureId, objectiveInflationId]);
+
+    // Launch two concurrent expandPrograms calls
+    const [result1, result2] = await Promise.all([
+      expandPrograms(session, { strategyAlternativeId: versionId }),
+      expandPrograms(session, { strategyAlternativeId: versionId }),
+    ]);
+
+    // Both should return programs
+    expect(result1.programs.length).toBeGreaterThan(0);
+    expect(result2.programs.length).toBeGreaterThan(0);
+
+    // Both should return the SAME number of programs
+    expect(result1.programs.length).toBe(result2.programs.length);
+
+    // Both should return the same program IDs (no duplicates)
+    const ids1 = new Set(result1.programs.map((p) => p.programId));
+    const ids2 = new Set(result2.programs.map((p) => p.programId));
+    expect(ids2).toEqual(ids1);
+
+    // Verify DB has exactly the expected number of programs (no duplicates, no partials)
+    const dbPrograms = await adminClient.program.findMany({
+      where: { tenantId: tenantAId, strategyVersionId: versionId },
+    });
+    expect(dbPrograms.length).toBe(result1.programs.length);
+
+    // All programs must be draft status
+    for (const prog of dbPrograms) {
+      expect(prog.status).toBe("draft");
+    }
+
+    // All programs must be linked to the correct strategy version
+    for (const prog of dbPrograms) {
+      expect(prog.strategyVersionId).toBe(versionId);
+    }
+  });
 });
