@@ -113,9 +113,9 @@ describeIntegration("Gap classification (measurable / partial / unknown)", () =>
     });
   });
 
-  it("agriculture objective → measurable gap (FULL baseline + matching indicator + both %)", async () => {
+  it("agriculture objective → partial gap (FULL baseline + matching indicator + counter-evidence)", async () => {
     const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
-    const { computeGaps } = await import("@/lib/state-builder/gap-analysis-service");
+    const { computeGaps } = await import("@lib/state-builder/gap-analysis-service");
     const session = makeSession({
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
@@ -128,14 +128,18 @@ describeIntegration("Gap classification (measurable / partial / unknown)", () =>
 
     const gap = report.gaps.find((g) => g.objectiveId === objectiveAgricultureId);
     expect(gap).toBeTruthy();
-    expect(gap!.gapType).toBe("measurable");
+    // FIX-3: agriculture has counter-evidence (Reuters + AP about crop yield decline)
+    // → FULL observability but counter-evidence for the metric → downgraded to 'partial'
+    expect(gap!.gapType).toBe("partial");
     expect(gap!.gapSize).toBeTruthy();
     expect(gap!.gapSize).toContain("percentage points");
     expect(gap!.unitMatch).toBe(true);
     // Current 4.2% vs target 6% → gap = 1.8 pp below target
     expect(gap!.gapDirection).toBe("below");
     expect(gap!.currentValue).toContain("4.2%");
-    expect(report.summary.closableGaps).toContain(objectiveAgricultureId);
+    // Notes should explain the downgrade
+    expect(gap!.notes.some((n) => n.includes("Counter-evidence") || n.includes("counter"))).toBe(true);
+    expect(report.summary.structuralGaps).toContain(objectiveAgricultureId);
   });
 
   it("inflation objective → partial gap (PARTIAL baseline + matching indicator)", async () => {
@@ -749,16 +753,23 @@ describeIntegration("Gap analysis idempotency + recompute", () => {
     });
   });
 
-  it("gap analysis fails gracefully if no baseline exists", async () => {
+  it("FIX-2: gap analysis computes a fresh baseline if none exists (no failure)", async () => {
     const { computeGaps } = await import("@/lib/state-builder/gap-analysis-service");
     const session = makeSession({
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
-    // No baseline computed yet
-    await expect(
-      computeGaps(session, { countryId, objectiveIds: [objectiveAgricultureId] })
-    ).rejects.toThrow(/No baseline found|Compute a baseline first/i);
+    // FIX-2: computeGaps now calls computeBaseline() internally — if no baseline
+    // exists, it computes one on-the-fly instead of failing.
+    const { report } = await computeGaps(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+    });
+
+    // Should succeed (baseline was computed automatically)
+    expect(report).toBeTruthy();
+    expect(report.gaps.length).toBeGreaterThan(0);
+    expect(report.baselineTaskId).toBeTruthy();
   });
 });
 
@@ -792,7 +803,7 @@ describeIntegration("Gap report structure + honesty", () => {
     expect(report.baselineTaskId).toBeTruthy();
   });
 
-  it("Demolandia example: measurable gap (agriculture) + unknown gap (education)", async () => {
+  it("Demolandia example: partial gap (agriculture, counter-evidence) + unknown gap (education)", async () => {
     const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
     const { computeGaps } = await import("@/lib/state-builder/gap-analysis-service");
     const session = makeSession({
@@ -805,9 +816,9 @@ describeIntegration("Gap report structure + honesty", () => {
       objectiveIds: [objectiveAgricultureId, objectiveEducationId],
     });
 
-    // Agriculture: measurable gap
+    // Agriculture: partial gap (FIX-3: FULL baseline but counter-evidence → downgraded)
     const agGap = report.gaps.find((g) => g.objectiveId === objectiveAgricultureId);
-    expect(agGap!.gapType).toBe("measurable");
+    expect(agGap!.gapType).toBe("partial");
     expect(agGap!.gapSize).toContain("percentage points");
     expect(agGap!.currentValue).toContain("4.2%");
 
@@ -818,7 +829,7 @@ describeIntegration("Gap report structure + honesty", () => {
     expect(eduGap!.currentMode).toBe("LOW");
 
     // Summary
-    expect(report.summary.closableGaps).toContain(objectiveAgricultureId);
+    expect(report.summary.structuralGaps).toContain(objectiveAgricultureId);
     expect(report.summary.unknownGaps).toContain(objectiveEducationId);
   });
 });
