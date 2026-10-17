@@ -27,6 +27,7 @@
 // ============================================================
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
+import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
 
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
@@ -98,40 +99,103 @@ beforeAll(async () => {
   const analystUser = await adminClient.user.findUnique({
     where: { email: "analyst@demolandia.test" },
   });
-  const reviewerUser = await adminClient.user.findUnique({
-    where: { email: "reviewer@demolandia.test" },
-  });
   const adminUser = await adminClient.user.findUnique({
     where: { email: "admin@demolandia.test" },
   });
-  if (!analystUser || !reviewerUser || !adminUser)
-    throw new Error("Test users not seeded.");
+  if (!analystUser || !adminUser)
+    throw new Error("Test users (analyst/admin) not seeded.");
   analystUserId = analystUser.id;
-  reviewerUserId = reviewerUser.id;
   adminUserId = adminUser.id;
 
+  // Create a reviewer user (G01 seed only creates admin + analyst — see G01 pattern)
+  const reviewer = await adminClient.user.upsert({
+    where: { email: "g02-reviewer@demolandia.test" },
+    update: {},
+    create: {
+      email: "g02-reviewer@demolandia.test",
+      name: "G02 Reviewer",
+      passwordHash: await hashPassword("Test1234!"),
+      status: "active",
+    },
+  });
+  await adminClient.membership.upsert({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+    update: { status: "active", roleCode: "reviewer" },
+    create: {
+      userId: reviewer.id,
+      tenantId: tenantAId,
+      roleCode: "reviewer",
+      status: "active",
+    },
+  });
+  reviewerUserId = reviewer.id;
+
   // Fetch (or create) an approved StrategyVersion for Tenant A
-  // GROUP 01's seed should have created one; we look for it.
-  const sv = await adminClient.strategyVersion.findFirst({
+  // GROUP 01's seed does NOT create one; we create minimal test fixtures.
+  let sv = await adminClient.strategyVersion.findFirst({
     where: { tenantId: tenantAId, status: "approved" },
   });
-  if (!sv)
-    throw new Error(
-      "No approved StrategyVersion found for tenantA. GROUP 01 seed must produce one."
-    );
+  if (!sv) {
+    // Create a Strategy + approved StrategyVersion directly (adminClient bypasses RLS)
+    const strategy = await adminClient.strategy.create({
+      data: {
+        tenantId: tenantAId,
+        title: "G02 Test Strategy",
+        createdBy: analystUserId,
+      },
+    });
+    sv = await adminClient.strategyVersion.create({
+      data: {
+        strategyId: strategy.id,
+        tenantId: tenantAId,
+        versionNumber: 1,
+        content: "{}",
+        status: "approved",
+        approvedBy: adminUserId,
+        approvedAt: new Date(),
+        approvalNotes: "G02 test fixture — auto-approved",
+        metadata: { simulated: true, source: "g02-test-fixture" },
+        createdBy: analystUserId,
+      },
+    });
+  }
   strategyVersionId = sv.id;
 
-  // Fetch one objective + one program for this strategy version
-  const obj = await adminClient.objective.findFirst({
+  // Fetch (or create) an objective for Tenant A
+  let obj = await adminClient.objective.findFirst({
     where: { tenantId: tenantAId },
   });
-  if (!obj) throw new Error("No objective found for tenantA.");
+  if (!obj) {
+    obj = await adminClient.objective.create({
+      data: {
+        tenantId: tenantAId,
+        countryId,
+        title: "G02 Test Objective",
+        targetMetric: "test_metric",
+        targetValue: "5.0",
+        horizon: 5,
+        status: "active",
+        createdBy: analystUserId,
+      },
+    });
+  }
   objectiveId = obj.id;
 
-  const prog = await adminClient.program.findFirst({
+  // Fetch (or create) a program for this strategy version
+  let prog = await adminClient.program.findFirst({
     where: { tenantId: tenantAId, strategyVersionId },
   });
-  if (!prog) throw new Error("No program found for tenantA's strategy version.");
+  if (!prog) {
+    prog = await adminClient.program.create({
+      data: {
+        tenantId: tenantAId,
+        strategyVersionId,
+        title: "G02 Test Program",
+        sector: "test",
+        status: "active",
+      },
+    });
+  }
   programId = prog.id;
 
   // Ensure synthetic sources exist (or create them)
