@@ -1,8 +1,8 @@
 # GROUP 01 — Acceptance Matrix
 
-**Final SHA:** `4aa7de238f01a318c040c3775785788664ee7baf`
-**CI:** https://github.com/mayakilzy/The-Balance/actions/runs/39053060987
-**Recovery:** https://github.com/mayakilzy/The-Balance/actions/runs/39053060971
+**Final SHA:** `9dc88d7349b04fc3e2515a634ed9262a76d12e86`
+**CI:** https://github.com/mayakilzy/The-Balance/actions/runs/39053937234
+**Recovery:** https://github.com/mayakilzy/The-Balance/actions/runs/39053937226
 
 ## Mission Acceptance
 
@@ -18,7 +18,7 @@
 | 01-07 | Implementation Roadmap & Timeline | APPROVED | `a7d113a` |
 | 01-08 | Scenario Comparison Engine | APPROVED | `110ed14` |
 | 01-09 | Development Advisor v1 | APPROVED | `bc61940` |
-| 01-10 | Human Approval Workflow + T1 Integration | PENDING_REVIEW | `4aa7de2` |
+| 01-10 | Human Approval Workflow + T1 Integration | PENDING_REVIEW | `9dc88d7` |
 
 ## T1 Positive Tests (API/Service-Level)
 
@@ -53,7 +53,7 @@
 | Test | Description | Status |
 |------|-------------|--------|
 | FIX-1 | Contiguous T1 chain (same version: compose→roadmap→advisor→approval) | PASS |
-| FIX-1b | Atomic rollback (re-approval rejected, no partial state) | PASS |
+| FIX-1b | Atomic rollback (re-approval rejected, no partial state) | PASS (structural — forced failure injection NOT implemented) |
 | FIX-2 | PermissionDeniedError always re-thrown (not audit error) | PASS |
 | FIX-2b | Suspended membership → denied + authorization error preserved | PASS |
 
@@ -84,6 +84,6 @@
 | Metric | Count |
 |--------|-------|
 | Total test files | 32 (31 passed + 1 skipped) |
-| Total tests | 542 (532 passed + 10 skipped + 0 failed) |
+| Total tests | 546 (536 passed + 10 skipped + 0 failed) |
 | G01-specific test files | 11 (baseline, gap-analysis, strategy-composer, program-contracts, portfolio, budget, roadmap, comparison, advisor, t1-integration, browser) |
 | Migrations | 20 (16 G00 + 4 G01) |

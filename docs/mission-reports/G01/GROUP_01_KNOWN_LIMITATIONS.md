@@ -1,6 +1,6 @@
 # GROUP 01 — Known Limitations
 
-**Final SHA:** `4aa7de238f01a318c040c3775785788664ee7baf`
+**Final SHA:** `9dc88d7349b04fc3e2515a634ed9262a76d12e86`
 
 ## 1. Simulated Intelligence (StubProvider)
 
@@ -69,6 +69,6 @@ Most tests use Tenant A (DML-MOP-TENANT). Cross-tenant isolation is verified via
 
 The advisor verifies that counter-evidence Evidence rows exist in the tenant, but does not verify that they belong to the same country as the strategy. This is a known gap — the country scope check for counter-evidence Evidence rows should be added in GROUP 02 or a future hardening pass.
 
-## 11. Audit Failure Injection Not Tested
+## 11. Audit Failure Injection Not Implemented
 
-The atomic audit contract (writeAuditTx inside the approval transaction) is verified structurally — a successful approval produces all three layers (version status + event + audit_log), and a re-approval fails atomically (no partial state). However, we have not injected a forced writeAuditTx failure to verify that the transaction rolls back. This would require mocking the Prisma client, which is not currently set up. The structural verification (writeAuditTx is called inside withAuthenticatedTenant, before the return) provides strong evidence of atomicity, but a forced-failure test would be more definitive.
+The atomic audit contract (writeAuditTx inside the approval transaction) is verified **structurally and via re-approval rejection** — a successful approval produces all three layers (version status + event + audit_log), and a re-approval fails atomically (no partial state: no extra event, version stays approved). However, **forced failure injection of writeAuditTx was NOT implemented** — we did not simulate a deliberate audit_log write failure to verify that the transaction rolls back, leaving the version in `draft` with no event and no audit row. This would require mocking the Prisma transaction client, which is not currently set up in the test infrastructure. The structural verification (writeAuditTx is called inside `withAuthenticatedTenant`, before the `return`) provides strong evidence of atomicity, but a forced-failure test would be more definitive. This is an honest limitation, not a hidden gap.

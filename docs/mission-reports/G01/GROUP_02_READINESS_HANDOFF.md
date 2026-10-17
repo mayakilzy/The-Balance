@@ -1,6 +1,6 @@
 # GROUP 02 Readiness Handoff
 
-**From:** GROUP 01 (State Builder) — Final SHA: `4aa7de238f01a318c040c3775785788664ee7baf`
+**From:** GROUP 01 (State Builder) — Final SHA: `9dc88d7349b04fc3e2515a634ed9262a76d12e86`
 **To:** GROUP 02 (State Observatory)
 
 ## GROUP 01 Status
@@ -73,14 +73,14 @@ GROUP 02 (State Observatory) is expected to:
 5. **Counter-evidence country scope** — not fully verified (see Known Limitations #10).
 6. **Evidence support assessment** — `supportAssessment = "not-assessed"` — GROUP 02 or a future hardening pass should add a claim-support verification model.
 7. **Browser UI for full T1 journey** — not implemented in GROUP 01. GROUP 02 or a dedicated UI group should build it.
-8. **Audit failure injection test** — structural verification only; a forced-failure test would be more definitive.
+8. **Audit failure injection test** — structural verification only; forced failure injection of writeAuditTx was NOT implemented. See Known Limitations #11.
 
 ## Conditions for Starting GROUP 02
 
 1. GROUP 01 = APPROVED (pending review)
 2. The T1 journey works end-to-end at the API level (baseline → advisory → human approval)
 3. The approval workflow is atomic (audit_log + domain event in the same transaction)
-4. All 532+ tests pass with 0 failures
+4. All 536+ tests pass with 0 failures
 5. RLS + RBAC + tenant isolation verified
 6. The `approveStrategyVersion` function includes atomic `writeAuditTx` (01-10 modification)
 7. The `approval-service.ts` wrapper logs denied attempts to audit_log and preserves the original PermissionDeniedError

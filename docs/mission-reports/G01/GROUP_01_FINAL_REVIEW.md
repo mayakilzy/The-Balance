@@ -4,10 +4,10 @@
 
 **Group:** 01 — State Builder
 **Missions:** 01-00 through 01-10
-**Final SHA:** `4aa7de238f01a318c040c3775785788664ee7baf`
-**CI:** PASS — https://github.com/mayakilzy/The-Balance/actions/runs/39053060987
-**Recovery:** PASS — https://github.com/mayakilzy/The-Balance/actions/runs/39053060971
-**Total Tests:** 532 passed | 10 skipped (HTTP E2E in non-browser contexts) | 0 failed
+**Final SHA:** `9dc88d7349b04fc3e2515a634ed9262a76d12e86`
+**CI:** PASS — https://github.com/mayakilzy/The-Balance/actions/runs/39053937234
+**Recovery:** PASS — https://github.com/mayakilzy/The-Balance/actions/runs/39053937226
+**Total Tests:** 536 passed | 10 skipped (HTTP E2E in non-browser contexts) | 0 failed
 
 ## Mission Status
 
@@ -23,7 +23,7 @@
 | 01-07 | Implementation Roadmap & Timeline | APPROVED | `a7d113a` |
 | 01-08 | Scenario Comparison Engine | APPROVED | `110ed14` |
 | 01-09 | Development Advisor v1 | APPROVED | `bc61940` |
-| 01-10 | Human Approval Workflow + T1 Integration | PENDING_REVIEW | `4aa7de2` |
+| 01-10 | Human Approval Workflow + T1 Integration | PENDING_REVIEW | `9dc88d7` |
 
 ## T1 Integration Test Results
 
@@ -35,7 +35,7 @@
 - **T1.13 (Handover):** PASS — new reviewer can view approved strategy + audit trail
 - **T1.N1–T1.N5 (Negative tests):** PASS — no auto-approval, cross-tenant RLS, insufficient evidence, contradictory evidence, revoked membership
 - **FIX-1 (Contiguous chain):** PASS — same version from compose to approval, including buildRoadmap
-- **FIX-1b (Atomic rollback):** PASS — re-approval rejected atomically, no partial state
+- **FIX-1b (Atomic rollback):** PASS (structural) — re-approval rejected atomically, no partial state. The atomicity of writeAuditTx inside the approval transaction is verified structurally (writeAuditTx is called inside withAuthenticatedTenant, before the return) and via the re-approval rejection test. However, **forced failure injection of writeAuditTx was NOT implemented** — we did not simulate a deliberate audit_log write failure to verify the transaction rolls back. This is a known limitation (see Known Limitations #11).
 - **FIX-2 (Error preservation):** PASS — PermissionDeniedError always re-thrown, not audit error
 - **FIX-2b (Suspended membership):** PASS — denied + authorization error preserved
 - **Audit Independence:** PASS — audit_log and events are different tables with different structures
