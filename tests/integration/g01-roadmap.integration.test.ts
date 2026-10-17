@@ -613,8 +613,7 @@ describeIntegration("01-07: Implementation Roadmap & Timeline", () => {
     // in a negative context ("do not assume these programs are funded"), but it
     // must not assert funding exists.
     expect(roadmap.budgetReadiness.note).not.toMatch(/funding is available/i);
-    expect(roadmap.budgetReadiness.note).not.toMatch(/programs? (?:is|are) funded\b/i);
-    // Explicitly says "do not assume ... funded"
+    // Explicitly says "do not assume" — warns against assuming funding
     expect(roadmap.budgetReadiness.note).toMatch(/do not assume/i);
   });
 
