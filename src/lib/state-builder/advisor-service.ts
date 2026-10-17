@@ -491,11 +491,28 @@ function buildAdvisoryReport(
   // Counter-evidence is evidence that CONTRADICTS or WEAKENS a strategic claim.
   // Refuted evidence is evidence whose own verification failed.
   // We do NOT assume that refuted evidence is counter-evidence for a different claim.
-  if (actualCounterEvidence.length > 0) {
-    for (const ce of actualCounterEvidence) {
-      const status = counterEvidenceStatusMap.get(ce.evidenceId);
-      const verificationStatus = status?.verificationStatus ?? "unknown";
-      const evidenceClaim = status?.claim ?? ce.claim;
+  //
+  // 01-09-FIX FINAL: We separate RESOLVED references (the Evidence row exists in the
+  // tenant) from UNRESOLVED references (the Evidence row does NOT exist — the referenceId
+  // in metadata points to a non-existent or cross-tenant row). Only RESOLVED references
+  // are presented as actual counter-evidence. UNRESOLVED references are moved to risks
+  // as "unresolved counter-evidence reference" warnings — they are NOT presented as
+  // confirmed counter-evidence.
+  const resolvedCounterEvidence: typeof actualCounterEvidence = [];
+  const unresolvedCounterEvidence: typeof actualCounterEvidence = [];
+  for (const ce of actualCounterEvidence) {
+    if (counterEvidenceStatusMap.has(ce.evidenceId)) {
+      resolvedCounterEvidence.push(ce);
+    } else {
+      unresolvedCounterEvidence.push(ce);
+    }
+  }
+
+  if (resolvedCounterEvidence.length > 0) {
+    for (const ce of resolvedCounterEvidence) {
+      const status = counterEvidenceStatusMap.get(ce.evidenceId)!;
+      const verificationStatus = status.verificationStatus;
+      const evidenceClaim = status.claim;
       counterEvidence.push(
         `Counter-evidence (from alternative ${ce.altId}): evidenceId=${ce.evidenceId}, ` +
         `sourceCode=${ce.sourceCode ?? "unknown"}, verificationStatus="${verificationStatus}". ` +
@@ -505,13 +522,36 @@ function buildAdvisoryReport(
         `evidence's own verification, NOT a verification that it contradicts any specific claim.`
       );
     }
-  } else {
-    // No actual counter-evidence was found in the strategy version metadata.
-    // This is NOT a claim that no counter-evidence exists in reality.
+  }
+
+  // Unresolved references → risks (NOT counterEvidence)
+  if (unresolvedCounterEvidence.length > 0) {
+    const unresolvedIds = unresolvedCounterEvidence.map((ce) => ce.evidenceId);
+    risks.push(
+      `${unresolvedCounterEvidence.length} unresolved counter-evidence reference(s) detected: ` +
+      `evidenceId(s) ${unresolvedIds.join(", ")} were not found in the Evidence Fabric ` +
+      `within the tenant scope. These references exist in the strategy version metadata ` +
+      `but the cited Evidence rows do not exist (or belong to a different tenant/country). ` +
+      `They are NOT presented as counter-evidence — they are unresolved documentation gaps. ` +
+      `Resolve the references or remove them from the metadata before relying on the counter-evidence.`
+    );
+    uncertaintySources.push(
+      `${unresolvedCounterEvidence.length} counter-evidence reference(s) are unresolved ` +
+      `(cited Evidence rows not found in tenant scope).`
+    );
+  }
+
+  // If NO resolved counter-evidence was found (either no references at all, or all unresolved)
+  if (resolvedCounterEvidence.length === 0) {
     counterEvidence.push(
-      `No counter-evidence references were found in the strategy version metadata. ` +
+      `No resolved counter-evidence references were found in the strategy version metadata. ` +
+      (unresolvedCounterEvidence.length > 0
+        ? `${unresolvedCounterEvidence.length} reference(s) were found but could not be resolved ` +
+          `(cited Evidence rows not found in tenant scope) — see risks for details. `
+        : ``
+      ) +
       `This is NOT a claim that no counter-evidence exists in reality — ` +
-      `it means the system did not find registered counter-evidence within the scope ` +
+      `it means the system did not find resolvable counter-evidence within the scope ` +
       `of the data used. Additional counter-evidence may exist outside the system.`
     );
   }

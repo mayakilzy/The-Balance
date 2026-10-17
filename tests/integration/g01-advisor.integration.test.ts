@@ -1190,4 +1190,130 @@ describeIntegration("01-09: Development Advisor v1", () => {
     expect(report.recommendation).toContain("Insufficient evidence to recommend a specific alternative");
     expect(report.recommendation).toContain("invalid");
   });
+
+  // ============================================================
+  // 30. FIX FINAL: fabricated counter-evidence reference → NOT shown as actual
+  // ============================================================
+  it("30. FIX FINAL: unresolved counter-evidence reference → risk, NOT counterEvidence", async () => {
+    const { advise } = await import("@/lib/state-builder/advisor-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    // Inject a FABRICATED counter-evidence reference into alt1's metadata
+    const sv1 = await adminClient.strategyVersion.findUnique({ where: { id: alt1 } });
+    const meta = (sv1!.metadata ?? {}) as Record<string, unknown>;
+    const existingCounterEvidence = (meta.counterEvidence as unknown[]) ?? [];
+    meta.counterEvidence = [
+      ...existingCounterEvidence,
+      { evidenceId: "fabricated-evidence-id-not-real-99999", claim: "[FICTIONAL] fabricated", sourceCode: null },
+    ];
+    await adminClient.strategyVersion.update({
+      where: { id: alt1 },
+      data: { metadata: meta as never },
+    });
+
+    const report = await advise(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+      alternativeIds: [alt1, alt2],
+    });
+
+    // The fabricated reference must NOT appear as actual counter-evidence
+    const fabricatedInCounterEvidence = report.counterEvidence.some(
+      (c) => c.includes("fabricated-evidence-id-not-real-99999") && c.includes("Counter-evidence (from alternative")
+    );
+    expect(fabricatedInCounterEvidence).toBe(false);
+
+    // The fabricated reference must appear in risks as "unresolved"
+    const unresolvedRisk = report.risks.find(
+      (r) => r.includes("unresolved counter-evidence reference") && r.includes("fabricated-evidence-id-not-real-99999")
+    );
+    expect(unresolvedRisk).toBeDefined();
+
+    // The uncertainty should mention unresolved references
+    expect(report.uncertaintySummary).toContain("unresolved");
+  });
+
+  // ============================================================
+  // 31. FIX FINAL: resolved counter-evidence → shown with full provenance
+  // ============================================================
+  it("31. FIX FINAL: resolved counter-evidence reference → shown with evidenceId + verificationStatus", async () => {
+    const { advise } = await import("@/lib/state-builder/advisor-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // Agriculture sector has counter-evidence from the seed (Reuters + AP)
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    const report = await advise(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+      alternativeIds: [alt1, alt2],
+    });
+
+    // Check if any resolved counter-evidence was found
+    const resolvedCounterEvidence = report.counterEvidence.filter(
+      (c) => c.includes("Counter-evidence (from alternative") && c.includes("evidenceId=")
+    );
+
+    if (resolvedCounterEvidence.length > 0) {
+      // Each resolved reference should have full provenance
+      for (const ce of resolvedCounterEvidence) {
+        expect(ce).toContain("evidenceId=");
+        expect(ce).toContain("verificationStatus=");
+        expect(ce).toContain("sourceCode=");
+        expect(ce).toContain("Claim:");
+        // Must NOT say "unknown" verificationStatus (resolved = found in Evidence table)
+        expect(ce).not.toMatch(/verificationStatus="unknown"/);
+      }
+    }
+  });
+
+  // ============================================================
+  // 32. FIX FINAL: all counter-evidence unresolved → "No resolved" message
+  // ============================================================
+  it("32. FIX FINAL: all counter-evidence unresolved → honestly says 'No resolved'", async () => {
+    const { advise } = await import("@/lib/state-builder/advisor-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveInflationId]);
+    const alt2 = await composeAndExpand(session, [objectiveEducationId]);
+
+    // Inject ONLY fabricated counter-evidence (no real ones)
+    const sv1 = await adminClient.strategyVersion.findUnique({ where: { id: alt1 } });
+    const meta = (sv1!.metadata ?? {}) as Record<string, unknown>;
+    meta.counterEvidence = [
+      { evidenceId: "another-fake-id-12345", claim: "[FICTIONAL] fake", sourceCode: null },
+    ];
+    await adminClient.strategyVersion.update({
+      where: { id: alt1 },
+      data: { metadata: meta as never },
+    });
+
+    const report = await advise(session, {
+      countryId,
+      objectiveIds: [objectiveInflationId],
+      alternativeIds: [alt1, alt2],
+    });
+
+    // counterEvidence should say "No resolved counter-evidence references were found"
+    const noResolvedNote = report.counterEvidence.find(
+      (c) => c.includes("No resolved counter-evidence references were found")
+    );
+    expect(noResolvedNote).toBeDefined();
+
+    // The risk should mention the unresolved reference
+    const unresolvedRisk = report.risks.find(
+      (r) => r.includes("unresolved counter-evidence reference") && r.includes("another-fake-id-12345")
+    );
+    expect(unresolvedRisk).toBeDefined();
+  });
 });
