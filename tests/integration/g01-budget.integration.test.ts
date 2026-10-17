@@ -1066,13 +1066,14 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
     expect(estimate!.institutionAssignmentGap).toBe(true);
     expect(estimate!.mandateGap).toBe(true);
 
-    // The DB row is stored
+    // The DB row is stored (normalize Decimal to 2 decimals — Prisma may
+    // strip trailing zeros, so we compare via parseFloat for robustness)
     const dbLine = await adminClient.budgetLine.findFirst({
       where: { tenantId: tenantAId, programId: targetProgram.programId },
     });
     expect(dbLine).toBeDefined();
-    expect(dbLine!.minAmount.toString()).toBe("315000.00");
-    expect(dbLine!.maxAmount.toString()).toBe("402500.00");
+    expect(parseFloat(dbLine!.minAmount.toString())).toBe(315000);
+    expect(parseFloat(dbLine!.maxAmount.toString())).toBe(402500);
     expect(dbLine!.currency).toBe("USD");
     expect(dbLine!.horizonYears).toBe(3);
   });

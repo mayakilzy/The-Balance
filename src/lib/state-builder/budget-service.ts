@@ -323,25 +323,33 @@ function parseCostInputs(
       continue;
     }
 
-    // optional variance multipliers
+    // optional variance multipliers.
+    // We only enforce: both positive, and varianceLow <= varianceHigh.
+    // We do NOT enforce varianceLow <= 1 or varianceHigh >= 1 — an analyst
+    // may legitimately use a narrower range (e.g. 0.95 / 1.05) or wider
+    // (e.g. 0.7 / 1.3). The defaults (0.9 / 1.15) are documented assumptions;
+    // overrides are allowed as long as min <= max.
     let varianceLow = DEFAULT_VARIANCE_LOW;
     let varianceHigh = DEFAULT_VARIANCE_HIGH;
     if (item.varianceLow !== undefined) {
-      if (!isFinitePositiveNumber(item.varianceLow) || item.varianceLow > 1) {
-        errors.push(`costInputs[${i}].varianceLow must be in (0, 1]`);
+      if (!isFinitePositiveNumber(item.varianceLow)) {
+        errors.push(`costInputs[${i}].varianceLow must be a finite positive number`);
         continue;
       }
       varianceLow = item.varianceLow;
     }
     if (item.varianceHigh !== undefined) {
-      if (!isFinitePositiveNumber(item.varianceHigh) || item.varianceHigh < 1) {
-        errors.push(`costInputs[${i}].varianceHigh must be >= 1`);
+      if (!isFinitePositiveNumber(item.varianceHigh)) {
+        errors.push(`costInputs[${i}].varianceHigh must be a finite positive number`);
         continue;
       }
       varianceHigh = item.varianceHigh;
     }
     if (varianceLow > varianceHigh) {
-      errors.push(`costInputs[${i}].varianceLow (${varianceLow}) > varianceHigh (${varianceHigh})`);
+      errors.push(
+        `costInputs[${i}].varianceLow (${varianceLow}) > varianceHigh (${varianceHigh}) — ` +
+        `min multiplier must not exceed max multiplier`
+      );
       continue;
     }
 
@@ -842,13 +850,19 @@ export async function getBudgets(
     return lines.map((line) => {
       const prog = programMap.get(line.programId);
       const meta = (prog?.metadata ?? {}) as Record<string, unknown>;
+      // Normalize Decimal to 2-decimal-place string for consistent display
+      // (Prisma Decimal.toString() may strip trailing zeros, e.g. "900" instead
+      // of "900.00"). The estimateBudgets path already uses toFixed(2), so we
+      // match that format here for consistency.
+      const minStr = parseFloat(line.minAmount.toString()).toFixed(2);
+      const maxStr = parseFloat(line.maxAmount.toString()).toFixed(2);
       return {
         programId: line.programId,
         programTitle: prog?.title ?? "",
         programSector: prog?.sector ?? "",
         costRange: {
-          min: line.minAmount.toString(),
-          max: line.maxAmount.toString(),
+          min: minStr,
+          max: maxStr,
           currency: line.currency,
           horizonYears: line.horizonYears,
         },
