@@ -255,12 +255,31 @@ describeIntegration("01-09: Development Advisor v1", () => {
   // ============================================================
   it("2. conditional recommendation has non-empty conditions when data is available", async () => {
     const { advise } = await import("@/lib/state-builder/advisor-service");
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
     const session = makeSession({
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
     const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
     const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    // Add cost data to ALL programs in both alternatives (to avoid abstention)
+    for (const altId of [alt1, alt2]) {
+      const programs = await adminClient.program.findMany({
+        where: { tenantId: tenantAId, strategyVersionId: altId },
+      });
+      for (const p of programs) {
+        const meta = (p.metadata ?? {}) as Record<string, unknown>;
+        meta.costInputs = [{
+          label: "[FICTIONAL] test input",
+          unitCost: { amount: 100, currency: "USD" },
+          unitCount: 10, horizonYears: 1, source: "[FICTIONAL]",
+          varianceLow: 0.9, varianceHigh: 1.15, varianceSource: "[FICTIONAL]",
+        }];
+        await adminClient.program.update({ where: { id: p.id }, data: { metadata: meta as never } });
+      }
+      await estimateBudgets(session, { strategyAlternativeId: altId });
+    }
 
     const report = await advise(session, {
       countryId,
@@ -270,7 +289,7 @@ describeIntegration("01-09: Development Advisor v1", () => {
 
     // Conditions should be non-empty (at least the standard conditions)
     expect(report.conditions.length).toBeGreaterThan(0);
-    // The recommendation should mention "conditional"
+    // The recommendation should mention "conditional" (not abstained)
     expect(report.recommendation.toLowerCase()).toContain("conditional");
   });
 
