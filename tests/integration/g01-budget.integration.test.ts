@@ -1596,40 +1596,67 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
     );
     const targetProgram = programs[0]!;
 
-    // Fetch a real Demolandia evidence (same tenant + same country)
-    // The seeded evidence has verificationStatus="unverified" by default
-    const realEvidence = await adminClient.evidence.findFirst({
-      where: { tenantId: tenantAId },
+    // Fetch a real Demolandia evidence (same tenant + same country) that is
+    // NOT verified. The seed has a mix of verified / disputed / unverified.
+    // Query for one whose verificationStatus !== "verified".
+    const unverifiedEvidence = await adminClient.evidence.findFirst({
+      where: { tenantId: tenantAId, verificationStatus: { not: "verified" } },
     });
-    if (!realEvidence) throw new Error("Test setup failed: no evidence seeded for tenantA");
+    if (!unverifiedEvidence) {
+      // If no unverified evidence exists, create one for this test
+      const created = await adminClient.evidence.create({
+        data: {
+          tenantId: tenantAId,
+          claim: "Unverified evidence for provenance test 26",
+          type: "neutral",
+          verificationStatus: "unverified",
+          metadata: {
+            countryId,
+            sector: "agriculture",
+            fictional: true,
+            seededBy: "01-06-final-provenance-test-26",
+          } as never,
+        },
+      });
+      try {
+        await runTest26(targetProgram.programId, created.id, session, versionId);
+      } finally {
+        await adminClient.evidence.delete({ where: { id: created.id } });
+      }
+      return;
+    }
 
-    await setProgramCostInputs(targetProgram.programId, [
-      vInput({
-        label: "unverified evidence reference",
-        unitCost: { amount: 100, currency: "USD" },
-        unitCount: 10,
-        horizonYears: 1,
-        source: "[FICTIONAL] cites unverified evidence",
-        sourceType: "evidence-reference",
-        referenceId: realEvidence.id,
-      }),
-    ]);
+    await runTest26(targetProgram.programId, unverifiedEvidence.id, session, versionId);
 
-    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
-    const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
-    expect(estimate).toBeDefined();
+    async function runTest26(programId: string, evidenceId: string, sess: Session, verId: string): Promise<void> {
+      await setProgramCostInputs(programId, [
+        vInput({
+          label: "unverified evidence reference",
+          unitCost: { amount: 100, currency: "USD" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] cites unverified evidence",
+          sourceType: "evidence-reference",
+          referenceId: evidenceId,
+        }),
+      ]);
 
-    const inputAssumption = estimate!.assumptions.find(
-      (a) => a.source.includes("cites unverified evidence")
-    );
-    expect(inputAssumption).toBeDefined();
-    // Must be labeled "evidence-pending-verification" (NOT "evidence-verified")
-    expect(inputAssumption!.description).toContain("evidence-pending-verification");
-    expect(inputAssumption!.description).not.toContain("evidence-verified");
-    // Must NOT contain the analyst-input UNVERIFIED label
-    expect(inputAssumption!.description).not.toContain("[UNVERIFIED — analyst-supplied");
-    // Must include the referenceId
-    expect(inputAssumption!.description).toContain(realEvidence.id);
+      const result = await estimateBudgets(sess, { strategyAlternativeId: verId });
+      const estimate = result.estimates.find((e) => e.programId === programId);
+      expect(estimate).toBeDefined();
+
+      const inputAssumption = estimate!.assumptions.find(
+        (a) => a.source.includes("cites unverified evidence")
+      );
+      expect(inputAssumption).toBeDefined();
+      // Must be labeled "evidence-pending-verification" (NOT "evidence-verified")
+      expect(inputAssumption!.description).toContain("evidence-pending-verification");
+      expect(inputAssumption!.description).not.toContain("evidence-verified");
+      // Must NOT contain the analyst-input UNVERIFIED label
+      expect(inputAssumption!.description).not.toContain("[UNVERIFIED — analyst-supplied");
+      // Must include the referenceId
+      expect(inputAssumption!.description).toContain(evidenceId);
+    }
   });
 
   // ============================================================
