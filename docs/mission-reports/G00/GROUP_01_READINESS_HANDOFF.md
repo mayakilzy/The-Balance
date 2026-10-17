@@ -5,12 +5,15 @@
 **Date:** 2026-10-17
 **GROUP 00 status:** COMPLETE — all 11 missions passed
 **GROUP 01 readiness:** PASS
+**Approved baseline SHA:** `dcbb8961dd588bb9e66a9076bc4e62625482a56f`
 
 ---
 
 ## 1. Purpose
 
 This document tells GROUP 01 exactly what it inherits, what it can build on, what it must build, and what it must not touch. It is the single entry point for GROUP 01 development.
+
+**Terminology note:** Components below are described as **Foundation-validated** — meaning they are built, tested, and CI-proven in GROUP 00, but are NOT production-hardened for government deployment. Production readiness requires the hardening steps documented in `GROUP_00_KNOWN_LIMITATIONS.md`.
 
 ---
 
@@ -20,10 +23,10 @@ This document tells GROUP 01 exactly what it inherits, what it can build on, wha
 
 | Component | Location | Status |
 |-----------|----------|--------|
-| Next.js 16 + TypeScript 5 app | `src/app/` | Production-ready |
+| Next.js 16 + TypeScript 5 app | `src/app/` | Foundation-validated |
 | PostgreSQL 16 + pgvector | `docker-compose.yml` | Configured |
 | Prisma 6 schema (22 models) | `prisma/schema.prisma` | 16 migrations applied |
-| Auth.js v5 (CredentialsProvider) | `src/lib/auth.ts` | Production-ready |
+| Auth.js v5 (CredentialsProvider) | `src/lib/auth.ts` | Foundation-validated |
 | RBAC/ABAC (4 roles) | `src/lib/permissions.ts` | Enforced |
 | RLS (14 PRIVATE tables) | Migrations 0002–0016 | ENABLE + FORCE |
 | Audit log (append-only) | `src/lib/audit.ts` | DB-enforced |
@@ -170,7 +173,7 @@ See `GROUP_00_KNOWN_LIMITATIONS.md` for the full list. Key items:
 
 ## 4. What GROUP 01 Must NOT Do
 
-1. **Do NOT rebuild authentication** — Auth.js v5 is production-ready
+1. **Do NOT rebuild authentication** — Auth.js v5 is foundation-validated (not production-hardened, but structurally complete)
 2. **Do NOT modify RLS policies** without a new ADR — they are tested and enforced
 3. **Do NOT change the task runtime fencing model** — it is proven correct
 4. **Do NOT remove the `simulated: true` flag** from stub responses — it is the honesty mechanism
@@ -263,5 +266,5 @@ The foundation is solid. The contracts are clear. The operational tooling is pro
 ---
 
 *Handoff date: 2026-10-17*
-*Final GROUP 00 SHA: `deccc96`*
+*Final GROUP 00 SHA: `dcbb896`*
 *GROUP 01 starting point: this document + the repository at the SHA above*

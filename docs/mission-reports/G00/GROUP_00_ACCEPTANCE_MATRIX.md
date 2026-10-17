@@ -2,7 +2,7 @@
 
 **Mission 00-11 deliverable.** Maps every GROUP 00 mission to its acceptance criteria, evidence, and verdict.
 
-**Final SHA:** `deccc963daf051d82e0b237df3793f003ca50744` (plus 00-11 cleanup commit)
+**Approved baseline SHA:** `dcbb8961dd588bb9e66a9076bc4e62625482a56f`
 **CI (primary):** Run #72 — PASS — https://github.com/mayakilzy/The-Balance/actions/runs/38984112379
 **CI (recovery):** Run #10 — PASS — https://github.com/mayakilzy/The-Balance/actions/runs/38984112377
 **Test count:** 237 passed | 10 skipped (247 total) across 18 test files

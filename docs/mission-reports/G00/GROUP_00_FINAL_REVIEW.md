@@ -2,9 +2,10 @@
 
 **Mission 00-11 deliverable.** Evidence-based final review of the Foundation Group (missions 00-00 through 00-10).
 
-**Final SHA:** `deccc963daf051d82e0b237df3793f003ca50744` (pre-00-11)
-**00-11 SHA:** (committed with this report + cleanup)
+**Approved baseline SHA:** `dcbb8961dd588bb9e66a9076bc4e62625482a56f` (GROUP 00 final, post-00-11)
 **Date:** 2026-10-17
+
+**Terminology note:** Components in this report are described as **Foundation-validated** — built, tested, and CI-proven in GROUP 00, but NOT production-hardened for government deployment. See `GROUP_00_KNOWN_LIMITATIONS.md` for the hardening steps required before production use.
 
 ---
 
@@ -30,7 +31,7 @@ All 11 missions (00-00 through 00-10) passed their acceptance criteria with evid
 
 - **Branch:** `main`
 - **Working tree:** clean
-- **Latest commit:** `deccc96` (synced with `origin/main`)
+- **Latest commit:** `dcbb896` (synced with `origin/main`)
 - **No uncommitted changes** except 00-11 deliverables (this report + cleanup)
 
 **File inventory:**
@@ -196,7 +197,7 @@ All 16 migrations apply cleanly to a fresh PostgreSQL 16 + pgvector:
 10. **Error Sanitizer** — `buildApiErrorResponse()` + `sanitizeForLog()` for safe error handling
 
 ### What G01 Should NOT Rebuild
-- Authentication (Auth.js v5 is production-ready)
+- Authentication (Auth.js v5 is foundation-validated, not production-hardened)
 - RLS policies (tested and enforced)
 - Task runtime (fencing + lease + idempotency proven)
 - Strategy immutability (trigger-protected)
@@ -223,4 +224,4 @@ The contracts, data model, security boundaries, and operational tooling are suff
 
 ---
 
-*This report is based on evidence gathered from the repository at SHA `deccc96`, CI runs #72 and #10, and the Acceptance Matrix. All claims are verifiable.*
+*This report is based on evidence gathered from the repository at SHA `dcbb896`, CI runs #73 and #11, and the Acceptance Matrix. All claims are verifiable.*
