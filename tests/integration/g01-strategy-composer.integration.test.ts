@@ -892,34 +892,45 @@ describeIntegration("01-03-FIX-02: Final Closure", () => {
   });
 
   // FIX-B: Fail-Closed Evidence Validation
-  it("FIX-B: rejects evidence without metadata.countryId (fail-closed)", async () => {
+  it("FIX-B: evidence without metadata.countryId is excluded from alternatives (defense-in-depth)", async () => {
     const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
     const session = makeSession({
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
     // Add evidence WITHOUT metadata.countryId but WITH metadata.sector = "agriculture"
-    // This evidence will be picked up by the baseline but should be rejected by
-    // the composer's validateEvidenceRefs (fail-closed)
-    await adminClient.evidence.create({
+    // The baseline engine (01-01 FIX-2) should EXCLUDE this evidence from the baseline
+    // (it only includes evidence with metadata.countryId matching the target country).
+    // The composer's validateEvidenceRefs is defense-in-depth — if unattributed
+    // evidence somehow reached the alternatives, it would be rejected.
+    const unattributedEvidence = await adminClient.evidence.create({
       data: {
         tenantId: tenantAId,
         claim: "[FIX02-TEST] Agriculture metric without countryId",
         type: "supporting",
         verificationStatus: "verified",
         metadata: { sector: "agriculture", indicatorName: "agricultural_gdp_growth_rate", fictional: true },
-        // NO countryId — should be rejected by validateEvidenceRefs
+        // NO countryId — should be excluded by the baseline engine
       } as never,
     });
 
-    // This should fail because the new evidence (without countryId) will be
-    // included in the baseline and then the composer's validation will reject it
-    await expect(
-      composeStrategies(session, {
-        countryId,
-        objectiveIds: [objectiveAgricultureId],
-      })
-    ).rejects.toThrow(/no metadata\.countryId|Fail-closed/i);
+    // Compose — should succeed because the baseline EXCLUDES the unattributed evidence
+    const result = await composeStrategies(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+    });
+
+    // Verify the unattributed evidence is NOT in any alternative's evidenceRefs
+    for (const alt of result.alternatives) {
+      for (const prog of alt.programs) {
+        for (const ref of prog.evidenceRefs) {
+          expect(ref.evidenceId).not.toBe(unattributedEvidence.id);
+        }
+      }
+      for (const ref of alt.counterEvidence) {
+        expect(ref.evidenceId).not.toBe(unattributedEvidence.id);
+      }
+    }
   });
 
   it("FIX-B: rejects fabricated evidence IDs (not in tenant scope)", async () => {
