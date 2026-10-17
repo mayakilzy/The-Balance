@@ -2,6 +2,7 @@
 // baseline-service.ts — State Baseline & Observability Modes
 // ------------------------------------------------------------
 // Mission 01-01: State Baseline & Observability Modes
+// 01-01-FIX: Baseline Integrity Closure (4 fixes)
 //
 // Computes a structured snapshot of the country's current state
 // per sector, using Evidence Fabric data. Implements National
@@ -16,8 +17,15 @@
 //   - Sources in the same independence_group are NOT independent
 //   - Every indicator links to its evidence source + date
 //
-// Runs as a Durable Task (G00 Task Runtime):
-//   - Idempotency key prevents duplicate baselines
+// 01-01-FIX changes:
+//   FIX-1: All known sectors appear in the report (LOW/unknown, not absent)
+//   FIX-2: Evidence scoped by metadata.countryId (no cross-country mixing)
+//   FIX-3: Conservative indicator value extraction (no years as values)
+//   FIX-4: Uses claimTaskById (respects lease contract) + dynamic idempotency
+//
+// Runs as a Durable Task (G00 Task Runtime + claimTaskById extension):
+//   - Dynamic idempotency key (reflects evidence state) — no stale reports
+//   - claimTaskById respects lease contract (no stealing active tasks)
 //   - Crash recovery via lease expiry + reclaimStaleTasks
 //   - Tenant isolation via RLS on tasks table
 //
@@ -25,7 +33,13 @@
 // ============================================================
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
-import { createTask } from "@/lib/task-service";
+import {
+  createTask,
+  claimTaskById,
+  startTask,
+  completeTask,
+  failTask,
+} from "@/lib/task-service";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
 
@@ -38,6 +52,8 @@ export type ObservabilityMode = "FULL" | "PARTIAL" | "LOW";
 export interface BaselineIndicator {
   name: string;
   value: string;
+  // FIX-3: confidence in the extracted value
+  valueConfidence: "structured" | "extracted" | "unparsed";
   evidenceId: string;
   sourceId: string | null;
   sourceCode: string | null;
@@ -73,32 +89,35 @@ export interface BaselineReport {
     sourceNote: string;
     computedBy: "baseline-engine-v1";
     rulesVersion: "adr-0014-v1";
+    // FIX-2: track unattributed evidence (no metadata.countryId)
+    unattributedEvidenceCount: number;
+    // FIX-2: track evidence from other countries (excluded)
+    otherCountryEvidenceCount: number;
   };
 }
 
 export interface ComputeBaselineInput {
   countryId: string;
-  // Optional: limit which sectors to compute (default: all sectors with evidence)
+  // Optional: limit which sectors to compute (default: all sectors from CountryPackConfig)
   sectors?: string[];
 }
 
 // ============================================================
 // OBSERVABILITY MODE CLASSIFICATION (per ADR-0014 §1)
 // ============================================================
-// Thresholds are PUBLIC, AUDITABLE, FALSIFIABLE.
-// A reviewer can re-classify by inspecting the raw counts in the report.
 
 interface SectorEvidence {
   sector: string;
   evidence: Array<{
     id: string;
     claim: string;
-    type: string; // supporting | counter | neutral
+    type: string;
     verificationStatus: string;
     observedAt: Date | null;
     sourceId: string | null;
     sourceCode: string | null;
     independenceGroup: string | null;
+    metadata: Record<string, unknown>;
   }>;
 }
 
@@ -119,7 +138,6 @@ function classifyObservabilityMode(
   const independenceGroups = new Set<string>();
   for (const e of evidence) {
     if (!e.sourceId) {
-      // Evidence without a source is its own "group" (cannot verify independence)
       independenceGroups.add(`no-source:${e.id}`);
     } else {
       const group = e.independenceGroup ?? `source:${e.sourceId}`;
@@ -128,22 +146,18 @@ function classifyObservabilityMode(
   }
   const independentCount = independenceGroups.size;
 
-  // Check for verified/corroborated evidence
   const hasVerified = evidence.some(
     (e) => e.verificationStatus === "verified" || e.verificationStatus === "corroborated"
   );
 
-  // Check if ALL evidence is disputed/refuted
   const allDisputed = evidence.every(
     (e) => e.verificationStatus === "disputed" || e.verificationStatus === "refuted"
   );
 
-  // FULL: ≥2 independent sources AND ≥1 verified/corroborated
   if (independentCount >= 2 && hasVerified && !allDisputed) {
     return { mode: "FULL", independentCount, gaps: [] };
   }
 
-  // PARTIAL: some evidence, but doesn't meet FULL criteria
   if (independentCount < 2) {
     gaps.push(
       `Only ${independentCount} independent source(s) — need ≥2 for FULL observability.`
@@ -162,45 +176,158 @@ function classifyObservabilityMode(
 }
 
 // ============================================================
-// BASELINE COMPUTATION (runs inside withAuthenticatedTenant)
+// FIX-3: CONSERVATIVE INDICATOR VALUE EXTRACTION
 // ============================================================
+// Never interpret a year or contextual number as an indicator value.
+// Priority:
+//   1. metadata.indicatorValue (structured) — if present
+//   2. Percentage (e.g., "4.2%") — safe, unambiguous
+//   3. Qualitative description (e.g., "declined", "grew") — no fabricated number
+//   4. "unparsed" — no reliable value could be extracted
+//
+// We NEVER return a bare number from the claim text as an indicator value,
+// because it could be a year (2024), a count (5 sectors), or other context.
 
-async function runBaselineComputation(
-  tx: Prisma.TransactionClient,
-  tenantId: string,
-  countryId: string,
+function extractIndicatorValue(
+  claim: string,
+  metadata: Record<string, unknown>
+): { value: string; confidence: "structured" | "extracted" | "unparsed" } {
+  // 1. Structured value from metadata (highest confidence)
+  if (
+    metadata.indicatorValue !== undefined &&
+    metadata.indicatorValue !== null &&
+    typeof metadata.indicatorValue !== "object"
+  ) {
+    return {
+      value: String(metadata.indicatorValue),
+      confidence: "structured",
+    };
+  }
+
+  // 2. Percentage — safe because "%" unambiguously marks a metric value
+  const percentMatch = claim.match(/(\d+\.?\d*)\s*%/);
+  if (percentMatch && percentMatch[1]) {
+    return {
+      value: `${percentMatch[1]}%`,
+      confidence: "extracted",
+    };
+  }
+
+  // 3. Qualitative description — no fabricated number
+  if (/decline|drop|fall|decrease/i.test(claim)) {
+    return { value: "declined (qualitative)", confidence: "extracted" };
+  }
+  if (/grow|increase|rise|expand/i.test(claim)) {
+    return { value: "grew (qualitative)", confidence: "extracted" };
+  }
+
+  // 4. Unparsed — we do NOT extract bare numbers (could be years, counts, etc.)
+  return { value: "unparsed (no reliable value extracted)", confidence: "unparsed" };
+}
+
+function extractIndicatorName(
+  claim: string,
+  metadata: Record<string, unknown>
+): string {
+  // 1. Structured name from metadata (highest priority)
+  if (
+    metadata.indicatorName !== undefined &&
+    typeof metadata.indicatorName === "string" &&
+    metadata.indicatorName.length > 0
+  ) {
+    return metadata.indicatorName;
+  }
+
+  // 2. Heuristic from claim text (best-effort, documented)
+  const lower = claim.toLowerCase();
+  if (lower.includes("gdp")) return "GDP metric";
+  if (lower.includes("unemployment")) return "unemployment rate";
+  if (lower.includes("inflation")) return "inflation rate";
+  if (lower.includes("enrollment")) return "enrollment rate";
+  if (lower.includes("mortality")) return "mortality metric";
+  if (lower.includes("crop yield")) return "crop yield";
+  if (lower.includes("reserves")) return "reserves metric";
+  if (lower.includes("monetary base")) return "monetary base growth";
+
+  // 3. Fallback: first 60 chars of the claim
+  return claim.slice(0, 60) + (claim.length > 60 ? "…" : "");
+}
+
+function mapSupportStance(
+  type: string
+): "supports" | "contradicts" | "neutral" | "uncertain" {
+  switch (type) {
+    case "supporting":
+      return "supports";
+    case "counter":
+      return "contradicts";
+    case "neutral":
+      return "neutral";
+    default:
+      return "uncertain";
+  }
+}
+
+// ============================================================
+// FIX-2: COUNTRY-SPECIFIC EVIDENCE SCOPING
+// ============================================================
+// Evidence is scoped to a country via metadata.countryId.
+// Evidence WITHOUT metadata.countryId is "unattributed" — not used for indicators.
+// Evidence WITH metadata.countryId != target countryId is "other country" — excluded.
+//
+// This prevents a tenant operating on two countries from mixing evidence.
+
+interface EvidenceScopingResult {
+  attributed: SectorEvidence["evidence"]; // evidence for THIS country
+  unattributedCount: number; // evidence without metadata.countryId
+  otherCountryCount: number; // evidence with a different metadata.countryId
+}
+
+function filterAndGroupEvidenceBySector(
+  evidenceRows: Array<{
+    id: string;
+    claim: string;
+    type: string;
+    verificationStatus: string;
+    observedAt: Date | null;
+    sourceId: string | null;
+    source: { code: string | null; independenceGroup: string | null } | null;
+    metadata: Prisma.JsonValue;
+  }>,
+  targetCountryId: string,
   sectorsFilter?: string[]
-): Promise<Omit<BaselineReport, "taskId">> {
-  // 1. Fetch all evidence for this tenant (RLS-enforced — only this tenant's evidence)
-  // We include the source for independence_group lookup.
-  const evidenceRows = await tx.evidence.findMany({
-    where: { tenantId },
-    include: {
-      source: {
-        select: {
-          id: true,
-          code: true,
-          independenceGroup: true,
-        },
-      },
-    },
-  });
-
-  // 2. Group evidence by sector (from metadata.sector)
-  // Evidence without metadata.sector is NOT included in the baseline (documented in sourceNote).
+): EvidenceScopingResult & { sectorMap: Map<string, SectorEvidence["evidence"]> } {
   const sectorMap = new Map<string, SectorEvidence["evidence"]>();
-  let untaggedCount = 0;
+  let unattributedCount = 0;
+  let otherCountryCount = 0;
 
   for (const e of evidenceRows) {
     const metadata = (e.metadata ?? {}) as unknown as Record<string, unknown>;
-    const sector = typeof metadata.sector === "string" ? metadata.sector : null;
 
-    if (!sector) {
-      untaggedCount++;
+    // FIX-2: Check countryId attribution
+    const evidenceCountryId =
+      typeof metadata.countryId === "string" ? metadata.countryId : null;
+
+    if (!evidenceCountryId) {
+      // Unattributed evidence — not used for country-specific indicators
+      unattributedCount++;
       continue;
     }
 
-    // Apply sector filter if provided
+    if (evidenceCountryId !== targetCountryId) {
+      // Evidence belongs to a different country — exclude
+      otherCountryCount++;
+      continue;
+    }
+
+    // Check sector
+    const sector = typeof metadata.sector === "string" ? metadata.sector : null;
+    if (!sector) {
+      // Has countryId but no sector — not included in baseline dimensions
+      // (but not counted as unattributed since country is known)
+      continue;
+    }
+
     if (sectorsFilter && !sectorsFilter.includes(sector)) {
       continue;
     }
@@ -217,23 +344,96 @@ async function runBaselineComputation(
       sourceId: e.sourceId,
       sourceCode: e.source?.code ?? null,
       independenceGroup: e.source?.independenceGroup ?? null,
+      metadata,
     });
   }
 
-  // 3. Build dimensions
+  return {
+    attributed: [], // not used — sectorMap holds the grouped data
+    unattributedCount,
+    otherCountryCount,
+    sectorMap,
+  };
+}
+
+// ============================================================
+// BASELINE COMPUTATION (runs inside withAuthenticatedTenant)
+// ============================================================
+
+async function runBaselineComputation(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  countryId: string,
+  sectorsFilter?: string[]
+): Promise<Omit<BaselineReport, "taskId">> {
+  // 1. Fetch all evidence for this tenant (RLS-enforced — only this tenant's evidence)
+  const evidenceRows = await tx.evidence.findMany({
+    where: { tenantId },
+    include: {
+      source: {
+        select: {
+          id: true,
+          code: true,
+          independenceGroup: true,
+        },
+      },
+    },
+  });
+
+  // 2. FIX-2: Filter evidence by countryId + group by sector
+  const scoping = filterAndGroupEvidenceBySector(
+    evidenceRows,
+    countryId,
+    sectorsFilter
+  );
+
+  // 3. FIX-1: Determine the set of "known sectors" for this country
+  //    Sectors come from:
+  //    a. CountryPackConfig.sectors (this tenant's config for this country)
+  //    b. Sectors that have attributed evidence (from step 2)
+  //    c. sectorsFilter if provided (explicit request)
+  const knownSectors = new Set<string>();
+
+  // 3a. Sectors from CountryPackConfig
+  const countryPackConfig = await tx.countryPackConfig.findUnique({
+    where: { tenantId_countryId: { tenantId, countryId } },
+  });
+  if (countryPackConfig) {
+    const configSectors = (countryPackConfig.sectors as unknown as string[]) ?? [];
+    for (const s of configSectors) {
+      if (typeof s === "string") knownSectors.add(s);
+    }
+  }
+
+  // 3b. Sectors from attributed evidence
+  for (const sector of scoping.sectorMap.keys()) {
+    knownSectors.add(sector);
+  }
+
+  // 3c. If sectorsFilter provided, restrict to those sectors
+  if (sectorsFilter) {
+    for (const s of knownSectors) {
+      if (!sectorsFilter.includes(s)) {
+        knownSectors.delete(s);
+      }
+    }
+  }
+
+  // 4. Build dimensions for ALL known sectors (FIX-1: LOW sectors appear, not absent)
   const dimensions: BaselineDimension[] = [];
-  for (const [sector, evidence] of sectorMap.entries()) {
+  for (const sector of knownSectors) {
+    const evidence = scoping.sectorMap.get(sector) ?? [];
     const { mode, independentCount, gaps } = classifyObservabilityMode(evidence);
 
-    // Count counter-evidence (type === "counter")
     const counterEvidenceCount = evidence.filter((e) => e.type === "counter").length;
 
     // Build indicators (preserve ALL evidence — no silent selection)
     const indicators: BaselineIndicator[] = evidence.map((e) => {
-      const metadata = {} as Record<string, unknown>;
+      const { value, confidence } = extractIndicatorValue(e.claim, e.metadata);
       return {
-        name: extractIndicatorName(e.claim),
-        value: extractIndicatorValue(e.claim),
+        name: extractIndicatorName(e.claim, e.metadata),
+        value,
+        valueConfidence: confidence,
         evidenceId: e.id,
         sourceId: e.sourceId,
         sourceCode: e.sourceCode,
@@ -263,29 +463,33 @@ async function runBaselineComputation(
     });
   }
 
-  // 4. Sort dimensions by sector name for deterministic output
+  // 5. Sort dimensions by sector name for deterministic output
   dimensions.sort((a, b) => a.sector.localeCompare(b.sector));
 
-  // 5. Build summary
+  // 6. Build summary
   const summary = {
     strongSectors: dimensions.filter((d) => d.observabilityMode === "FULL").map((d) => d.sector),
     weakSectors: dimensions.filter((d) => d.observabilityMode === "PARTIAL").map((d) => d.sector),
     unknownSectors: dimensions.filter((d) => d.observabilityMode === "LOW").map((d) => d.sector),
   };
 
-  // 6. Determine if the country is fictional (Demolandia)
+  // 7. Determine if the country is fictional (Demolandia)
   const country = await tx.country.findUnique({ where: { id: countryId } });
   const isFictional = country
     ? country.iso3 === "DML" || country.displayName.toLowerCase().includes("demolandia")
     : false;
 
   const sourceNote = isFictional
-    ? "Fictional fixture country (Demolandia). All evidence is synthetic. Baseline reflects fictional data only. Sectors without tagged evidence (metadata.sector) are not included."
-    : "Baseline computed from tenant-scoped evidence. Sectors without tagged evidence (metadata.sector) are not included.";
+    ? "Fictional fixture country (Demolandia). All evidence is synthetic. Baseline reflects fictional data only. Sectors without attributed evidence appear as LOW (unknown)."
+    : "Baseline computed from tenant-scoped evidence scoped to the target country (metadata.countryId). Sectors without attributed evidence appear as LOW (unknown).";
 
-  const finalSourceNote = untaggedCount > 0
-    ? `${sourceNote} ${untaggedCount} evidence item(s) without metadata.sector were excluded.`
-    : sourceNote;
+  let finalSourceNote = sourceNote;
+  if (scoping.unattributedCount > 0) {
+    finalSourceNote += ` ${scoping.unattributedCount} evidence item(s) without metadata.countryId were excluded (unattributed).`;
+  }
+  if (scoping.otherCountryCount > 0) {
+    finalSourceNote += ` ${scoping.otherCountryCount} evidence item(s) belonging to other countries were excluded.`;
+  }
 
   return {
     countryId,
@@ -297,80 +501,24 @@ async function runBaselineComputation(
       sourceNote: finalSourceNote,
       computedBy: "baseline-engine-v1",
       rulesVersion: "adr-0014-v1",
+      unattributedEvidenceCount: scoping.unattributedCount,
+      otherCountryEvidenceCount: scoping.otherCountryCount,
     },
   };
-}
-
-// ============================================================
-// HELPERS — extract indicator name/value from claim text
-// ============================================================
-// These are deliberately simple text extractors. They do NOT fabricate
-// values — they return the claim text as-is if no structured value is found.
-
-function extractIndicatorName(claim: string): string {
-  // Try to extract a metric name from the claim.
-  // For seeded evidence like "Demolandia's agricultural GDP grew 4.2% in 2024",
-  // we return "agricultural GDP growth rate" as a heuristic.
-  // This is a SIMPLE heuristic — not an LLM. It returns a best-effort name.
-  const lower = claim.toLowerCase();
-  if (lower.includes("gdp")) return "GDP metric";
-  if (lower.includes("unemployment")) return "unemployment rate";
-  if (lower.includes("inflation")) return "inflation rate";
-  if (lower.includes("enrollment")) return "enrollment rate";
-  if (lower.includes("mortality")) return "mortality metric";
-  if (lower.includes("crop yield")) return "crop yield";
-  if (lower.includes("reserves")) return "reserves metric";
-  if (lower.includes("monetary base")) return "monetary base growth";
-  // Fallback: first 60 chars of the claim
-  return claim.slice(0, 60) + (claim.length > 60 ? "…" : "");
-}
-
-function extractIndicatorValue(claim: string): string {
-  // Extract a numeric value + unit from the claim, if present.
-  // e.g., "grew 4.2%" → "4.2%", "declined" → "declined (no value)"
-  const percentMatch = claim.match(/(\d+\.?\d*)\s*%/);
-  if (percentMatch) return `${percentMatch[1]}%`;
-
-  const numberMatch = claim.match(/(\d+\.?\d*)/);
-  if (numberMatch && numberMatch[1]) return numberMatch[1];
-
-  // No numeric value — return a description, NOT a fabricated number
-  if (/decline|drop|fall|decrease/i.test(claim)) return "declined (qualitative)";
-  if (/grow|increase|rise|expand/i.test(claim)) return "grew (qualitative)";
-  return "value not extracted from claim text";
-}
-
-function mapSupportStance(
-  type: string
-): "supports" | "contradicts" | "neutral" | "uncertain" {
-  switch (type) {
-    case "supporting":
-      return "supports";
-    case "counter":
-      return "contradicts";
-    case "neutral":
-      return "neutral";
-    default:
-      return "uncertain";
-  }
 }
 
 // ============================================================
 // COMPUTE BASELINE (public API — runs as Durable Task)
 // ============================================================
 //
-// Execution model:
-//   1. createTask (idempotent — prevents duplicate baselines)
-//   2. If task already completed → return cached output
-//   3. Claim the SPECIFIC task by ID (not a generic claimTask which may pick
-//      an unrelated pending task from another test/workflow)
-//   4. Run the computation (synchronous, inside tenant-scoped transaction)
-//   5. Complete the task with the report
-//
-// The claim-by-ID is implemented inline (not via the generic claimTask) to
-// avoid race conditions where claimTask picks a different pending task.
-// This is safe because baseline computation is synchronous within this
-// function call — no concurrent workers for the same task.
+// FIX-4 changes:
+//   - Dynamic idempotency key: includes evidence state (count + last update)
+//     so adding new evidence produces a new task + fresh report.
+//   - Uses claimTaskById (G00 extension) instead of inline SQL:
+//     * Respects lease contract (never steals active tasks)
+//     * Reuses G00's fencing + event logging
+//   - If task already completed AND evidence hasn't changed → return cached report
+//   - If task already completed BUT evidence changed → create new task + recompute
 
 export async function computeBaseline(
   session: Session,
@@ -383,150 +531,112 @@ export async function computeBaseline(
     throw new Error("countryId is required");
   }
 
-  // 1. Create the Durable Task (idempotent — prevents duplicate baselines)
-  const idempotencyKey = `baseline:${input.countryId}:${input.sectors?.join(",") ?? "all"}`;
+  // FIX-4: Compute evidence state snapshot for dynamic idempotency key
+  // If evidence changes (new evidence added), the key changes → new task → fresh report
+  const evidenceState = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+    // Count evidence for this tenant scoped to this country (via metadata.countryId)
+    // + get the max updatedAt
+    const result = await tx.$queryRaw<{ count: bigint; maxUpdate: Date | null }[]>`
+      SELECT
+        COUNT(*)::text::bigint AS "count",
+        MAX("updatedAt") AS "maxUpdate"
+      FROM "evidence"
+      WHERE "tenantId" = ${tenantId}
+        AND (metadata->>'countryId') = ${input.countryId}
+    `;
+    return {
+      count: Number(result[0]?.count ?? 0),
+      maxUpdate: result[0]?.maxUpdate ? result[0].maxUpdate.toISOString() : "none",
+    };
+  });
+
+  // Dynamic idempotency key: country + sectors + evidence state
+  // If evidence changes → key changes → new task → fresh report
+  const sectorsPart = input.sectors?.join(",") ?? "all";
+  const idempotencyKey = `baseline:${input.countryId}:${sectorsPart}:ev-${evidenceState.count}:${evidenceState.maxUpdate}`;
+
+  // 1. Create the Durable Task (idempotent — prevents duplicate baselines for same evidence state)
   const { taskId, created } = await createTask(session, {
     type: "baseline-compute",
-    goal: `Compute State Baseline for country ${input.countryId}`,
-    input: { countryId: input.countryId, sectors: input.sectors ?? null } as unknown as Record<string, unknown>,
+    goal: `Compute State Baseline for country ${input.countryId} (evidence: ${evidenceState.count} items, last update: ${evidenceState.maxUpdate})`,
+    input: {
+      countryId: input.countryId,
+      sectors: input.sectors ?? null,
+      evidenceSnapshot: { count: evidenceState.count, maxUpdate: evidenceState.maxUpdate },
+    } as unknown as Record<string, unknown>,
     idempotencyKey,
   });
 
-  // If the task already existed (idempotent), return its output if completed
+  // If the task already existed (same evidence state), return its output if completed
   if (!created) {
     const existingReport = await getBaselineTaskOutput(session, taskId);
     if (existingReport) {
       return { taskId, report: existingReport };
     }
-    // Task exists but not completed — this shouldn't happen in normal flow
-    // (baseline is synchronous). If it does, re-run the computation.
-    // Fall through to re-claim + re-compute.
+    // Task exists but not completed — fall through to claim + compute
   }
 
-  // 2. Claim + start + complete the SPECIFIC task (inside tenant-scoped transaction)
-  //    We use updateMany with a WHERE clause that matches ONLY this task ID
-  //    + status=pending|claimed (defensive). This avoids the generic claimTask
-  //    which may pick an unrelated pending task.
+  // 2. FIX-4: Claim the SPECIFIC task by ID using G00's claimTaskById
+  //    This respects the lease contract (never steals active tasks)
   const workerId = "baseline-worker";
   const leaseDurationMs = 60_000;
 
-  const report = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    // Verify the country exists (PUBLIC table — readable by all tenants)
-    const country = await tx.country.findUnique({ where: { id: input.countryId } });
-    if (!country) {
-      throw new Error(`Country not found: ${input.countryId}`);
+  const claimed = await claimTaskById(session, taskId, workerId, leaseDurationMs);
+
+  if (!claimed) {
+    // Task could not be claimed — either already completed, or held by active worker
+    const existingReport = await getBaselineTaskOutput(session, taskId);
+    if (existingReport) {
+      return { taskId, report: existingReport };
     }
+    throw new Error(
+      `Baseline task ${taskId} could not be claimed (may be held by another worker with a valid lease). Poll getBaselineTask() for status.`
+    );
+  }
 
-    // Claim the specific task by ID (atomic, with fencing token)
-    const claimResult = await tx.$queryRaw<{ claimGeneration: number }[]>`
-      UPDATE "tasks"
-      SET "status" = 'running',
-          "claimedBy" = ${workerId},
-          "claimGeneration" = "claimGeneration" + 1,
-          "leaseExpiresAt" = NOW() + (${leaseDurationMs}::integer / 1000.0) * INTERVAL '1 second',
-          "startedAt" = NOW(),
-          "updatedAt" = NOW()
-      WHERE "id" = ${taskId}
-        AND "tenantId" = ${tenantId}
-        AND "status" IN ('pending', 'claimed')
-      RETURNING "claimGeneration";
-    `;
+  // 3. Start the task (G00 contract: startTask verifies claimGeneration + lease)
+  await startTask(session, taskId, workerId, claimed.claimGeneration);
 
-    if (claimResult.length === 0) {
-      // Task was already claimed/completed by another call — read its output
-      const existing = await tx.task.findFirst({
-        where: { id: taskId, tenantId },
-      });
-      if (existing?.status === "completed" && existing.output) {
-        return existing.output as unknown as BaselineReport;
+  // 4. Run the computation (inside tenant-scoped transaction)
+  try {
+    const report = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+      // Verify the country exists (PUBLIC table — readable by all tenants)
+      const country = await tx.country.findUnique({ where: { id: input.countryId } });
+      if (!country) {
+        throw new Error(`Country not found: ${input.countryId}`);
       }
-      throw new Error(
-        `Baseline task ${taskId} could not be claimed (status not pending/claimed). Current status: ${existing?.status ?? "not found"}`
+
+      const computed = await runBaselineComputation(
+        tx,
+        tenantId,
+        input.countryId,
+        input.sectors
       );
-    }
 
-    const claimGeneration = claimResult[0]!.claimGeneration;
-
-    // Record task event (started)
-    await tx.taskEvent.create({
-      data: {
-        taskId,
-        tenantId,
-        eventType: "started",
-        actor: workerId,
-      },
+      return { ...computed, taskId } as BaselineReport;
     });
 
-    // Run the computation
-    let computed: Omit<BaselineReport, "taskId">;
-    try {
-      computed = await runBaselineComputation(tx, tenantId, input.countryId, input.sectors);
-    } catch (err) {
-      // Fail the task
-      await tx.task.update({
-        where: { id: taskId },
-        data: {
-          status: "failed",
-          error: err instanceof Error ? err.message : String(err),
-          leaseExpiresAt: null,
-        },
-      });
-      await tx.taskEvent.create({
-        data: {
-          taskId,
-          tenantId,
-          eventType: "failed",
-          actor: workerId,
-          details: { error: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200) } as Prisma.InputJsonValue,
-        },
-      });
-      throw err;
-    }
+    // 5. Complete the task (G00 contract: completeTask verifies claimGeneration + lease)
+    await completeTask(
+      session,
+      taskId,
+      report as unknown as Record<string, unknown>,
+      workerId,
+      claimed.claimGeneration
+    );
 
-    const fullReport: BaselineReport = { ...computed, taskId };
-
-    // Complete the task (verify claimGeneration for fencing)
-    const completeResult = await tx.task.updateMany({
-      where: {
-        id: taskId,
-        tenantId,
-        claimedBy: workerId,
-        claimGeneration,
-        status: "running",
-      },
-      data: {
-        status: "completed",
-        output: fullReport as unknown as Prisma.InputJsonValue,
-        progress: 100,
-        completedAt: new Date(),
-        leaseExpiresAt: null,
-      },
-    });
-
-    if (completeResult.count === 0) {
-      // Fencing mismatch — another worker took over. Read the winner's output.
-      const existing = await tx.task.findFirst({ where: { id: taskId, tenantId } });
-      if (existing?.status === "completed" && existing.output) {
-        return existing.output as unknown as BaselineReport;
-      }
-      throw new Error(`Baseline task ${taskId} fencing mismatch during completion`);
-    }
-
-    // Record task event (completed)
-    await tx.taskEvent.create({
-      data: {
-        taskId,
-        tenantId,
-        eventType: "completed",
-        actor: workerId,
-        details: { outputKeys: Object.keys(fullReport) } as Prisma.InputJsonValue,
-      },
-    });
-
-    return fullReport;
-  });
-
-  return { taskId, report };
+    return { taskId, report };
+  } catch (err) {
+    // Fail the task with the error message
+    await failTask(
+      session,
+      taskId,
+      err instanceof Error ? err.message : String(err),
+      workerId,
+      claimed.claimGeneration
+    );
+    throw err;
+  }
 }
 
 // ============================================================
@@ -576,8 +686,6 @@ async function getBaselineTaskOutput(
   session: Session,
   taskId: string
 ): Promise<BaselineReport | null> {
-  // This helper bypasses the permission check (it's called from computeBaseline
-  // which already checked baseline:compute). It reads the task output if completed.
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
     const task = await tx.task.findFirst({
       where: { id: taskId, tenantId },
@@ -600,14 +708,11 @@ export async function getLatestBaseline(
   await requirePermissionWithCurrentRole(session, "baseline:read");
 
   return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    // Find the most recent completed baseline task for this country
     const task = await tx.task.findFirst({
       where: {
         tenantId,
         type: "baseline-compute",
         status: "completed",
-        // Filter by countryId in the input JSONB
-        // Prisma supports JSON filtering via path
         input: { path: ["countryId"], equals: countryId } as never,
       },
       orderBy: { completedAt: "desc" },

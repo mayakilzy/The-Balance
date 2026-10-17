@@ -155,6 +155,89 @@ export async function claimTask(
 }
 
 // ============================================================
+// CLAIM TASK BY ID (G01 01-01-FIX-4: targeted claim, avoids generic race)
+// ------------------------------------------------------------
+// The generic claimTask() picks ANY pending task via SELECT FOR UPDATE
+// SKIP LOCKED. In environments with multiple task types (e.g., baseline +
+// recovery tests), this can pick an unrelated task.
+//
+// claimTaskById() claims a SPECIFIC task by ID, respecting G00's lease
+// contract:
+//   - Claims tasks with status='pending'
+//   - Claims tasks with status IN ('claimed','running') ONLY IF lease expired
+//     (leaseExpiresAt < NOW()) — this is the same condition reclaimStaleTasks uses
+//   - NEVER claims a task with a valid (non-expired) lease held by another worker
+//
+// Returns the claimGeneration (fencing token) or null if the task could not
+// be claimed (already completed, failed, or held by an active worker).
+//
+// This is a small, governed extension to G00's Task Runtime — not a rewrite.
+// It uses the same atomic UPDATE...RETURNING pattern as claimTask + reclaimStaleTasks.
+// ============================================================
+
+export interface ClaimedTaskById {
+  taskId: string;
+  claimGeneration: number;
+  claimedBy: string;
+  leaseExpiresAt: Date;
+}
+
+export async function claimTaskById(
+  session: Session,
+  taskId: string,
+  workerId: string,
+  leaseDurationMs: number = LEASE_DURATION_MS
+): Promise<ClaimedTaskById | null> {
+  return withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+    // Atomic claim-by-ID:
+    // - Match the specific task ID + tenant
+    // - status='pending' OR (status IN ('claimed','running') AND lease expired)
+    // - This respects G00's lease contract: never steal a task with a valid lease
+    const rows = await tx.$queryRaw<ClaimedTaskById[]>`
+      UPDATE "tasks"
+      SET "status" = 'claimed',
+          "claimedBy" = ${workerId},
+          "claimGeneration" = "claimGeneration" + 1,
+          "leaseExpiresAt" = NOW() + (${leaseDurationMs}::integer / 1000.0) * INTERVAL '1 second',
+          "updatedAt" = NOW()
+      WHERE "id" = ${taskId}
+        AND "tenantId" = ${tenantId}
+        AND (
+          "status" = 'pending'
+          OR (
+            "status" IN ('claimed', 'running')
+            AND "leaseExpiresAt" IS NOT NULL
+            AND "leaseExpiresAt" < NOW()
+          )
+        )
+      RETURNING "id" AS "taskId", "claimGeneration", "claimedBy", "leaseExpiresAt";
+    `;
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    const claimed = rows[0]!;
+
+    await tx.taskEvent.create({
+      data: {
+        taskId: claimed.taskId,
+        tenantId,
+        eventType: "claimed",
+        actor: workerId,
+        details: {
+          claimById: true,
+          leaseDurationMs,
+          claimGeneration: claimed.claimGeneration,
+        } as Prisma.InputJsonValue,
+      },
+    });
+
+    return claimed;
+  });
+}
+
+// ============================================================
 // FENCING HELPER: verify worker owns current claim + lease is valid
 // ============================================================
 // All task operations use updateMany with WHERE clause that checks:
