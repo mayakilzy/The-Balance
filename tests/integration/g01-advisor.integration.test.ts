@@ -1040,8 +1040,10 @@ describeIntegration("01-09: Development Advisor v1", () => {
     });
 
     // If no counter-evidence was in the metadata, the report should say so honestly
+    // 01-09-FIX FINAL: text changed from "No counter-evidence references were found"
+    // to "No resolved counter-evidence references were found"
     const noCounterEvidenceNote = report.counterEvidence.find(
-      (c) => c.includes("No counter-evidence references were found") &&
+      (c) => c.includes("No resolved counter-evidence references were found") &&
             c.includes("NOT a claim that no counter-evidence exists in reality")
     );
     // Either we found actual counter-evidence OR we honestly say none was found
