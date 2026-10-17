@@ -75,14 +75,14 @@ echo "[3/8] Running prisma migrate deploy..."
 bunx prisma migrate deploy
 echo "  Migrations applied."
 
-# Verify migrations table exists and has 16 entries
+# Verify migrations table exists and has 16+ entries (16 G00 + 1 G01 = 17 minimum)
 MIGRATION_COUNT=$(PGPASSWORD=balance_admin_dev_only psql -h "$DB_HOST" -p "$DB_PORT" -U balance_admin -d "$DB_NAME" -t -A <<'SQL'
 SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL;
 SQL
 )
 echo "  Applied migrations: $MIGRATION_COUNT"
-if [ "$MIGRATION_COUNT" -lt 16 ]; then
-  echo "FAIL: Expected at least 16 migrations, found $MIGRATION_COUNT"
+if [ "$MIGRATION_COUNT" -lt 17 ]; then
+  echo "FAIL: Expected at least 17 migrations (16 G00 + 1 G01), found $MIGRATION_COUNT"
   exit 1
 fi
 
@@ -127,9 +127,10 @@ if [ "$CAPABILITY_COUNT" -ne 0 ]; then echo "NOTE: Expected 0 capabilities on fr
 echo "  All seed counts within expected range."
 
 # ------------------------------------------------------------
-# STEP 6: Verify RLS is ENABLED + FORCED on all 14 private tables (strict)
+# STEP 6: Verify RLS is ENABLED + FORCED on all 22 private tables (strict)
 # ------------------------------------------------------------
-echo "[6/8] Verifying RLS (ENABLE + FORCE) on all 14 private tables..."
+# 14 G00 private tables + 8 G01 private tables (migration 0017)
+echo "[6/8] Verifying RLS (ENABLE + FORCE) on all 22 private tables..."
 RLS_RESULT=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -t -A <<'SQL'
 SELECT
   count(*) AS total,
@@ -137,45 +138,57 @@ SELECT
   count(*) FILTER (WHERE relforcerowsecurity = true) AS rls_forced
 FROM pg_class
 WHERE relname IN (
+  -- G00 private tables (14)
   'users', 'memberships', 'tasks', 'task_events', 'evidence',
   'evidence_embeddings', 'strategies', 'strategy_versions',
   'decisions', 'decision_events', 'events', 'audit_log',
-  'capability_invocations', 'tenants'
+  'capability_invocations', 'tenants',
+  -- G01 private tables (8, migration 0017)
+  'objectives', 'country_pack_configs', 'programs', 'projects',
+  'budget_lines', 'dependencies', 'risk_registers', 'assumptions'
 );
 SQL
 )
 IFS='|' read -r RLS_TOTAL RLS_ENABLED RLS_FORCED <<< "$(echo "$RLS_RESULT" | tr -d ' ')"
-echo "  Private tables: total=$RLS_TOTAL, RLS enabled=$RLS_ENABLED, RLS forced=$RLS_FORCED (expected 14/14/14)"
+echo "  Private tables: total=$RLS_TOTAL, RLS enabled=$RLS_ENABLED, RLS forced=$RLS_FORCED (expected 22/22/22)"
 
-if [ "$RLS_TOTAL" -ne 14 ]; then
-  echo "FAIL: Expected 14 private tables, found $RLS_TOTAL"
+if [ "$RLS_TOTAL" -ne 22 ]; then
+  echo "FAIL: Expected 22 private tables, found $RLS_TOTAL"
   exit 1
 fi
-if [ "$RLS_ENABLED" -ne 14 ]; then
-  echo "FAIL: $((14 - RLS_ENABLED)) table(s) missing ENABLE ROW LEVEL SECURITY:"
+if [ "$RLS_ENABLED" -ne 22 ]; then
+  echo "FAIL: $((22 - RLS_ENABLED)) table(s) missing ENABLE ROW LEVEL SECURITY:"
   psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
     SELECT relname FROM pg_class
-    WHERE relname IN ('users', 'memberships', 'tasks', 'task_events', 'evidence',
-                      'evidence_embeddings', 'strategies', 'strategy_versions',
-                      'decisions', 'decision_events', 'events', 'audit_log',
-                      'capability_invocations', 'tenants')
+    WHERE relname IN (
+      'users', 'memberships', 'tasks', 'task_events', 'evidence',
+      'evidence_embeddings', 'strategies', 'strategy_versions',
+      'decisions', 'decision_events', 'events', 'audit_log',
+      'capability_invocations', 'tenants',
+      'objectives', 'country_pack_configs', 'programs', 'projects',
+      'budget_lines', 'dependencies', 'risk_registers', 'assumptions'
+    )
       AND relrowsecurity = false;
   "
   exit 1
 fi
-if [ "$RLS_FORCED" -ne 14 ]; then
-  echo "FAIL: $((14 - RLS_FORCED)) table(s) missing FORCE ROW LEVEL SECURITY:"
+if [ "$RLS_FORCED" -ne 22 ]; then
+  echo "FAIL: $((22 - RLS_FORCED)) table(s) missing FORCE ROW LEVEL SECURITY:"
   psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
     SELECT relname FROM pg_class
-    WHERE relname IN ('users', 'memberships', 'tasks', 'task_events', 'evidence',
-                      'evidence_embeddings', 'strategies', 'strategy_versions',
-                      'decisions', 'decision_events', 'events', 'audit_log',
-                      'capability_invocations', 'tenants')
+    WHERE relname IN (
+      'users', 'memberships', 'tasks', 'task_events', 'evidence',
+      'evidence_embeddings', 'strategies', 'strategy_versions',
+      'decisions', 'decision_events', 'events', 'audit_log',
+      'capability_invocations', 'tenants',
+      'objectives', 'country_pack_configs', 'programs', 'projects',
+      'budget_lines', 'dependencies', 'risk_registers', 'assumptions'
+    )
       AND relforcerowsecurity = false;
   "
   exit 1
 fi
-echo "  Verified: all 14 private tables have ENABLE + FORCE RLS"
+echo "  Verified: all 22 private tables have ENABLE + FORCE RLS"
 
 # ------------------------------------------------------------
 # STEP 7: Verify balance_app privileges (no superuser, no bypassrls)
@@ -223,9 +236,9 @@ fi
 
 echo ""
 echo "=== FRESH INSTALL VERIFICATION: PASS ==="
-echo "  - Database started empty, all 16 migrations applied"
-echo "  - Seed created Demolandia fixture + test users"
-echo "  - RLS enabled on all 14 private tables"
+echo "  - Database started empty, all 17 migrations applied (16 G00 + 1 G01)"
+echo "  - Seed created Demolandia v2 fixture + test users + G01 data"
+echo "  - RLS enabled on all 22 private tables (14 G00 + 8 G01)"
 echo "  - balance_app: not superuser, no bypassrls"
 echo "  - audit_log: append-only (no UPDATE/DELETE for balance_app)"
 echo ""

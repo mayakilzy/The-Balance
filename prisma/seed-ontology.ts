@@ -11,7 +11,7 @@
 // IMPORTANT: This connects as balance_admin (via DIRECT_URL) because
 // balance_app cannot INSERT into PUBLIC tables (RLS blocks writes).
 // ============================================================
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, Prisma } from "@prisma/client";
 import { hashPassword } from "../src/lib/password";
 
 const prisma = new PrismaClient({
@@ -448,6 +448,209 @@ async function main() {
   console.log("\nEvidence fabric seed complete.");
   console.log("  Note: Embeddings use StubProvider (deterministic, not real).");
   console.log("  Real embeddings will be added in 00-06 when ZaiProvider is implemented.");
+
+  // ============================================================
+  // 10. G01 STATE BUILDER — Demolandia v2 (01-00)
+  // ============================================================
+  // Per ADR-0013 + G01 Mission Pack §13 (Corrections 1, 2, 3, A):
+  //   - 5+ objectives for Tenant A (fictional, clearly labeled)
+  //   - CountryPackConfig for BOTH tenants (PRIVATE — each tenant has its own)
+  //   - Cross-tenant isolation is enforced by RLS, but we seed different
+  //     data per tenant to make the isolation testable + visible.
+  console.log("\nSeeding G01 State Builder (Demolandia v2)...");
+
+  // 10a. CountryPackConfig for Tenant A (Ministry of Planning)
+  // Tracks 4 sectors; observability is PARTIAL for most (developing country fixture).
+  const configA = await prisma.countryPackConfig.upsert({
+    where: {
+      tenantId_countryId: { tenantId: tenantA.id, countryId: country.id },
+    },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      countryId: country.id,
+      sectors: ["agriculture", "finance", "education", "health"] as unknown as Prisma.InputJsonValue,
+      observability: {
+        agriculture: "FULL",
+        finance: "PARTIAL",
+        education: "LOW",
+        health: "PARTIAL",
+      } as unknown as Prisma.InputJsonValue,
+      planningAssumptions: {
+        baselineYear: 2025,
+        targetYear: 2030,
+        currency: "DML", // fictional Demolandia currency
+        population: 12_000_000, // fictional
+        gdpPerCapitaUSD: 3200, // fictional
+        fictional: true,
+      } as unknown as Prisma.InputJsonValue,
+      metadata: {
+        seededBy: "01-00-seed",
+        version: "v2",
+        fictional: true,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  // 10b. CountryPackConfig for Tenant B (Central Bank)
+  // Tracks fewer sectors (finance-focused); different observability + assumptions.
+  // This is the KEY test for Correction A: two tenants, same country, DIFFERENT
+  // PRIVATE configs. RLS must prevent Tenant A from seeing Tenant B's config.
+  const configB = await prisma.countryPackConfig.upsert({
+    where: {
+      tenantId_countryId: { tenantId: tenantB.id, countryId: country.id },
+    },
+    update: {},
+    create: {
+      tenantId: tenantB.id,
+      countryId: country.id,
+      sectors: ["finance", "monetary", "external"] as unknown as Prisma.InputJsonValue,
+      observability: {
+        finance: "FULL",
+        monetary: "FULL",
+        external: "PARTIAL",
+      } as unknown as Prisma.InputJsonValue,
+      planningAssumptions: {
+        baselineYear: 2025,
+        targetYear: 2027,
+        currency: "DML",
+        inflationTarget: 5.0,
+        fictional: true,
+      } as unknown as Prisma.InputJsonValue,
+      metadata: {
+        seededBy: "01-00-seed",
+        version: "v2",
+        fictional: true,
+      } as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  console.log(`  CountryPackConfig: Tenant A (sectors: agriculture,finance,education,health)`);
+  console.log(`  CountryPackConfig: Tenant B (sectors: finance,monetary,external)`);
+
+  // 10c. Objectives for Tenant A — 5 objectives (≥5 per mission requirement)
+  // All clearly fictional, attributed to Demolandia.
+  const objectivesA = [
+    {
+      tenantId: tenantA.id,
+      countryId: country.id,
+      title: "Reduce unemployment to 10% within 5 years",
+      description:
+        "Fictional objective: reduce Demolandia's unemployment rate from a fictional 14.5% baseline to 10% by 2030.",
+      targetMetric: "unemployment_rate",
+      targetValue: "10",
+      horizon: 5,
+      status: "active",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "01-00-seed", fictional: true, sector: "finance" },
+    },
+    {
+      tenantId: tenantA.id,
+      countryId: country.id,
+      title: "Increase agricultural GDP growth to 6% annually",
+      description:
+        "Fictional objective: raise Demolandia's agricultural GDP growth from a fictional 4.2% to 6% per year.",
+      targetMetric: "agricultural_gdp_growth_rate",
+      targetValue: "6",
+      horizon: 5,
+      status: "active",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "01-00-seed", fictional: true, sector: "agriculture" },
+    },
+    {
+      tenantId: tenantA.id,
+      countryId: country.id,
+      title: "Achieve 95% primary school enrollment",
+      description:
+        "Fictional objective: raise Demolandia's primary school enrollment from a fictional 88% to 95%.",
+      targetMetric: "primary_school_enrollment_rate",
+      targetValue: "95",
+      horizon: 7,
+      status: "draft",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "01-00-seed", fictional: true, sector: "education" },
+    },
+    {
+      tenantId: tenantA.id,
+      countryId: country.id,
+      title: "Reduce maternal mortality to 100 per 100,000 live births",
+      description:
+        "Fictional objective: lower Demolandia's maternal mortality ratio from a fictional 180 to 100.",
+      targetMetric: "maternal_mortality_ratio",
+      targetValue: "100",
+      horizon: 8,
+      status: "draft",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "01-00-seed", fictional: true, sector: "health" },
+    },
+    {
+      tenantId: tenantA.id,
+      countryId: country.id,
+      title: "Maintain inflation below 5% annually",
+      description:
+        "Fictional objective: keep Demolandia's annual inflation rate below 5% (coordinated with Central Bank).",
+      targetMetric: "inflation_rate",
+      targetValue: "5",
+      horizon: 3,
+      status: "active",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "01-00-seed", fictional: true, sector: "finance" },
+    },
+  ];
+
+  for (const obj of objectivesA) {
+    // Idempotent: skip if an objective with the same title already exists for this tenant.
+    const existing = await prisma.objective.findFirst({
+      where: { tenantId: obj.tenantId, title: obj.title },
+    });
+    if (!existing) {
+      await prisma.objective.create({ data: obj });
+    }
+  }
+
+  // 10d. Objectives for Tenant B — 2 objectives (Central Bank focus)
+  // Different from Tenant A's objectives — this is the key test for cross-tenant isolation.
+  const objectivesB = [
+    {
+      tenantId: tenantB.id,
+      countryId: country.id,
+      title: "Maintain foreign exchange reserves above 6 months of imports",
+      description:
+        "Fictional objective: keep Demolandia's FX reserves at ≥6 months of import cover.",
+      targetMetric: "fx_reserves_months_of_imports",
+      targetValue: "6",
+      horizon: 3,
+      status: "active",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "01-00-seed", fictional: true, sector: "external" },
+    },
+    {
+      tenantId: tenantB.id,
+      countryId: country.id,
+      title: "Keep monetary base growth within 8% annually",
+      description:
+        "Fictional objective: constrain Demolandia's monetary base growth to ≤8% per year.",
+      targetMetric: "monetary_base_growth_rate",
+      targetValue: "8",
+      horizon: 3,
+      status: "active",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "01-00-seed", fictional: true, sector: "monetary" },
+    },
+  ];
+
+  for (const obj of objectivesB) {
+    const existing = await prisma.objective.findFirst({
+      where: { tenantId: obj.tenantId, title: obj.title },
+    });
+    if (!existing) {
+      await prisma.objective.create({ data: obj });
+    }
+  }
+
+  console.log(`  Objectives: Tenant A = 5, Tenant B = 2 (all fictional, clearly labeled)`);
+  console.log(`  Cross-tenant isolation: Tenant A's objectives ≠ Tenant B's objectives`);
+  console.log("\nG01 State Builder seed complete.");
 }
 
 main()

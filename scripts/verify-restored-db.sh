@@ -51,8 +51,8 @@ SQL
 if [ "$MIGRATION_COUNT" = "ERROR" ] || [ -z "$MIGRATION_COUNT" ]; then
   echo "  FAIL: Cannot read _prisma_migrations table (balance_admin may lack access or table missing)"
   FAIL=1
-elif [ "$MIGRATION_COUNT" -lt 16 ]; then
-  echo "  FAIL: Expected >=16 applied migrations, found $MIGRATION_COUNT"
+elif [ "$MIGRATION_COUNT" -lt 17 ]; then
+  echo "  FAIL: Expected >=17 applied migrations (16 G00 + 1 G01), found $MIGRATION_COUNT"
   FAIL=1
 else
   echo "  OK: $MIGRATION_COUNT migrations applied"
@@ -94,8 +94,9 @@ else
 fi
 
 # ------------------------------------------------------------
-# STEP 3: Verify RLS is ENABLED + FORCED on all 14 private tables
+# STEP 3: Verify RLS is ENABLED + FORCED on all 22 private tables
 # ------------------------------------------------------------
+# 14 G00 private tables + 8 G01 private tables (migration 0017)
 echo "[3/6] Verifying RLS (ENABLE + FORCE) on all private tables..."
 RLS_RESULT=$(psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -t -A 2>/dev/null <<'SQL' || echo "ERROR"
 SELECT
@@ -104,10 +105,14 @@ SELECT
   count(*) FILTER (WHERE relforcerowsecurity = true) AS rls_forced
 FROM pg_class
 WHERE relname IN (
+  -- G00 private tables (14)
   'users', 'memberships', 'tasks', 'task_events', 'evidence',
   'evidence_embeddings', 'strategies', 'strategy_versions',
   'decisions', 'decision_events', 'events', 'audit_log',
-  'capability_invocations', 'tenants'
+  'capability_invocations', 'tenants',
+  -- G01 private tables (8, migration 0017)
+  'objectives', 'country_pack_configs', 'programs', 'projects',
+  'budget_lines', 'dependencies', 'risk_registers', 'assumptions'
 );
 SQL
 )
@@ -116,14 +121,13 @@ if [ "$RLS_RESULT" = "ERROR" ] || [ -z "$RLS_RESULT" ]; then
   FAIL=1
 else
   IFS='|' read -r TOTAL ENABLED FORCED <<< "$(echo "$RLS_RESULT" | tr -d ' ')"
-  echo "  Private tables: total=$TOTAL, RLS enabled=$ENABLED, RLS forced=$FORCED (expected 14/14/14)"
+  echo "  Private tables: total=$TOTAL, RLS enabled=$ENABLED, RLS forced=$FORCED (expected 22/22/22)"
 
-  if [ "$TOTAL" -ne 14 ]; then
-    echo "  FAIL: Expected 14 private tables, found $TOTAL — some tables missing from restore"
+  if [ "$TOTAL" -ne 22 ]; then
+    echo "  FAIL: Expected 22 private tables, found $TOTAL — some tables missing from restore"
     FAIL=1
-  elif [ "$ENABLED" -ne 14 ]; then
-    echo "  FAIL: $((14 - ENABLED)) table(s) missing ENABLE ROW LEVEL SECURITY"
-    # List the offending tables
+  elif [ "$ENABLED" -ne 22 ]; then
+    echo "  FAIL: $((22 - ENABLED)) table(s) missing ENABLE ROW LEVEL SECURITY"
     psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" -c "
       SELECT relname, relrowsecurity, relforcerowsecurity
       FROM pg_class
@@ -131,17 +135,19 @@ else
         'users', 'memberships', 'tasks', 'task_events', 'evidence',
         'evidence_embeddings', 'strategies', 'strategy_versions',
         'decisions', 'decision_events', 'events', 'audit_log',
-        'capability_invocations', 'tenants'
+        'capability_invocations', 'tenants',
+        'objectives', 'country_pack_configs', 'programs', 'projects',
+        'budget_lines', 'dependencies', 'risk_registers', 'assumptions'
       )
         AND (relrowsecurity = false OR relforcerowsecurity = false)
       ORDER BY relname;
     " 2>/dev/null
     FAIL=1
-  elif [ "$FORCED" -ne 14 ]; then
-    echo "  FAIL: $((14 - FORCED)) table(s) missing FORCE ROW LEVEL SECURITY"
+  elif [ "$FORCED" -ne 22 ]; then
+    echo "  FAIL: $((22 - FORCED)) table(s) missing FORCE ROW LEVEL SECURITY"
     FAIL=1
   else
-    echo "  OK: All 14 private tables have ENABLE + FORCE RLS"
+    echo "  OK: All 22 private tables have ENABLE + FORCE RLS"
   fi
 fi
 
@@ -214,7 +220,7 @@ if [ "$FAIL" -eq 0 ]; then
   echo "=== RESTORED DB VERIFICATION: PASS ==="
   echo "  - $MIGRATION_COUNT migrations applied"
   echo "  - Seed-level data present"
-  echo "  - RLS ENABLE + FORCE on all 14 private tables"
+  echo "  - RLS ENABLE + FORCE on all 22 private tables (14 G00 + 8 G01)"
   echo "  - balance_app: not superuser, no bypassrls"
   echo "  - audit_log: append-only"
   echo "  - balance_app can read PUBLIC tables"

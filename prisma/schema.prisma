@@ -32,6 +32,9 @@ model Country {
   tenants        Tenant[]
   stateHierarchy StateHierarchy[]
   institutions   Institution[]
+  // G01 (migration 0017): tenant-scoped planning data referencing this country
+  objectives         Objective[]
+  countryPackConfigs CountryPackConfig[]
 
   @@map("countries")
   @@index([status])
@@ -149,6 +152,15 @@ model Tenant {
   tasks       Task[]
   taskEvents  TaskEvent[]
   capabilityInvocations CapabilityInvocation[]
+  // G01 (migration 0017): tenant-scoped State Builder planning data
+  objectives         Objective[]
+  countryPackConfigs CountryPackConfig[]
+  programs           Program[]
+  projects           Project[]
+  budgetLines        BudgetLine[]
+  dependencies       Dependency[]
+  riskRegisters      RiskRegister[]
+  assumptions        Assumption[]
 
   @@map("tenants")
   @@index([status])
@@ -314,6 +326,9 @@ model Strategy {
   description String?
   // Status: draft | submitted | approved | archived
   status      String   @default("draft")
+  // G01 (migration 0017): groups alternatives from the same composer run.
+  // Nullable: existing G00 strategies have no batch. RLS-enforced (same policy as the rest of the table).
+  compositionBatchId String?
   createdBy   String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -322,6 +337,7 @@ model Strategy {
   versions StrategyVersion[]
 
   @@index([tenantId, status])
+  @@index([tenantId, compositionBatchId])
   @@map("strategies")
 }
 
@@ -336,6 +352,11 @@ model StrategyVersion {
   approvedBy     String?
   approvedAt     DateTime?
   approvalNotes  String?
+  // G01 (migration 0017): provenance metadata.
+  // Stores { simulated, provider, composedAt, compositionBatchId, modelVersion }.
+  // Immutable post-approval (the extended enforce_approved_version_immutability() trigger
+  // blocks UPDATE on this column for approved versions — see migration 0017).
+  metadata       Json      @default("{}")
   createdBy      String
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -343,6 +364,10 @@ model StrategyVersion {
   strategy  Strategy   @relation(fields: [strategyId], references: [id], onDelete: Cascade)
   tenant    Tenant     @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   decisions Decision[]
+  // G01 (migration 0017): State Builder child entities
+  programs      Program[]
+  riskRegisters RiskRegister[]
+  assumptions   Assumption[]
 
   @@unique([strategyId, versionNumber])
   @@index([tenantId, status])
@@ -518,4 +543,201 @@ model CapabilityInvocation {
   @@index([capabilityId])
   @@index([taskId])
   @@map("capability_invocations")
+}
+
+// ============================================================
+// G01 STATE BUILDER (01-00) — 8 new PRIVATE tables
+// ------------------------------------------------------------
+// All tenant-scoped, RLS ENABLE + FORCE (see migration 0017).
+// Per ADR-0013 + G01 Mission Pack §13 (Corrections 1, 2, 3, A).
+//
+// PUBLIC reference data (countries, institutions, state_hierarchy, role_references,
+// source_registry, public_knowledge) stays in G00 tables — G01 reads them, never
+// duplicates them. A tenant's planning data (objectives, country_pack_configs,
+// programs, etc.) is PRIVATE and never visible to other tenants.
+// ============================================================
+
+model Objective {
+  id           String   @id @default(cuid())
+  tenantId     String
+  countryId    String
+  title        String
+  description  String?
+  // Target metric (e.g., "unemployment_rate")
+  targetMetric String
+  // Target value (e.g., "10" for 10%) — TEXT to support different units
+  targetValue  String
+  // Horizon in years (e.g., 5 for a 5-year goal)
+  horizon      Int
+  // Status: draft | active | achieved | abandoned
+  status       String   @default("draft")
+  createdBy    String
+  metadata     Json     @default("{}")
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant  Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  country Country  @relation(fields: [countryId], references: [id])
+
+  @@index([tenantId, countryId])
+  @@index([tenantId, status])
+  @@map("objectives")
+}
+
+model CountryPackConfig {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  countryId           String
+  // Sectors this tenant tracks (e.g., ["agriculture","finance","health"])
+  sectors             Json     @default("[]")
+  // Observability mode per sector: { "agriculture": "FULL", "health": "PARTIAL", ... }
+  observability       Json     @default("{}")
+  // Tenant-specific planning assumptions
+  planningAssumptions Json     @default("{}")
+  metadata            Json     @default("{}")
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  country Country @relation(fields: [countryId], references: [id])
+
+  @@unique([tenantId, countryId])
+  @@map("country_pack_configs")
+}
+
+model Program {
+  id                   String   @id @default(cuid())
+  tenantId             String
+  strategyVersionId    String
+  title                String
+  sector               String
+  // Owning institution (references PUBLIC institutions table; no FK because cross-country
+  // validation is enforced at the service layer in mission 01-04)
+  owningInstitutionId  String?
+  legalMandateRef      String?
+  rationale            String?
+  // Status: draft | proposed | active | completed | retired
+  status               String   @default("draft")
+  metadata             Json     @default("{}")
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  strategyVersion StrategyVersion @relation(fields: [strategyVersionId], references: [id], onDelete: Cascade)
+  projects        Project[]
+  budgetLines     BudgetLine[]
+  dependenciesFrom Dependency[] @relation("DependencyFrom")
+  dependenciesTo   Dependency[] @relation("DependencyTo")
+
+  @@index([tenantId, strategyVersionId])
+  @@index([tenantId, sector])
+  @@map("programs")
+}
+
+model Project {
+  id          String   @id @default(cuid())
+  tenantId    String
+  programId   String
+  title       String
+  description String?
+  // Status: draft | planned | active | completed | suspended | cancelled
+  status      String   @default("draft")
+  startYear   Int?
+  endYear     Int?
+  metadata    Json     @default("{}")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  program Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, programId])
+  @@map("projects")
+}
+
+model BudgetLine {
+  id              String   @id @default(cuid())
+  tenantId        String
+  programId       String
+  currency        String
+  // Conditional RANGES (min/max), never point estimates (no fake precision)
+  minAmount       Decimal  @db.Decimal(20, 2)
+  maxAmount       Decimal  @db.Decimal(20, 2)
+  horizonYears    Int
+  assumptions     Json     @default("[]")
+  financingSources Json    @default("[]")
+  modelVersion    String   @default("v1-deterministic")
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  program Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, programId])
+  @@map("budget_lines")
+}
+
+model Dependency {
+  id            String   @id @default(cuid())
+  tenantId      String
+  fromProgramId String
+  toProgramId   String
+  // type: requires | enables | conflicts
+  type          String
+  rationale     String?
+  metadata      Json     @default("{}")
+  createdAt     DateTime @default(now())
+
+  tenant      Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  fromProgram Program @relation("DependencyFrom", fields: [fromProgramId], references: [id], onDelete: Cascade)
+  toProgram   Program @relation("DependencyTo", fields: [toProgramId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, fromProgramId, toProgramId, type])
+  @@index([tenantId, fromProgramId])
+  @@index([tenantId, toProgramId])
+  @@map("dependencies")
+}
+
+model RiskRegister {
+  id                String   @id @default(cuid())
+  tenantId          String
+  strategyVersionId String
+  title             String
+  description       String?
+  // severity: low | medium | high | critical
+  severity          String   @default("medium")
+  // likelihood: low | medium | high
+  likelihood        String   @default("medium")
+  mitigation        String?
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  strategyVersion StrategyVersion @relation(fields: [strategyVersionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, strategyVersionId])
+  @@map("risk_registers")
+}
+
+model Assumption {
+  id                String   @id @default(cuid())
+  tenantId          String
+  strategyVersionId String
+  title             String
+  description       String?
+  // How this assumption can be validated (e.g., "monitor quarterly")
+  validationMethod  String?
+  // status: unverified | validated | invalidated
+  status            String   @default("unverified")
+  metadata          Json     @default("{}")
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  tenant          Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  strategyVersion StrategyVersion @relation(fields: [strategyVersionId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, strategyVersionId])
+  @@map("assumptions")
 }
