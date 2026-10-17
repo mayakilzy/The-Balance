@@ -42,6 +42,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     // G01 (01-06): Budget & Financing Estimates
     "budget:read",
     "budget:compute",
+    // G01 (01-07): Implementation Roadmap & Timeline
+    "roadmap:read",
   ],
   analyst: [
     "tenant:read",
@@ -62,6 +64,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     // G01 (01-06): Budget & Financing Estimates
     "budget:read",
     "budget:compute",
+    // G01 (01-07): Implementation Roadmap & Timeline
+    "roadmap:read",
   ],
   reviewer: [
     "tenant:read",
@@ -79,6 +83,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "program:read",
     // G01 (01-06): Budget & Financing Estimates — read-only for reviewers
     "budget:read",
+    // G01 (01-07): Implementation Roadmap & Timeline — read-only for reviewers
+    "roadmap:read",
   ],
   observer: [
     "tenant:read",
