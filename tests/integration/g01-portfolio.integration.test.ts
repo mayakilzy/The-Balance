@@ -96,21 +96,85 @@ afterAll(async () => {
   if (adminClient) await adminClient.$disconnect();
 });
 
-// Helper: compose strategies + expand programs + return a version ID + programs
+// Helper: compose strategies + expand programs + return a version ID + programs.
+// Picks the alternative with the MOST programs (Alternative B typically
+// produces one program per objective; Alternative A only produces programs
+// for sectors with supporting evidence).
 async function setupAlternativeWithPrograms(
   session: Session,
   objectiveIds: string[]
 ): Promise<{ versionId: string; programs: Array<{ programId: string; title: string; sector: string }> }> {
   const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
   const result = await composeStrategies(session, { countryId, objectiveIds });
-  const versionId = result.alternatives.find((a) => a.programs.length > 0)?.versionId
-    ?? result.alternatives[0]!.versionId;
+  // Pick the alternative with the most programs (for tests that need N programs).
+  // Fall back to the first alternative if all have zero programs.
+  const best = result.alternatives.reduce(
+    (best, a) => a.programs.length > best.programs.length ? a : best,
+    result.alternatives[0]!
+  );
+  const versionId = best.versionId;
   const { expandPrograms } = await import("@/lib/state-builder/program-service");
   const expanded = await expandPrograms(session, { strategyAlternativeId: versionId });
   return {
     versionId,
     programs: expanded.programs.map((p) => ({ programId: p.programId, title: p.title, sector: p.sector })),
   };
+}
+
+// Helper: ensure at least N programs exist for a strategy version by directly
+// creating extra test programs if the composer didn't produce enough.
+// Used by tests that need a specific program count for chain/cycle testing.
+async function ensureProgramCount(
+  session: Session,
+  versionId: string,
+  minCount: number
+): Promise<Array<{ programId: string; title: string; sector: string }>> {
+  const { getPrograms } = await import("@/lib/state-builder/program-service");
+  const programs = await getPrograms(session, versionId);
+  const mapped = programs.map((p) => ({ programId: p.programId, title: p.title, sector: p.sector }));
+
+  // If we already have enough, return.
+  if (mapped.length >= minCount) return mapped;
+
+  // Otherwise create additional test programs directly.
+  // These are explicitly labeled as FICTIONAL test fixtures.
+  const tenantId = session.user.tenantId!;
+  const needed = minCount - mapped.length;
+  const sectors = ["test_sector_a", "test_sector_b", "test_sector_c", "test_sector_d"];
+  for (let i = 0; i < needed; i++) {
+    const idx = mapped.length + i;
+    const created = await adminClient.program.create({
+      data: {
+        tenantId,
+        strategyVersionId: versionId,
+        title: `[FICTIONAL TEST FIXTURE] Program ${idx + 1}`,
+        sector: sectors[idx % sectors.length]!,
+        owningInstitutionId: null,
+        legalMandateRef: null,
+        rationale: `[FICTIONAL TEST FIXTURE] Created directly to satisfy portfolio test program-count requirements. ` +
+          `Not produced by the strategy composer. Labeled simulated=true.`,
+        status: "draft",
+        metadata: {
+          simulated: true,
+          sector: sectors[idx % sectors.length]!,
+          kpis: [],
+          requiredCapabilities: [],
+          mandateGap: true,
+          institutionAssignmentGap: true,
+          evidenceRefs: [],
+          counterEvidence: [],
+          expandedAt: new Date().toISOString(),
+          fictionalTestFixture: true,
+        },
+      },
+    });
+    mapped.push({
+      programId: created.id,
+      title: created.title,
+      sector: created.sector,
+    });
+  }
+  return mapped;
 }
 
 // ============================================================
@@ -230,14 +294,16 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
-    const { versionId, programs } = await setupAlternativeWithPrograms(
-      session, [objectiveAgricultureId]
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
     );
+    // Ensure at least 2 programs for the edge test
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
     expect(programs.length).toBeGreaterThanOrEqual(2);
 
     const [p1, p2] = programs;
     const edge = await addDependency(session, {
-      strategyAlternativeId: versionId,
+      strategyAlternativeId: setup.versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
@@ -250,7 +316,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     expect(edge.toProgramId).toBe(p2!.programId);
 
     // Verify it's persisted
-    const deps = await getDependencies(session, versionId);
+    const deps = await getDependencies(session, setup.versionId);
     expect(deps.length).toBe(1);
     expect(deps[0]!.id).toBe(edge.id);
   });
@@ -464,15 +530,18 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
-    const { versionId, programs } = await setupAlternativeWithPrograms(
-      session, [objectiveAgricultureId, objectiveInflationId, objectiveEducationId]
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
     );
+    // The composer may only produce 2 programs for 2 objectives.
+    // We need 3 for a 3-node chain — directly create a third FICTIONAL test program.
+    const programs = await ensureProgramCount(session, setup.versionId, 3);
     expect(programs.length).toBeGreaterThanOrEqual(3);
 
     // Build a chain p1 → p2 → p3 (requires)
     const [p1, p2, p3] = programs;
     await addDependency(session, {
-      strategyAlternativeId: versionId,
+      strategyAlternativeId: setup.versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
@@ -480,7 +549,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       source: "simulated",
     });
     await addDependency(session, {
-      strategyAlternativeId: versionId,
+      strategyAlternativeId: setup.versionId,
       fromProgramId: p2!.programId,
       toProgramId: p3!.programId,
       type: "requires",
@@ -488,7 +557,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       source: "simulated",
     });
 
-    const portfolio = await buildPortfolio(session, { strategyAlternativeId: versionId });
+    const portfolio = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
 
     // Critical path should be the longest chain: p1 → p2 → p3
     expect(portfolio.criticalPath.length).toBe(3);
@@ -595,16 +664,18 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
-    const { versionId, programs } = await setupAlternativeWithPrograms(
-      session, [objectiveAgricultureId]
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
     );
+    // Ensure at least 2 programs for the edge test
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
     expect(programs.length).toBeGreaterThanOrEqual(2);
 
     const [p1, p2] = programs;
 
     // Add the same edge twice
     const edge1 = await addDependency(session, {
-      strategyAlternativeId: versionId,
+      strategyAlternativeId: setup.versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
@@ -613,7 +684,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     });
 
     const edge2 = await addDependency(session, {
-      strategyAlternativeId: versionId,
+      strategyAlternativeId: setup.versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
@@ -625,7 +696,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     expect(edge2.id).toBe(edge1.id);
 
     // Portfolio shows exactly one edge
-    const portfolio = await buildPortfolio(session, { strategyAlternativeId: versionId });
+    const portfolio = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
     expect(portfolio.edges.length).toBe(1);
 
     // DB has exactly one row
@@ -719,9 +790,11 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
-    const { versionId, programs } = await setupAlternativeWithPrograms(
+    const setup = await setupAlternativeWithPrograms(
       session, [objectiveAgricultureId, objectiveInflationId]
     );
+    // Ensure at least 2 programs for the example
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
     expect(programs.length).toBeGreaterThanOrEqual(2);
 
     const [p1, p2] = programs;
@@ -730,7 +803,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     // This is simulated — Demolandia does not have documented cross-program
     // dependency relations. The rationale explicitly says so.
     const requiresEdge = await addDependency(session, {
-      strategyAlternativeId: versionId,
+      strategyAlternativeId: setup.versionId,
       fromProgramId: p1!.programId,
       toProgramId: p2!.programId,
       type: "requires",
@@ -747,7 +820,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
 
     // FICTIONAL `conflicts` example: p1 and p2 conflict (resource competition).
     const conflictsEdge = await addDependency(session, {
-      strategyAlternativeId: versionId,
+      strategyAlternativeId: setup.versionId,
       fromProgramId: p2!.programId,
       toProgramId: p1!.programId,
       type: "conflicts",
@@ -762,7 +835,7 @@ describeIntegration("01-05: Portfolio & Dependency Graph", () => {
     expect(conflictsEdge.type).toBe("conflicts");
 
     // Verify the portfolio reflects both edges correctly.
-    const portfolio = await buildPortfolio(session, { strategyAlternativeId: versionId });
+    const portfolio = await buildPortfolio(session, { strategyAlternativeId: setup.versionId });
     expect(portfolio.edges.length).toBe(2);
 
     const reqEdge = portfolio.edges.find((e) => e.type === "requires");
