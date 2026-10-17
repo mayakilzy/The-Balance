@@ -168,6 +168,9 @@ export interface ImplementationRoadmap {
   sequencingRationale: string;
   schedulingDisclaimer: string;
   budgetReadiness: BudgetReadinessSummary;
+  // 01-07-FIX: temporal validation summary. Always present when the roadmap
+  // is returned (violations array is empty — if non-empty, buildRoadmap throws).
+  temporalValidation: TemporalValidationSummary;
   simulated: true;
   modelVersion: string;
 }
@@ -312,6 +315,156 @@ function detectCycles(
     }
   }
   return cycles;
+}
+
+// ============================================================
+// TEMPORAL DEPENDENCY INTEGRITY (01-07-FIX)
+// ------------------------------------------------------------
+// Validate that explicit scheduling data (program.metadata.scheduling)
+// respects the dependency ordering. The structural topological sort
+// produces correct phase ordering, but when an analyst supplies explicit
+// startYear/endYear per program, those dates MUST be consistent with the
+// dependency graph — otherwise the roadmap would show dates that contradict
+// the ordering, giving decision-makers a false sense of a valid timeline.
+//
+// Validation rules (per mission pack 01-07-FIX):
+//   1. Per-program: if both startYear + endYear are present,
+//      startYear <= endYear. (A program can't end before it starts.)
+//      startYear + endYear must be finite integers.
+//   2. Per ordering edge (requires/enables) where BOTH endpoints have
+//      FULL scheduling (startYear + endYear):
+//      prereq.endYear < dependent.startYear (STRICT less-than).
+//      The prerequisite's outputs must be COMPLETE before the dependent
+//      starts. No overlap allowed under the current v1 contract (no
+//      partial-dependency or overlap model yet).
+//   3. If only ONE side of an edge has scheduling data → NOT a violation.
+//      That edge has a "scheduling gap" — the temporal ordering cannot be
+//      verified for it. The roadmap still builds; the gap is noted.
+//   4. If NEITHER side has scheduling data → NOT a violation. The roadmap
+//      builds with schedulingGap=true (structural ordering only).
+//
+// If ANY violation is found → throw RoadmapValidationError with all
+// violations listed. We do NOT return a roadmap with contradictory dates.
+// ============================================================
+
+export interface TemporalViolation {
+  type: "invalid-program-range" | "dependency-temporal-violation";
+  programId?: string;
+  programTitle?: string;
+  fromProgramId?: string;   // for dependency-temporal-violation (prerequisite)
+  toProgramId?: string;     // for dependency-temporal-violation (dependent)
+  fromProgramTitle?: string;
+  toProgramTitle?: string;
+  message: string;
+}
+
+export interface TemporalValidationSummary {
+  validated: boolean;          // true if validation ran (always true when scheduling data exists)
+  checkedEdges: number;        // ordering edges where BOTH endpoints had full scheduling
+  skippedEdges: number;        // ordering edges where at least one endpoint lacked scheduling (gap)
+  violations: TemporalViolation[]; // empty if valid (if non-empty, buildRoadmap throws)
+  note: string;
+}
+
+/**
+ * Validate scheduling consistency.
+ * Returns the list of violations (empty = valid).
+ * Does NOT throw — the caller decides whether to throw based on the result.
+ */
+function validateSchedulingConsistency(
+  programMap: Map<string, { id: string; title: string }>,
+  orderingEdges: OrderingEdge[],
+  schedulingInputs: Map<string, ProgramSchedulingInput>
+): TemporalValidationSummary {
+  const violations: TemporalViolation[] = [];
+  let checkedEdges = 0;
+  let skippedEdges = 0;
+
+  // 1. Per-program validation: startYear <= endYear (if both present)
+  for (const [pid, si] of schedulingInputs) {
+    if (si.startYear !== undefined && si.endYear !== undefined) {
+      if (!Number.isInteger(si.startYear) || !Number.isInteger(si.endYear)) {
+        violations.push({
+          type: "invalid-program-range",
+          programId: pid,
+          programTitle: programMap.get(pid)?.title,
+          message:
+            `Program "${programMap.get(pid)?.title ?? pid}" has non-integer scheduling ` +
+            `values (startYear=${si.startYear}, endYear=${si.endYear}). ` +
+            `Years must be integers.`,
+        });
+      } else if (si.startYear > si.endYear) {
+        violations.push({
+          type: "invalid-program-range",
+          programId: pid,
+          programTitle: programMap.get(pid)?.title,
+          message:
+            `Program "${programMap.get(pid)?.title ?? pid}" has startYear (${si.startYear}) ` +
+            `> endYear (${si.endYear}). A program cannot end before it starts. ` +
+            `Fix the scheduling data in program.metadata.scheduling.`,
+        });
+      }
+    }
+  }
+
+  // 2. Per-edge validation: prereq.endYear < dependent.startYear (strict)
+  for (const edge of orderingEdges) {
+    const prereqSched = schedulingInputs.get(edge.from);
+    const dependentSched = schedulingInputs.get(edge.to);
+
+    // Both endpoints must have FULL scheduling (startYear + endYear) to check
+    if (!prereqSched || !dependentSched ||
+        prereqSched.startYear === undefined || prereqSched.endYear === undefined ||
+        dependentSched.startYear === undefined || dependentSched.endYear === undefined) {
+      skippedEdges++;
+      continue;
+    }
+
+    checkedEdges++;
+
+    // STRICT: prereq.endYear < dependent.startYear
+    // The prerequisite's outputs must be COMPLETE before the dependent starts.
+    // No overlap allowed under v1 (no partial-dependency model).
+    if (prereqSched.endYear >= dependentSched.startYear) {
+      const prereqTitle = programMap.get(edge.from)?.title ?? edge.from;
+      const dependentTitle = programMap.get(edge.to)?.title ?? edge.to;
+      violations.push({
+        type: "dependency-temporal-violation",
+        fromProgramId: edge.from,
+        toProgramId: edge.to,
+        fromProgramTitle: prereqTitle,
+        toProgramTitle: dependentTitle,
+        message:
+          `Temporal dependency violation: program "${prereqTitle}" (prerequisite, ` +
+          `ends ${prereqSched.endYear}) does NOT end before program "${dependentTitle}" ` +
+          `(dependent, starts ${dependentSched.startYear}). ` +
+          `The prerequisite's outputs must be complete before the dependent starts. ` +
+          `Under the v1 contract, no overlap is allowed (no partial-dependency model). ` +
+          `Either fix the scheduling so ${prereqTitle} ends before ${dependentTitle} starts, ` +
+          `or remove the explicit scheduling data to fall back to structural ordering.`,
+      });
+    }
+  }
+
+  const note =
+    violations.length > 0
+      ? `${violations.length} temporal violation(s) detected. The roadmap cannot be built ` +
+        `with contradictory scheduling data. Fix the violations and retry.`
+      : checkedEdges > 0
+        ? `Temporal validation passed: ${checkedEdges} ordering edge(s) checked, ` +
+          `${skippedEdges} edge(s) skipped (scheduling gap on at least one endpoint). ` +
+          `All checked edges respect prereq.endYear < dependent.startYear.`
+        : `No ordering edges had full scheduling on both endpoints — temporal ` +
+          `validation could not check any edge. ${skippedEdges} edge(s) have scheduling ` +
+          `gaps. Structural ordering is still valid.`;
+
+  return {
+    validated: true,
+    checkedEdges,
+    skippedEdges,
+    violations,
+    note,
+  };
 }
 
 // ============================================================
@@ -465,6 +618,36 @@ export async function buildRoadmap(
       }
     }
     const hasAnySchedulingData = schedulingInputs.size > 0;
+
+    // 9b. TEMPORAL DEPENDENCY INTEGRITY (01-07-FIX)
+    //    Validate that explicit scheduling data respects the dependency ordering.
+    //    If any program has startYear > endYear, or any ordering edge has
+    //    prereq.endYear >= dependent.startYear (overlap/reversal), throw.
+    //    The structural roadmap is still valid, but we refuse to present
+    //    contradictory dates as a valid timeline.
+    const programMapForValidation = new Map<string, { id: string; title: string }>();
+    for (const [pid, p] of programMap) {
+      programMapForValidation.set(pid, { id: p.id, title: p.title });
+    }
+    const temporalValidation = validateSchedulingConsistency(
+      programMapForValidation,
+      orderingEdges,
+      schedulingInputs
+    );
+    if (temporalValidation.violations.length > 0) {
+      const violationMessages = temporalValidation.violations
+        .map((v, i) => `  ${i + 1}. [${v.type}] ${v.message}`)
+        .join("\n");
+      throw new RoadmapValidationError(
+        `Temporal dependency validation failed for strategy version ` +
+        `${input.strategyAlternativeId}. ${temporalValidation.violations.length} ` +
+        `violation(s) detected:\n${violationMessages}\n\n` +
+        `The roadmap cannot be built with scheduling data that contradicts the ` +
+        `dependency ordering. Either fix the scheduling data in ` +
+        `program.metadata.scheduling, or remove it to fall back to structural ` +
+        `ordering (schedulingGap=true, no calendar dates).`
+      );
+    }
 
     // 10. Build phases
     const phases: RoadmapPhase[] = phaseGroups.map((programIdsAtLevel, index) => {
@@ -658,6 +841,7 @@ export async function buildRoadmap(
       sequencingRationale,
       schedulingDisclaimer,
       budgetReadiness,
+      temporalValidation,
       simulated: true,
       modelVersion: ROADMAP_MODEL_VERSION,
     };

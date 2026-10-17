@@ -907,4 +907,292 @@ describeIntegration("01-07: Implementation Roadmap & Timeline", () => {
     // Phase assumptions mention the scheduling derivation
     expect(phaseOfA.assumptions.some((a) => a.includes("SIMULATED schedule"))).toBe(true);
   });
+
+  // ============================================================
+  // 17. FIX: A → B with REVERSED dates (A ends after B starts) → REJECT
+  //     A is prerequisite for B, but A is scheduled 2030-2032 while B is
+  //     scheduled 2027-2029. B would start+end before A even starts.
+  //     This contradicts the dependency → must throw.
+  // ============================================================
+  it("17. FIX: A → B with reversed dates → rejected (temporal dependency violation)", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [A, B] = programs;
+
+    // A → B (requires): A is prerequisite, B depends on A
+    await addDependency(session, setup.versionId, A!.programId, B!.programId, "requires",
+      "[FICTIONAL] A is prerequisite for B");
+
+    // REVERSED dates: A in 2030-2032 (prerequisite, LATER), B in 2027-2029 (dependent, EARLIER)
+    // This contradicts the dependency — B cannot start before A's outputs are available.
+    await setProgramScheduling(A!.programId, { startYear: 2030, endYear: 2032 });
+    await setProgramScheduling(B!.programId, { startYear: 2027, endYear: 2029 });
+
+    await expect(buildRoadmap(session, { strategyAlternativeId: setup.versionId }))
+      .rejects.toThrow(/Temporal dependency validation failed/i);
+    await expect(buildRoadmap(session, { strategyAlternativeId: setup.versionId }))
+      .rejects.toThrow(/does NOT end before/i);
+  });
+
+  // ============================================================
+  // 18. FIX: A → B with OVERLAPPING dates → REJECT
+  //     A is prerequisite for B. A ends in 2028, B starts in 2027.
+  //     B starts before A ends → overlap → violation (no overlap model in v1).
+  // ============================================================
+  it("18. FIX: A → B with overlapping dates → rejected (no overlap allowed in v1)", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [A, B] = programs;
+
+    await addDependency(session, setup.versionId, A!.programId, B!.programId, "requires",
+      "[FICTIONAL] A is prerequisite for B");
+
+    // OVERLAPPING: A 2026-2028, B 2027-2029. A.endYear=2028 >= B.startYear=2027 → violation
+    await setProgramScheduling(A!.programId, { startYear: 2026, endYear: 2028 });
+    await setProgramScheduling(B!.programId, { startYear: 2027, endYear: 2029 });
+
+    await expect(buildRoadmap(session, { strategyAlternativeId: setup.versionId }))
+      .rejects.toThrow(/Temporal dependency validation failed/i);
+    await expect(buildRoadmap(session, { strategyAlternativeId: setup.versionId }))
+      .rejects.toThrow(/overlap/i);
+  });
+
+  // ============================================================
+  // 19. FIX: program with startYear > endYear → REJECT (invalid range)
+  // ============================================================
+  it("19. FIX: program with startYear > endYear → rejected (invalid program range)", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // startYear > endYear — invalid
+    await setProgramScheduling(targetProgram.programId, { startYear: 2030, endYear: 2027 });
+
+    await expect(buildRoadmap(session, { strategyAlternativeId: versionId }))
+      .rejects.toThrow(/Temporal dependency validation failed/i);
+    await expect(buildRoadmap(session, { strategyAlternativeId: versionId }))
+      .rejects.toThrow(/startYear.*>.*endYear/i);
+  });
+
+  // ============================================================
+  // 20. FIX: A → B, B's dates missing → scheduling gap, no fabricated date
+  //     The edge has a scheduling gap (only A has dates). The roadmap still
+  //     builds — structural ordering is valid. But the edge is noted as
+  //     "skipped" in temporalValidation.
+  // ============================================================
+  it("20. FIX: A → B with B's dates missing → scheduling gap, roadmap builds", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [A, B] = programs;
+
+    await addDependency(session, setup.versionId, A!.programId, B!.programId, "requires",
+      "[FICTIONAL] A is prerequisite for B");
+
+    // Only A has scheduling data; B has none
+    await setProgramScheduling(A!.programId, { startYear: 2026, endYear: 2027 });
+    // B: no scheduling data
+
+    const roadmap = await buildRoadmap(session, { strategyAlternativeId: setup.versionId });
+
+    // Roadmap builds successfully (no throw)
+    expect(roadmap.phases.length).toBeGreaterThan(0);
+
+    // temporalValidation notes the skipped edge (scheduling gap on B)
+    expect(roadmap.temporalValidation.validated).toBe(true);
+    expect(roadmap.temporalValidation.violations.length).toBe(0);
+    expect(roadmap.temporalValidation.skippedEdges).toBeGreaterThan(0);
+    expect(roadmap.temporalValidation.checkedEdges).toBe(0); // B has no dates → can't check
+
+    // A's phase has schedulingGap=false (A has dates), but B's phase has schedulingGap=true
+    const phaseOfA = roadmap.phases.find((p) => p.programIds.includes(A!.programId))!;
+    const phaseOfB = roadmap.phases.find((p) => p.programIds.includes(B!.programId))!;
+    expect(phaseOfA.schedulingGap).toBe(false);
+    expect(phaseOfB.schedulingGap).toBe(true);
+    expect(phaseOfB.startYear).toBeNull();
+    expect(phaseOfB.endYear).toBeNull();
+  });
+
+  // ============================================================
+  // 21. FIX: chain A → B → C with CORRECT dates → PASS + temporalValidation summary
+  //     A: 2026-2027, B: 2028-2029, C: 2030-2031. All edges respect
+  //     prereq.endYear < dependent.startYear. temporalValidation.checkedEdges=2.
+  // ============================================================
+  it("21. FIX: chain A → B → C with correct dates → PASS + temporalValidation summary", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 3);
+    const [A, B, C] = programs;
+
+    await addDependency(session, setup.versionId, A!.programId, B!.programId, "requires",
+      "[FICTIONAL] A → B");
+    await addDependency(session, setup.versionId, B!.programId, C!.programId, "requires",
+      "[FICTIONAL] B → C");
+
+    // Correct dates: each program ends before the next starts
+    await setProgramScheduling(A!.programId, { startYear: 2026, endYear: 2027 });
+    await setProgramScheduling(B!.programId, { startYear: 2028, endYear: 2029 });
+    await setProgramScheduling(C!.programId, { startYear: 2030, endYear: 2031 });
+
+    const roadmap = await buildRoadmap(session, { strategyAlternativeId: setup.versionId });
+
+    // PASS — no violations
+    expect(roadmap.temporalValidation.validated).toBe(true);
+    expect(roadmap.temporalValidation.violations.length).toBe(0);
+    // 2 edges checked (A→B, B→C), 0 skipped
+    expect(roadmap.temporalValidation.checkedEdges).toBe(2);
+    expect(roadmap.temporalValidation.skippedEdges).toBe(0);
+    expect(roadmap.temporalValidation.note).toContain("passed");
+
+    // Phases have correct dates
+    const phaseOfA = roadmap.phases.find((p) => p.programIds.includes(A!.programId))!;
+    const phaseOfB = roadmap.phases.find((p) => p.programIds.includes(B!.programId))!;
+    const phaseOfC = roadmap.phases.find((p) => p.programIds.includes(C!.programId))!;
+    expect(phaseOfA.startYear).toBe(2026);
+    expect(phaseOfA.endYear).toBe(2027);
+    expect(phaseOfB.startYear).toBe(2028);
+    expect(phaseOfB.endYear).toBe(2029);
+    expect(phaseOfC.startYear).toBe(2030);
+    expect(phaseOfC.endYear).toBe(2031);
+  });
+
+  // ============================================================
+  // 22. FIX: conflicts still handled separately when scheduling data present
+  //     A conflicts B (NOT a sequencing constraint). Even with dates, conflicts
+  //     don't trigger temporal validation — they're risks, not ordering.
+  // ============================================================
+  it("22. FIX: conflicts do not trigger temporal validation (separate handling)", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 2);
+    const [A, B] = programs;
+
+    // A conflicts B — NOT an ordering edge
+    await addDependency(session, setup.versionId, A!.programId, B!.programId, "conflicts",
+      "[FICTIONAL] A and B compete for resources");
+
+    // Even with "overlapping" dates, conflicts don't trigger temporal validation
+    // (conflicts are NOT ordering edges)
+    await setProgramScheduling(A!.programId, { startYear: 2026, endYear: 2028 });
+    await setProgramScheduling(B!.programId, { startYear: 2027, endYear: 2029 });
+
+    const roadmap = await buildRoadmap(session, { strategyAlternativeId: setup.versionId });
+
+    // No temporal violations (conflicts aren't checked for temporal consistency)
+    expect(roadmap.temporalValidation.violations.length).toBe(0);
+    expect(roadmap.temporalValidation.checkedEdges).toBe(0); // no ordering edges
+    expect(roadmap.temporalValidation.skippedEdges).toBe(0);
+
+    // Conflict is surfaced separately
+    expect(roadmap.conflicts.length).toBe(1);
+  });
+
+  // ============================================================
+  // 23. FIX: no scheduling data → temporalValidation notes 0 checked edges
+  //     Structural ordering still valid; no temporal check possible.
+  // ============================================================
+  it("23. FIX: no scheduling data → temporalValidation shows 0 checked, 0 violations", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const setup = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId, objectiveInflationId]
+    );
+    const programs = await ensureProgramCount(session, setup.versionId, 3);
+    await addDependency(session, setup.versionId, programs[0]!.programId, programs[1]!.programId,
+      "requires", "[FICTIONAL] A → B");
+    await addDependency(session, setup.versionId, programs[1]!.programId, programs[2]!.programId,
+      "requires", "[FICTIONAL] B → C");
+    // NO scheduling data
+
+    const roadmap = await buildRoadmap(session, { strategyAlternativeId: setup.versionId });
+
+    expect(roadmap.temporalValidation.validated).toBe(true);
+    expect(roadmap.temporalValidation.violations.length).toBe(0);
+    expect(roadmap.temporalValidation.checkedEdges).toBe(0);
+    // 2 edges skipped (both endpoints lack scheduling)
+    expect(roadmap.temporalValidation.skippedEdges).toBe(2);
+    expect(roadmap.temporalValidation.note).toContain("scheduling gaps");
+  });
+
+  // ============================================================
+  // 24. FIX: Demolandia example — valid schedule passes, conflicting rejected
+  //     Two separate scenarios to demonstrate the fix.
+  // ============================================================
+  it("24. FIX Demolandia: valid schedule passes, conflicting schedule rejected", async () => {
+    const { buildRoadmap } = await import("@/lib/state-builder/roadmap-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // === Scenario 1: VALID schedule ===
+    const setup1 = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const programs1 = await ensureProgramCount(session, setup1.versionId, 2);
+    const [A1, B1] = programs1;
+    await addDependency(session, setup1.versionId, A1!.programId, B1!.programId, "requires",
+      "[FICTIONAL] A → B (valid scenario)");
+    await setProgramScheduling(A1!.programId, { startYear: 2026, endYear: 2027 });
+    await setProgramScheduling(B1!.programId, { startYear: 2028, endYear: 2029 });
+
+    const roadmap1 = await buildRoadmap(session, { strategyAlternativeId: setup1.versionId });
+    expect(roadmap1.temporalValidation.violations.length).toBe(0);
+    expect(roadmap1.temporalValidation.checkedEdges).toBe(1);
+
+    // === Scenario 2: CONFLICTING schedule (reversed) ===
+    const setup2 = await setupAlternativeWithPrograms(
+      session, [objectiveInflationId]
+    );
+    const programs2 = await ensureProgramCount(session, setup2.versionId, 2);
+    const [A2, B2] = programs2;
+    await addDependency(session, setup2.versionId, A2!.programId, B2!.programId, "requires",
+      "[FICTIONAL] A → B (conflicting scenario)");
+    // Reversed: A later, B earlier
+    await setProgramScheduling(A2!.programId, { startYear: 2030, endYear: 2032 });
+    await setProgramScheduling(B2!.programId, { startYear: 2027, endYear: 2029 });
+
+    await expect(buildRoadmap(session, { strategyAlternativeId: setup2.versionId }))
+      .rejects.toThrow(/Temporal dependency validation failed/i);
+  });
 });
