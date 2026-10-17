@@ -438,9 +438,11 @@ describeIntegration("Baseline permissions", () => {
   it("getBaselineTask rejects unauthenticated session", async () => {
     const { getBaselineTask } = await import("@/lib/state-builder/baseline-service");
 
+    // requirePermissionWithCurrentRole throws PermissionDeniedError for null session,
+    // which has message "Permission denied: baseline:read".
     await expect(
       getBaselineTask(null as unknown as Session, "any-task-id")
-    ).rejects.toThrow(/Unauthenticated|no session/i);
+    ).rejects.toThrow(/Permission denied|Unauthenticated|no session/i);
   });
 
   it("observer CAN read baseline (baseline:read) but cannot compute", async () => {

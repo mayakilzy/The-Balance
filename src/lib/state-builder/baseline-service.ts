@@ -286,12 +286,12 @@ async function runBaselineComputation(
     : false;
 
   const sourceNote = isFictional
-    ? "Fictional fixture country (Demolandia). All evidence is synthetic. Baseline reflects fictional data only."
+    ? "Fictional fixture country (Demolandia). All evidence is synthetic. Baseline reflects fictional data only. Sectors without tagged evidence (metadata.sector) are not included."
     : "Baseline computed from tenant-scoped evidence. Sectors without tagged evidence (metadata.sector) are not included.";
 
-  if (untaggedCount > 0) {
-    sourceNote.concat(` ${untaggedCount} evidence item(s) without metadata.sector were excluded.`);
-  }
+  const finalSourceNote = untaggedCount > 0
+    ? `${sourceNote} ${untaggedCount} evidence item(s) without metadata.sector were excluded.`
+    : sourceNote;
 
   return {
     countryId,
@@ -300,7 +300,7 @@ async function runBaselineComputation(
     summary,
     honesty: {
       fictional: isFictional,
-      sourceNote,
+      sourceNote: finalSourceNote,
       computedBy: "baseline-engine-v1",
       rulesVersion: "adr-0014-v1",
     },

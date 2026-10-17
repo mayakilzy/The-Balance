@@ -666,10 +666,23 @@ async function main() {
   // 11a. Tag the EXISTING G00 evidence with metadata.sector = "agriculture"
   //     (These 4 evidence items already exist from G00 seed — we UPDATE metadata only.)
   //     This makes them visible to the baseline engine without duplicating.
+  //     We search by "agricultur" (the common stem) to match both "agriculture" and "agricultural".
   const agricultureEvidence = await prisma.evidence.findMany({
-    where: { tenantId: tenantA.id, claim: { contains: "agriculture" } },
+    where: { tenantId: tenantA.id, claim: { contains: "agricultur", mode: "insensitive" } },
   });
-  for (const ev of agricultureEvidence) {
+  // Also include the crop-yield counter-evidence (doesn't contain "agricultur" but is about agriculture)
+  const cropYieldEvidence = await prisma.evidence.findMany({
+    where: { tenantId: tenantA.id, claim: { contains: "crop yield", mode: "insensitive" } },
+  });
+  const allAgEvidence = [...agricultureEvidence, ...cropYieldEvidence];
+  // Dedupe by id
+  const seen = new Set<string>();
+  const dedupedAg = allAgEvidence.filter((e) => {
+    if (seen.has(e.id)) return false;
+    seen.add(e.id);
+    return true;
+  });
+  for (const ev of dedupedAg) {
     const existingMeta = (ev.metadata ?? {}) as unknown as Record<string, unknown>;
     if (!existingMeta.sector) {
       await prisma.evidence.update({
@@ -680,7 +693,7 @@ async function main() {
       });
     }
   }
-  console.log(`  Tagged ${agricultureEvidence.length} existing agriculture evidence with metadata.sector`);
+  console.log(`  Tagged ${dedupedAg.length} existing agriculture evidence with metadata.sector`);
 
   // 11b. Add PARTIAL evidence for "finance" sector (Tenant A)
   //     1 source (IMF), unverified — PARTIAL observability
