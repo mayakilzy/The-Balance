@@ -594,3 +594,195 @@ describeIntegration("FIX-3: Scientific Gap Calculation Integrity", () => {
     expect(gap!.notes.some((n) => n.includes("incomparable") || n.includes("Unit"))).toBe(true);
   });
 });
+
+// ============================================================
+// FINAL SCIENTIFIC CLOSURE (01-02 Final)
+// ============================================================
+// Two final scientific fixes:
+//   1. Conflicting readings must NOT produce an arbitrary gapSize
+//   2. Bare numbers without explicit unit must NOT be assumed compatible
+describeIntegration("Final Scientific Closure (01-02 Final)", () => {
+  beforeEach(async () => {
+    await adminClient.task.deleteMany({
+      where: { type: { in: ["gap-analysis", "baseline-compute"] }, tenantId: tenantAId },
+    });
+    await adminClient.evidence.deleteMany({
+      where: { claim: { contains: "[FINAL-CLOSURE-TEST]" } },
+    });
+    await adminClient.objective.deleteMany({
+      where: { title: { contains: "[FINAL-CLOSURE-TEST]" } },
+    });
+    await adminClient.source.deleteMany({
+      where: { code: { contains: "FINAL-CLOSURE-SRC" } },
+    });
+  });
+
+  it("1. conflicting readings do NOT produce an arbitrary gapSize (null instead)", async () => {
+    const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
+    const { computeGaps } = await import("@/lib/state-builder/gap-analysis-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // Create 2 independent sources for FULL observability
+    const src1 = await adminClient.source.create({
+      data: {
+        code: "FINAL-CLOSURE-SRC-1", displayName: "Final Closure Source 1",
+        type: "academic", independenceGroup: "final-group-1",
+      },
+    });
+    const src2 = await adminClient.source.create({
+      data: {
+        code: "FINAL-CLOSURE-SRC-2", displayName: "Final Closure Source 2",
+        type: "academic", independenceGroup: "final-group-2",
+      },
+    });
+
+    // Add 2 evidence with the SAME metric but DIFFERENT values (4.2% vs 5.5%)
+    await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId, sourceId: src1.id,
+        claim: "[FINAL-CLOSURE-TEST] Final conflict metric was 4.2% in 2024.",
+        type: "supporting", verificationStatus: "verified",
+        metadata: {
+          countryId, sector: "final_conflict_test",
+          indicatorName: "final_conflict_metric", fictional: true,
+        },
+      } as never,
+    });
+    await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId, sourceId: src2.id,
+        claim: "[FINAL-CLOSURE-TEST] Final conflict metric was 5.5% in 2024.",
+        type: "supporting", verificationStatus: "corroborated",
+        metadata: {
+          countryId, sector: "final_conflict_test",
+          indicatorName: "final_conflict_metric", fictional: true,
+        },
+      } as never,
+    });
+
+    await adminClient.countryPackConfig.upsert({
+      where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
+      update: { sectors: ["agriculture", "finance", "education", "health", "final_conflict_test"] as never },
+      create: {
+        tenantId: tenantAId, countryId,
+        sectors: ["final_conflict_test"] as never,
+        observability: {} as never, planningAssumptions: {} as never, metadata: {} as never,
+      },
+    });
+
+    const obj = await adminClient.objective.create({
+      data: {
+        tenantId: tenantAId, countryId,
+        title: "[FINAL-CLOSURE-TEST] Achieve final conflict metric of 6%",
+        targetMetric: "final_conflict_metric", targetValue: "6%",
+        horizon: 3, status: "active", createdBy: adminUserId,
+        metadata: { sector: "final_conflict_test", fictional: true },
+      } as never,
+    });
+
+    await computeBaseline(session, { countryId });
+    const { report } = await computeGaps(session, {
+      countryId,
+      objectiveIds: [obj.id],
+    });
+
+    const gap = report.gaps.find((g) => g.objectiveId === obj.id);
+    expect(gap).toBeTruthy();
+
+    // FINAL CLOSURE FIX-1: conflicting readings → partial + gapSize=null
+    expect(gap!.gapType).toBe("partial");
+    expect(gap!.gapSize).toBeNull(); // No arbitrary number from a silent selection
+    expect(gap!.gapDirection).toBeNull(); // Direction also unknown
+    // Notes must explain the conflict + that no value was chosen
+    expect(gap!.notes.some((n) => n.includes("CONFLICT DETECTED"))).toBe(true);
+    expect(gap!.notes.some((n) => n.includes("gapSize is null") || n.includes("No single value"))).toBe(true);
+  });
+
+  it("2. bare numbers without explicit unit do NOT prove compatibility → unknown", async () => {
+    const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
+    const { computeGaps } = await import("@/lib/state-builder/gap-analysis-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const src1 = await adminClient.source.create({
+      data: {
+        code: "FINAL-CLOSURE-SRC-3", displayName: "Final Closure Source 3",
+        type: "academic", independenceGroup: "final-group-3",
+      },
+    });
+    const src2 = await adminClient.source.create({
+      data: {
+        code: "FINAL-CLOSURE-SRC-4", displayName: "Final Closure Source 4",
+        type: "academic", independenceGroup: "final-group-4",
+      },
+    });
+
+    // Evidence with a bare number "42" (no %, no unit declared in metadata)
+    await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId, sourceId: src1.id,
+        claim: "[FINAL-CLOSURE-TEST] Final bare metric was 42 in 2024.",
+        type: "supporting", verificationStatus: "verified",
+        metadata: {
+          countryId, sector: "final_bare_test",
+          indicatorName: "final_bare_metric",
+          indicatorValue: "42", // bare number — NO unit declared
+          fictional: true,
+        },
+      } as never,
+    });
+    await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId, sourceId: src2.id,
+        claim: "[FINAL-CLOSURE-TEST] Final bare metric confirmed at 42.",
+        type: "supporting", verificationStatus: "corroborated",
+        metadata: {
+          countryId, sector: "final_bare_test",
+          indicatorName: "final_bare_metric",
+          indicatorValue: "42",
+          fictional: true,
+        },
+      } as never,
+    });
+
+    await adminClient.countryPackConfig.upsert({
+      where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
+      update: { sectors: ["agriculture", "finance", "education", "health", "final_bare_test"] as never },
+      create: {
+        tenantId: tenantAId, countryId,
+        sectors: ["final_bare_test"] as never,
+        observability: {} as never, planningAssumptions: {} as never, metadata: {} as never,
+      },
+    });
+
+    // Target is also a bare number "50" (no unit)
+    const obj = await adminClient.objective.create({
+      data: {
+        tenantId: tenantAId, countryId,
+        title: "[FINAL-CLOSURE-TEST] Achieve final bare metric of 50",
+        targetMetric: "final_bare_metric", targetValue: "50",
+        horizon: 3, status: "active", createdBy: adminUserId,
+        metadata: { sector: "final_bare_test", fictional: true }, // NO unit declared
+      } as never,
+    });
+
+    await computeBaseline(session, { countryId });
+    const { report } = await computeGaps(session, {
+      countryId,
+      objectiveIds: [obj.id],
+    });
+
+    const gap = report.gaps.find((g) => g.objectiveId === obj.id);
+    expect(gap).toBeTruthy();
+
+    // FINAL CLOSURE FIX-2: bare numbers without explicit unit → unknown
+    // "42" and "50" are both plain numbers, but without metadata.unit we cannot
+    // prove they're in the same unit — result must be 'unknown'
+    expect(gap!.gapType).toBe("unknown");
+    expect(gap!.gapSize).toBeNull();
+    expect(gap!.notes.some((n) => n.includes("unverified") || n.includes("Bare numbers"))).toBe(true);
+  });
+});

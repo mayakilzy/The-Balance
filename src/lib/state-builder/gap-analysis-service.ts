@@ -156,11 +156,28 @@ function extractNumericValue(value: string): number | null {
   return null;
 }
 
-// FIX-3: detect unit type for comparison
-// Returns "percentage" | "plain-number" | "incomparable"
-function getUnitType(value: string): "percentage" | "plain-number" | "incomparable" {
+// FINAL CLOSURE: detect unit type for comparison
+// Returns "percentage" | "plain-number-verified" | "plain-number-unverified" | "incomparable"
+//
+// FINAL CLOSURE FIX-2: bare numbers (plain-number) do NOT prove unit compatibility.
+// "percentage" is safe because % is an explicit, unambiguous unit.
+// "plain-number-unverified" means we have a bare number but no explicit unit —
+//   we CANNOT assume it's comparable to another bare number (different units possible).
+// "plain-number-verified" means the metadata explicitly declares a unit
+//   (metadata.unit) AND both current + target share the same unit — safe to compare.
+// "incomparable" = anything else.
+function getUnitType(
+  value: string,
+  metadata?: Record<string, unknown>
+): "percentage" | "plain-number-verified" | "plain-number-unverified" | "incomparable" {
   if (isPercentage(value)) return "percentage";
-  if (extractNumericValue(value) !== null) return "plain-number";
+  if (extractNumericValue(value) !== null) {
+    // FINAL CLOSURE FIX-2: bare number — check if metadata declares a unit
+    if (metadata && typeof metadata.unit === "string" && metadata.unit.length > 0) {
+      return "plain-number-verified";
+    }
+    return "plain-number-unverified";
+  }
   return "incomparable";
 }
 
@@ -194,6 +211,7 @@ function classifyGap(
   baselineMode: ObservabilityMode | "none",
   matchResult: IndicatorMatchResult,
   targetValue: string,
+  targetMetadata: Record<string, unknown> | null,
   hasCounterEvidenceForMetric: boolean
 ): GapClassification {
   const notes: string[] = [];
@@ -234,10 +252,17 @@ function classifyGap(
     };
   }
 
-  // FIX-3: Stricter unit matching — use getUnitType for both values
-  const currentUnitType = getUnitType(indicator.value);
-  const targetUnitType = getUnitType(targetValue);
+  // FINAL CLOSURE: Stricter unit matching using getUnitType with metadata
+  // The indicator's metadata comes from the baseline indicator (which carries
+  // the evidence metadata including unit). The target's metadata comes from
+  // the objective's metadata.
+  const indicatorMeta = (indicator as unknown as Record<string, unknown>);
+  const currentUnitType = getUnitType(indicator.value, indicatorMeta);
+  const targetUnitType = getUnitType(targetValue, targetMetadata ?? undefined);
 
+  // FINAL CLOSURE FIX-2: bare numbers without explicit unit → incomparable
+  // "plain-number-unverified" means we have a bare number but no metadata.unit —
+  // we CANNOT assume it's comparable to another bare number.
   if (currentUnitType === "incomparable" || targetUnitType === "incomparable") {
     return {
       gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
@@ -248,6 +273,20 @@ function classifyGap(
     };
   }
 
+  // FINAL CLOSURE FIX-2: unverified plain numbers → unknown (no unit proof)
+  if (currentUnitType === "plain-number-unverified" || targetUnitType === "plain-number-unverified") {
+    return {
+      gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
+      notes: [
+        `Unit unverified: one or both values are bare numbers without an explicit unit declaration (metadata.unit). ` +
+        `Current "${indicator.value}" (type: ${currentUnitType}), target "${targetValue}" (type: ${targetUnitType}). ` +
+        `Bare numbers do not prove unit compatibility — result is 'unknown' to avoid incorrect comparison.`,
+      ],
+      downgradedDueToConflict: false,
+    };
+  }
+
+  // Unit type mismatch (e.g., percentage vs plain-number-verified)
   if (currentUnitType !== targetUnitType) {
     return {
       gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
@@ -258,7 +297,24 @@ function classifyGap(
     };
   }
 
-  // Both are the same unit type (percentage or plain-number) → compute gap
+  // FINAL CLOSURE FIX-2: For plain-number-verified, the UNITS must match
+  // (both must declare the same metadata.unit). Percentages are always compatible.
+  if (currentUnitType === "plain-number-verified" && targetUnitType === "plain-number-verified") {
+    const currentUnit = indicatorMeta?.unit ?? null;
+    const targetUnit = targetMetadata?.unit ?? null;
+    if (typeof currentUnit !== "string" || typeof targetUnit !== "string" || currentUnit !== targetUnit) {
+      return {
+        gapType: "unknown", gapSize: null, gapDirection: null, unitMatch: false,
+        notes: [
+          `Unit mismatch: current value unit "${currentUnit}" and target value unit "${targetUnit}" are different. ` +
+          `Both values declare units but they don't match — result is 'unknown'.`,
+        ],
+        downgradedDueToConflict: false,
+      };
+    }
+  }
+
+  // Both are the same unit type and (if plain-number) same unit → compute gap
   const currentNum = extractNumericValue(indicator.value);
   const targetNum = extractNumericValue(targetValue);
 
@@ -273,47 +329,61 @@ function classifyGap(
   const difference = currentNum - targetNum;
   const absDifference = Math.abs(difference);
   const direction = difference > 0 ? "above" : difference < 0 ? "below" : "above";
-  const unitLabel = currentUnitType === "percentage" ? "percentage points" : "units (same unit type assumed — verify compatibility)";
+  const unitLabel = currentUnitType === "percentage"
+    ? "percentage points"
+    : `units (${indicatorMeta?.unit ?? "unknown"})`;
 
-  const gapSize = `${absDifference.toFixed(1)} ${unitLabel}`;
+  const computedGapSize = `${absDifference.toFixed(1)} ${unitLabel}`;
   const gapDirection: "above" | "below" = direction;
 
   notes.push(`Gap computed: current ${indicator.value} is ${absDifference.toFixed(1)} ${unitLabel} ${direction} target ${targetValue}.`);
   notes.push("This gap is a point-in-time comparison. No trajectory or trend is inferred from a single baseline measurement.");
 
-  // FIX-3: If there are conflicting readings for the same metric → downgrade to partial
+  // FINAL CLOSURE FIX-1: If there are conflicting readings OR counter-evidence →
+  // gapSize = null (no arbitrary number from a silent selection) + show all readings.
+  // The gap is 'partial' (we know there's a gap) but we don't commit to a specific
+  // numeric value because there's no principled basis for choosing one reading over another.
   let downgradedDueToConflict = false;
   if (matchResult.hasConflictingValues) {
     notes.push(
-      `CONFLICT DETECTED: ${matchResult.all.length} indicators match the target metric "${targetValue}" but report ${matchResult.distinctValues.length} distinct values: ${matchResult.distinctValues.map((v) => `"${v}"`).join(", ")}. The primary value "${indicator.value}" is used for computation, but the gap is downgraded to 'partial' due to conflicting readings.`
+      `CONFLICT DETECTED: ${matchResult.all.length} indicators match the target metric but report ${matchResult.distinctValues.length} distinct values: ${matchResult.distinctValues.map((v) => `"${v}"`).join(", ")}. ` +
+      `No single value can be selected without arbitrary choice — gapSize is null. All readings are preserved in the report for transparency.`
     );
     downgradedDueToConflict = true;
   }
 
-  // FIX-3: If there's counter-evidence specifically for this metric → downgrade to partial
-  // FULL observability means evidence COVERAGE is sufficient, not that the value is UNDISPUTED.
   if (hasCounterEvidenceForMetric) {
     notes.push(
-      "Counter-evidence exists for this metric. FULL observability indicates sufficient evidence coverage, but does not mean the indicator value is undisputed. Gap downgraded to 'partial' due to conflicting evidence."
+      "Counter-evidence exists for this metric. FULL observability indicates sufficient evidence coverage, but does not mean the indicator value is undisputed. " +
+      "gapSize is null — no arbitrary numeric gap from a disputed value."
     );
     downgradedDueToConflict = true;
   }
 
-  // If baseline is PARTIAL → gap is partial (uncertain)
-  if (baselineMode === "PARTIAL") {
+  // FINAL CLOSURE FIX-1: conflicts → partial + gapSize=null (no arbitrary number)
+  if (downgradedDueToConflict) {
     return {
-      gapType: "partial", gapSize, gapDirection, unitMatch: true,
-      notes: [...notes, "Baseline observability is PARTIAL — the gap value is computed but carries uncertainty due to insufficient evidence quality or coverage."],
-      downgradedDueToConflict,
+      gapType: "partial",
+      gapSize: null, // FINAL CLOSURE: no arbitrary gap from conflicting/disputed readings
+      gapDirection: null, // direction also unknown when value is disputed
+      unitMatch: true,
+      notes,
+      downgradedDueToConflict: true,
     };
   }
 
-  // FULL baseline → measurable UNLESS downgraded due to conflicts
-  if (downgradedDueToConflict) {
-    return { gapType: "partial", gapSize, gapDirection, unitMatch: true, notes, downgradedDueToConflict };
+  // If baseline is PARTIAL → gap is partial (uncertain) but gapSize is computed
+  // (PARTIAL means coverage is insufficient, not that the value is disputed)
+  if (baselineMode === "PARTIAL") {
+    return {
+      gapType: "partial", gapSize: computedGapSize, gapDirection, unitMatch: true,
+      notes: [...notes, "Baseline observability is PARTIAL — the gap value is computed but carries uncertainty due to insufficient evidence quality or coverage."],
+      downgradedDueToConflict: false,
+    };
   }
 
-  return { gapType: "measurable", gapSize, gapDirection, unitMatch: true, notes, downgradedDueToConflict: false };
+  // FULL baseline + no conflicts + matching units → measurable
+  return { gapType: "measurable", gapSize: computedGapSize, gapDirection, unitMatch: true, notes, downgradedDueToConflict: false };
 }
 
 // ============================================================
@@ -428,8 +498,9 @@ async function runGapAnalysis(
       (ind) => ind.supportStance === "contradicts"
     );
 
-    // Classify the gap (FIX-3: pass matchResult + counter-evidence flag)
-    const classification = classifyGap(baselineMode, matchResult, obj.targetValue, hasCounterEvidenceForMetric);
+    // Classify the gap (FINAL CLOSURE: pass matchResult + targetMetadata + counter-evidence flag)
+    const targetMeta = (obj.metadata ?? {}) as Record<string, unknown>;
+    const classification = classifyGap(baselineMode, matchResult, obj.targetValue, targetMeta, hasCounterEvidenceForMetric);
 
     // Gather evidence (supporting + counter) from the baseline dimension
     const supportingEvidence: EvidenceRef[] = [];
