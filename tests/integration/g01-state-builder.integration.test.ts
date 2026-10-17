@@ -276,8 +276,11 @@ describeIntegration("Cross-tenant Objective isolation (RLS, balance_app)", () =>
 // ============================================================
 describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", () => {
   beforeEach(async () => {
+    // Clean up test configs from previous runs.
+    // Use a robust filter: delete all configs with seededBy=[TEST-01-00] in metadata.
+    // Prisma 6 Json filter: use `equals` (not `string_equals` which doesn't exist).
     await adminClient.countryPackConfig.deleteMany({
-      where: { metadata: { path: ["seededBy"], string_equals: "[TEST-01-00]" } as never },
+      where: { metadata: { path: ["seededBy"], equals: "[TEST-01-00]" } as never },
     });
   });
 
@@ -687,9 +690,28 @@ describeIntegration("objective-service + country-pack-service (session-based)", 
 
   it("createObjective rejects when user lacks strategy:write (observer role)", async () => {
     const { createObjective } = await import("@/lib/state-builder/objective-service");
-    // Observer has strategy:read but NOT strategy:write.
+    // Create a TEMPORARY user with observer role in Tenant A.
+    // requirePermissionWithCurrentRole checks the CURRENT DB membership role
+    // (not the session.roleCode), so we need a real observer membership.
+    const observerUser = await adminClient.user.create({
+      data: {
+        email: "observer-test-01-00@demolandia.test",
+        name: "Test Observer 01-00",
+        passwordHash: await hashPassword("test_observer_pw_01_00"),
+        status: "active",
+      },
+    });
+    await adminClient.membership.create({
+      data: {
+        userId: observerUser.id,
+        tenantId: tenantAId,
+        roleCode: "observer",
+        status: "active",
+      },
+    });
+
     const session = makeSession({
-      id: adminUserId, // use existing user but with observer role
+      id: observerUser.id,
       tenantId: tenantAId,
       roleCode: "observer",
       membershipStatus: "active",
@@ -698,12 +720,18 @@ describeIntegration("objective-service + country-pack-service (session-based)", 
     await expect(
       createObjective(session, {
         countryId,
-        title: "[TEST-01-00-SVC] Should be rejected",
+        title: "[TEST-01-00-SVC] Should be rejected — observer",
         targetMetric: "test",
         targetValue: "1",
         horizon: 1,
       })
     ).rejects.toThrow(/Permission denied: strategy:write/);
+
+    // Cleanup
+    await adminClient.membership.delete({
+      where: { userId_tenantId: { userId: observerUser.id, tenantId: tenantAId } },
+    });
+    await adminClient.user.delete({ where: { id: observerUser.id } });
   });
 
   it("createObjective rejects when membership is revoked", async () => {
@@ -806,15 +834,20 @@ describeIntegration("objective-service + country-pack-service (session-based)", 
   it("getCountryPack for Tenant B returns DIFFERENT private planning than Tenant A", async () => {
     const { getCountryPack } = await import("@/lib/state-builder/country-pack-service");
 
-    // We need a user in Tenant B. The seed only creates users in Tenant A.
-    // For this test, we use the admin user but temporarily switch the session
-    // to Tenant B. withAuthenticatedTenant verifies membership, so we need
-    // to create a membership for adminUser in Tenant B.
-    await adminClient.membership.upsert({
-      where: { userId_tenantId: { userId: adminUserId, tenantId: tenantBId } },
-      update: { status: "active", roleCode: "admin" },
-      create: {
-        userId: adminUserId,
+    // Create a DEDICATED temporary user for Tenant B (not adminUserId, to avoid
+    // any state leakage that could affect other test files like task.integration.test.ts
+    // which also upserts adminUserId's membership in Tenant B).
+    const tenantBUser = await adminClient.user.create({
+      data: {
+        email: "tenantb-test-01-00@demolandia.test",
+        name: "Tenant B Test User 01-00",
+        passwordHash: await hashPassword("test_tenantb_01_00"),
+        status: "active",
+      },
+    });
+    await adminClient.membership.create({
+      data: {
+        userId: tenantBUser.id,
         tenantId: tenantBId,
         roleCode: "admin",
         status: "active",
@@ -822,7 +855,7 @@ describeIntegration("objective-service + country-pack-service (session-based)", 
     });
 
     const sessionB = makeSession({
-      id: adminUserId,
+      id: tenantBUser.id,
       tenantId: tenantBId,
       roleCode: "admin",
       membershipStatus: "active",
@@ -846,10 +879,13 @@ describeIntegration("objective-service + country-pack-service (session-based)", 
     const titlesB = new Set(packB.objectives.map((o) => o.title));
     expect(titlesB.has("Maintain foreign exchange reserves above 6 months of imports")).toBe(true);
 
-    // Clean up: revoke the temporary membership.
-    await adminClient.membership.update({
-      where: { userId_tenantId: { userId: adminUserId, tenantId: tenantBId } },
-      data: { status: "revoked" },
+    // Clean up: delete the DEDICATED temporary user + membership.
+    // This does NOT touch adminUserId's memberships, so other test files
+    // that upsert adminUserId in Tenant B (e.g., task.integration.test.ts)
+    // are unaffected.
+    await adminClient.membership.delete({
+      where: { userId_tenantId: { userId: tenantBUser.id, tenantId: tenantBId } },
     });
+    await adminClient.user.delete({ where: { id: tenantBUser.id } });
   });
 });
