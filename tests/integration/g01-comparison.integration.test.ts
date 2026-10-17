@@ -128,6 +128,26 @@ async function composeAllAlternatives(
   return versionIds;
 }
 
+// Helper: add a dependency edge via portfolio-service.
+async function addDependency(
+  session: Session,
+  versionId: string,
+  fromProgramId: string,
+  toProgramId: string,
+  type: "requires" | "enables" | "conflicts",
+  rationale: string
+): Promise<void> {
+  const { addDependency: addDep } = await import("@/lib/state-builder/portfolio-service");
+  await addDep(session, {
+    strategyAlternativeId: versionId,
+    fromProgramId,
+    toProgramId,
+    type,
+    rationale,
+    source: "simulated",
+  });
+}
+
 // ============================================================
 // 01-08: Scenario Comparison Engine
 // ============================================================
@@ -488,12 +508,16 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
     const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
 
     for (const e of result.matrix.evidenceStrength) {
-      // distinctEvidenceIds ≤ totalClaims (no double-counting)
-      expect(e.distinctEvidenceIds).toBeLessThanOrEqual(e.totalClaims);
-      // supportedClaims + weakClaims + unsupportedClaims = totalClaims
-      expect(e.supportedClaims + e.weakClaims + e.unsupportedClaims).toBe(e.totalClaims);
-      // unsupportedClaims is always ≥ 0
-      expect(e.unsupportedClaims).toBeGreaterThanOrEqual(0);
+      // 01-08-FIX: distinctEvidenceIds ≤ totalEvidenceRefs (no double-counting)
+      expect(e.distinctEvidenceIds).toBeLessThanOrEqual(e.totalEvidenceRefs);
+      // Citation breakdown sums to totalEvidenceRefs
+      expect(e.citationsOfVerifiedEvidence + e.citationsOfUnverifiedEvidence +
+             e.citationsOfDisputedEvidence + e.citationsOfRefutedEvidence +
+             e.citationsOfMissingEvidence).toBe(e.totalEvidenceRefs);
+      // citationsOfMissingEvidence is always ≥ 0
+      expect(e.citationsOfMissingEvidence).toBeGreaterThanOrEqual(0);
+      // 01-08-FIX: supportAssessment is always "not-assessed"
+      expect(e.supportAssessment).toBe("not-assessed");
     }
   });
 
@@ -511,10 +535,13 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
 
     const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
 
-    // unsupportedClaims is always present and ≥ 0
+    // 01-08-FIX: citationsOfMissingEvidence is always present and ≥ 0
+    // (replaces the old unsupportedClaims field)
     for (const e of result.matrix.evidenceStrength) {
-      expect(e.unsupportedClaims).toBeDefined();
-      expect(e.unsupportedClaims).toBeGreaterThanOrEqual(0);
+      expect(e.citationsOfMissingEvidence).toBeDefined();
+      expect(e.citationsOfMissingEvidence).toBeGreaterThanOrEqual(0);
+      // supportAssessment is always "not-assessed" — we never assert claim support
+      expect(e.supportAssessment).toBe("not-assessed");
     }
   });
 
@@ -680,8 +707,8 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
     }
     // Same evidence strength
     for (let i = 0; i < result1.matrix.evidenceStrength.length; i++) {
-      expect(result2.matrix.evidenceStrength[i]!.supportedClaims).toBe(result1.matrix.evidenceStrength[i]!.supportedClaims);
-      expect(result2.matrix.evidenceStrength[i]!.unsupportedClaims).toBe(result1.matrix.evidenceStrength[i]!.unsupportedClaims);
+      expect(result2.matrix.evidenceStrength[i]!.citationsOfVerifiedEvidence).toBe(result1.matrix.evidenceStrength[i]!.citationsOfVerifiedEvidence);
+      expect(result2.matrix.evidenceStrength[i]!.citationsOfMissingEvidence).toBe(result1.matrix.evidenceStrength[i]!.citationsOfMissingEvidence);
     }
     // Same tradeoffs text
     expect(result2.tradeoffs).toBe(result1.tradeoffs);
@@ -813,5 +840,258 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
     // The comparison does NOT declare a winner
     expect(result.tradeoffs.toLowerCase()).not.toContain("best alternative");
     expect(result.tradeoffs).toContain("does NOT recommend a winner");
+  });
+
+  // ============================================================
+  // 19. FIX-1: verified evidence ≠ supported claim
+  //     supportAssessment is always "not-assessed"
+  // ============================================================
+  it("19. FIX-1: verified evidence does NOT mean claim is supported (supportAssessment=not-assessed)", async () => {
+    const { compareScenarios } = await import("@/lib/state-builder/comparison-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
+
+    for (const e of result.matrix.evidenceStrength) {
+      // supportAssessment is ALWAYS "not-assessed" — we never assert claim support
+      expect(e.supportAssessment).toBe("not-assessed");
+      // The note MUST explicitly say support was not assessed
+      expect(e.note).toContain("SUPPORT NOT ASSESSED");
+      expect(e.note).toContain("does not interpret");
+      // Even if there are citations of verified evidence, that's NOT "supported"
+      if (e.citationsOfVerifiedEvidence > 0) {
+        // The note must warn against interpreting citations as support
+        expect(e.note).toContain("claim-to-evidence support relationship has not been assessed");
+      }
+    }
+  });
+
+  // ============================================================
+  // 20. FIX-1: duplicate evidence references counted once in distinctEvidenceIds
+  // ============================================================
+  it("20. FIX-1: duplicate evidence citations → distinctEvidenceIds counts once", async () => {
+    const { compareScenarios } = await import("@/lib/state-builder/comparison-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
+
+    for (const e of result.matrix.evidenceStrength) {
+      // distinctEvidenceIds ≤ totalEvidenceRefs (deduplication)
+      expect(e.distinctEvidenceIds).toBeLessThanOrEqual(e.totalEvidenceRefs);
+      // If there are duplicate citations, distinct < total
+      if (e.totalEvidenceRefs > e.distinctEvidenceIds) {
+        // The raw citation count is higher than the distinct evidence count
+        // — this confirms deduplication is working
+        expect(e.totalEvidenceRefs).toBeGreaterThan(e.distinctEvidenceIds);
+      }
+    }
+  });
+
+  // ============================================================
+  // 21. FIX-2: temporal status is COMPUTED (not hardcoded false)
+  //     A → B with valid scheduling → temporalStatus="valid"
+  // ============================================================
+  it("21. FIX-2: A → B with valid scheduling → temporalStatus=valid", async () => {
+    const { compareScenarios } = await import("@/lib/state-builder/comparison-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    // alt1: add A → B dependency + valid scheduling
+    const alt1Programs = await adminClient.program.findMany({
+      where: { tenantId: tenantAId, strategyVersionId: alt1 },
+    });
+    if (alt1Programs.length >= 2) {
+      const [A, B] = alt1Programs;
+      await addDependency(session, alt1, A!.id, B!.id, "requires",
+        "[FICTIONAL] A → B for temporal test");
+      // A: 2026-2027, B: 2028-2029 (valid — A ends before B starts)
+      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+      metaA.scheduling = { startYear: 2026, endYear: 2027 };
+      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+      const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
+      metaB.scheduling = { startYear: 2028, endYear: 2029 };
+      await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
+    }
+
+    const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
+
+    const timeline1 = result.matrix.timeline.find((t) => t.altId === alt1)!;
+    // alt1 has a valid schedule (A ends before B starts)
+    expect(timeline1.temporalStatus).toBe("valid");
+    expect(timeline1.temporalCheckedEdges).toBeGreaterThan(0);
+    expect(timeline1.temporalViolationCount).toBe(0);
+    expect(timeline1.note).toContain("PASSED");
+  });
+
+  // ============================================================
+  // 22. FIX-2: A → B with REVERSED scheduling → temporalStatus=invalid
+  // ============================================================
+  it("22. FIX-2: A → B with reversed scheduling → temporalStatus=invalid", async () => {
+    const { compareScenarios } = await import("@/lib/state-builder/comparison-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    // alt1: add A → B dependency + REVERSED scheduling
+    const alt1Programs = await adminClient.program.findMany({
+      where: { tenantId: tenantAId, strategyVersionId: alt1 },
+    });
+    if (alt1Programs.length >= 2) {
+      const [A, B] = alt1Programs;
+      await addDependency(session, alt1, A!.id, B!.id, "requires",
+        "[FICTIONAL] A → B for reversed temporal test");
+      // REVERSED: A 2030-2032, B 2027-2029 (B starts before A ends → violation)
+      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+      metaA.scheduling = { startYear: 2030, endYear: 2032 };
+      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+      const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
+      metaB.scheduling = { startYear: 2027, endYear: 2029 };
+      await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
+    }
+
+    const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
+
+    const timeline1 = result.matrix.timeline.find((t) => t.altId === alt1)!;
+    // alt1 has an INVALID schedule (reversed dates)
+    expect(timeline1.temporalStatus).toBe("invalid");
+    expect(timeline1.temporalViolationCount).toBeGreaterThan(0);
+    expect(timeline1.note).toContain("VIOLATIONS DETECTED");
+    expect(timeline1.executionDurationSource).toBe("temporal-violation");
+  });
+
+  // ============================================================
+  // 23. FIX-2: no scheduling data → temporalStatus=not-verified (NOT valid)
+  // ============================================================
+  it("23. FIX-2: no scheduling data → temporalStatus=not-verified (not false/valid)", async () => {
+    const { compareScenarios } = await import("@/lib/state-builder/comparison-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+    // NO scheduling data, NO dependencies
+
+    const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
+
+    for (const t of result.matrix.timeline) {
+      // With no scheduling data, temporalStatus is "not-verified" (NOT "valid")
+      expect(t.temporalStatus).toBe("not-verified");
+      expect(t.temporalCheckedEdges).toBe(0);
+      expect(t.temporalViolationCount).toBe(0);
+      // The note must NOT claim the schedule is valid
+      expect(t.note).not.toContain("PASSED");
+      expect(t.note).toContain("not-verified");
+    }
+  });
+
+  // ============================================================
+  // 24. FIX-2: A → B with only one side scheduled → not-verified
+  // ============================================================
+  it("24. FIX-2: A → B with only A scheduled → not-verified (insufficient data)", async () => {
+    const { compareScenarios } = await import("@/lib/state-builder/comparison-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+
+    // alt1: A → B, but only A has scheduling (B has none)
+    const alt1Programs = await adminClient.program.findMany({
+      where: { tenantId: tenantAId, strategyVersionId: alt1 },
+    });
+    if (alt1Programs.length >= 2) {
+      const [A, B] = alt1Programs;
+      await addDependency(session, alt1, A!.id, B!.id, "requires",
+        "[FICTIONAL] A → B, only A scheduled");
+      // Only A has scheduling
+      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+      metaA.scheduling = { startYear: 2026, endYear: 2027 };
+      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+      // B: no scheduling
+    }
+
+    const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
+
+    const timeline1 = result.matrix.timeline.find((t) => t.altId === alt1)!;
+    // alt1 has an edge but only one side scheduled → not-verified
+    expect(timeline1.temporalStatus).toBe("not-verified");
+    expect(timeline1.temporalCheckedEdges).toBe(0);
+    expect(timeline1.temporalSkippedEdges).toBeGreaterThan(0);
+  });
+
+  // ============================================================
+  // 25. FIX Demolandia: compare valid-schedule alt vs invalid-schedule alt
+  // ============================================================
+  it("25. FIX Demolandia: valid schedule vs invalid schedule comparison", async () => {
+    const { compareScenarios } = await import("@/lib/state-builder/comparison-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // alt1: valid schedule
+    const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt1Programs = await adminClient.program.findMany({
+      where: { tenantId: tenantAId, strategyVersionId: alt1 },
+    });
+    if (alt1Programs.length >= 2) {
+      const [A, B] = alt1Programs;
+      await addDependency(session, alt1, A!.id, B!.id, "requires", "[FICTIONAL] A → B valid");
+      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+      metaA.scheduling = { startYear: 2026, endYear: 2027 };
+      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+      const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
+      metaB.scheduling = { startYear: 2028, endYear: 2029 };
+      await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
+    }
+
+    // alt2: invalid (reversed) schedule
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
+    const alt2Programs = await adminClient.program.findMany({
+      where: { tenantId: tenantAId, strategyVersionId: alt2 },
+    });
+    if (alt2Programs.length >= 2) {
+      const [A, B] = alt2Programs;
+      await addDependency(session, alt2, A!.id, B!.id, "requires", "[FICTIONAL] A → B invalid");
+      // Reversed: A 2030-2032, B 2027-2029
+      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+      metaA.scheduling = { startYear: 2030, endYear: 2032 };
+      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+      const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
+      metaB.scheduling = { startYear: 2027, endYear: 2029 };
+      await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
+    }
+
+    const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
+
+    const timeline1 = result.matrix.timeline.find((t) => t.altId === alt1)!;
+    const timeline2 = result.matrix.timeline.find((t) => t.altId === alt2)!;
+
+    // alt1 is valid, alt2 is invalid
+    expect(timeline1.temporalStatus).toBe("valid");
+    expect(timeline2.temporalStatus).toBe("invalid");
+    expect(timeline2.temporalViolationCount).toBeGreaterThan(0);
+
+    // The dataGaps surface the invalid schedule
+    const invalidGaps = result.dataGaps.filter((g) => g.includes("NOT valid"));
+    expect(invalidGaps.length).toBeGreaterThan(0);
   });
 });

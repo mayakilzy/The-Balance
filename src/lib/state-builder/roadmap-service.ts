@@ -197,12 +197,14 @@ export class RoadmapIntegrityError extends Error {
 // TYPES — internal (dependency edges for sequencing)
 // ============================================================
 
-interface OrderingEdge {
+// 01-08-FIX: exported so comparison-service can reuse the temporal validation
+export interface OrderingEdge {
   from: string;  // prerequisite
   to: string;    // dependent
 }
 
-interface ProgramSchedulingInput {
+// 01-08-FIX: exported so comparison-service can reuse the temporal validation
+export interface ProgramSchedulingInput {
   startYear?: number;
   endYear?: number;
   durationYears?: number;
@@ -370,8 +372,14 @@ export interface TemporalValidationSummary {
  * Validate scheduling consistency.
  * Returns the list of violations (empty = valid).
  * Does NOT throw — the caller decides whether to throw based on the result.
+ *
+ * 01-08-FIX: This function is now EXPORTED so comparison-service can reuse
+ * the same temporal validation logic without re-implementing it. The function
+ * is pure (no DB access, no side effects) — it takes pre-fetched data as
+ * arguments. This keeps the comparison read-only + avoids calling buildRoadmap
+ * (which throws on violations).
  */
-function validateSchedulingConsistency(
+export function validateSchedulingConsistency(
   programMap: Map<string, { id: string; title: string }>,
   orderingEdges: OrderingEdge[],
   schedulingInputs: Map<string, ProgramSchedulingInput>

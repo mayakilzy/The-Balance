@@ -76,6 +76,12 @@ import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
 import { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
+// 01-08-FIX: reuse the temporal validation from roadmap-service (01-07-FIX)
+import {
+  validateSchedulingConsistency,
+  type OrderingEdge,
+  type ProgramSchedulingInput,
+} from "@/lib/state-builder/roadmap-service";
 
 // ============================================================
 // TYPES — Scenario Comparison
@@ -119,8 +125,17 @@ export interface TimelineComparisonEntry {
   // AND passed temporal validation. Null otherwise.
   executionDurationYears: number | null;
   executionDurationSource: "scheduling-data" | "unavailable" | "temporal-violation";
-  // Whether the alternative has any scheduling conflicts (from 01-07-FIX)
-  hasTemporalViolations: boolean;
+  // 01-08-FIX: temporal status is now COMPUTED (not hardcoded).
+  //   "valid" = validation ran + 0 violations + ≥1 ordering edge checked
+  //   "invalid" = validation ran + ≥1 temporal violation detected
+  //   "not-verified" = no ordering edges could be checked (insufficient scheduling data)
+  temporalStatus: "valid" | "invalid" | "not-verified";
+  // Number of ordering edges checked (both endpoints had full scheduling)
+  temporalCheckedEdges: number;
+  // Number of ordering edges skipped (at least one endpoint lacked scheduling)
+  temporalSkippedEdges: number;
+  // Violation count (0 if valid or not-verified)
+  temporalViolationCount: number;
   note: string;
 }
 
@@ -138,18 +153,40 @@ export interface RiskComparisonEntry {
 
 export interface EvidenceStrengthEntry {
   altId: string;
-  // Distinct evidence IDs cited by this alternative's programs
+  // === EVIDENCE COUNTS (distinct, no double-counting) ===
+  // Distinct evidence IDs cited by this alternative's programs (deduplicated)
   distinctEvidenceIds: number;
-  // Breakdown by verificationStatus (from Evidence Fabric)
+  // Breakdown by verificationStatus (from Evidence Fabric) — these count
+  // DISTINCT evidence items, NOT claims. A single verified evidence item
+  // cited by 3 programs counts ONCE here.
   verifiedEvidence: number;     // verificationStatus="verified"
   unverifiedEvidence: number;   // verificationStatus="unverified"
   disputedEvidence: number;     // verificationStatus="disputed"
   refutedEvidence: number;      // verificationStatus="refuted"
-  // Claim counts (a claim = a program's evidenceRef entry)
-  totalClaims: number;          // total evidenceRefs across all programs
-  supportedClaims: number;      // claims citing verified evidence
-  weakClaims: number;           // claims citing unverified/disputed evidence
-  unsupportedClaims: number;    // claims citing refuted OR non-existent evidence
+  // === EVIDENCE REFERENCE COUNTS (raw, may have duplicates) ===
+  // Total evidenceRef entries across all programs. A single evidence item
+  // cited by 3 programs counts as 3 here. This is the raw citation count.
+  totalEvidenceRefs: number;
+  // === CLAIM SUPPORT ASSESSMENT ===
+  // 01-08-FIX: We do NOT assert that verified evidence = supported claim.
+  // The evidence's verificationStatus reflects the EVIDENCE's own verification,
+  // NOT a verification that the evidence supports any specific claim.
+  // Without an explicit claim-to-evidence support relationship model, we
+  // cannot assert that a claim is "supported" — only that it CITES evidence
+  // with a given verification status.
+  //
+  // supportAssessment is always "not-assessed" in v1: we have not assessed
+  // whether the cited evidence actually supports the claim. Future versions
+  // could add a claim-support verification model.
+  supportAssessment: "not-assessed";
+  // Citation counts by cited evidence's verificationStatus (raw, may double-count
+  // if the same evidence is cited by multiple programs). These describe the
+  // CITATIONS, not claim support.
+  citationsOfVerifiedEvidence: number;     // evidenceRefs pointing to verified evidence
+  citationsOfUnverifiedEvidence: number;   // evidenceRefs pointing to unverified evidence
+  citationsOfDisputedEvidence: number;     // evidenceRefs pointing to disputed evidence
+  citationsOfRefutedEvidence: number;      // evidenceRefs pointing to refuted evidence
+  citationsOfMissingEvidence: number;      // evidenceRefs pointing to non-existent evidence
   note: string;
 }
 
@@ -360,9 +397,53 @@ export async function compareScenarios(
         totalHorizonByAlt.set(altId, horizons.length > 0 ? Math.max(...horizons) : null);
       }
     }
-    const timeline = altIds.map((altId) =>
-      buildTimelineEntry(altId, programsByAlt, totalHorizonByAlt.get(altId) ?? null)
-    );
+    // === BUILD TIMELINE COMPARISON ===
+    // 01-08-FIX: compute ordering edges + scheduling inputs per alternative
+    // so we can run validateSchedulingConsistency (reused from roadmap-service).
+    // This computes temporalStatus: "valid" | "invalid" | "not-verified".
+    const timeline = altIds.map((altId) => {
+      const altPrograms = (programsByAlt.get(altId) ?? []) as Array<{
+        id: string; title: string; metadata: unknown;
+      }>;
+      const altProgramIds = new Set(altPrograms.map((p) => p.id));
+      // Ordering edges for this alternative (requires + enables, both endpoints in this alt)
+      const orderingEdgesForAlt: OrderingEdge[] = allDeps
+        .filter((d) => (d.type === "requires" || d.type === "enables") &&
+                        altProgramIds.has(d.fromProgramId) &&
+                        altProgramIds.has(d.toProgramId))
+        .map((d) => ({ from: d.fromProgramId, to: d.toProgramId }));
+      // Scheduling inputs for this alternative's programs
+      const schedulingInputsForAlt = new Map<string, ProgramSchedulingInput>();
+      const programTitleMap = new Map<string, string>();
+      for (const p of altPrograms) {
+        programTitleMap.set(p.id, p.title);
+        const meta = (p.metadata ?? {}) as Record<string, unknown>;
+        const sched = meta.scheduling as Record<string, unknown> | undefined;
+        if (sched && typeof sched === "object") {
+          const input: ProgramSchedulingInput = {};
+          if (typeof sched.startYear === "number" && Number.isFinite(sched.startYear)) {
+            input.startYear = sched.startYear;
+          }
+          if (typeof sched.endYear === "number" && Number.isFinite(sched.endYear)) {
+            input.endYear = sched.endYear;
+          }
+          if (typeof sched.durationYears === "number" && Number.isFinite(sched.durationYears)) {
+            input.durationYears = sched.durationYears;
+          }
+          if (Object.keys(input).length > 0) {
+            schedulingInputsForAlt.set(p.id, input);
+          }
+        }
+      }
+      return buildTimelineEntry(
+        altId,
+        programsByAlt,
+        totalHorizonByAlt.get(altId) ?? null,
+        orderingEdgesForAlt,
+        schedulingInputsForAlt,
+        programTitleMap
+      );
+    });
 
     // === BUILD RISK PROFILE ===
     const riskProfile = altIds.map((altId) => buildRiskEntry(altId, risksByAlt, conflictsByAlt));
@@ -506,29 +587,44 @@ function buildCostEntry(
 function buildTimelineEntry(
   altId: string,
   programsByAlt: Map<string, unknown[]>,
-  totalHorizon: number | null
+  totalHorizon: number | null,
+  orderingEdgesForAlt: OrderingEdge[],
+  schedulingInputsForAlt: Map<string, ProgramSchedulingInput>,
+  programTitleMap: Map<string, string>
 ): TimelineComparisonEntry {
-  const programs = (programsByAlt.get(altId) ?? []) as Array<{ id: string; metadata: unknown }>;
-  let hasSchedulingData = false;
-  for (const p of programs) {
-    const meta = (p.metadata ?? {}) as Record<string, unknown>;
-    const sched = meta.scheduling as Record<string, unknown> | undefined;
-    if (sched && typeof sched === "object" &&
-        (typeof sched.startYear === "number" || typeof sched.endYear === "number")) {
-      hasSchedulingData = true;
-      break;
-    }
+  // 01-08-FIX: Run the SAME temporal validation as roadmap-service (01-07-FIX).
+  // We call the exported validateSchedulingConsistency() function — no
+  // duplication of logic. The function is pure (no DB access, no side effects).
+  const programMapForValidation = new Map<string, { id: string; title: string }>();
+  for (const [pid, title] of programTitleMap) {
+    programMapForValidation.set(pid, { id: pid, title });
+  }
+  const temporalValidation = validateSchedulingConsistency(
+    programMapForValidation,
+    orderingEdgesForAlt,
+    schedulingInputsForAlt
+  );
+
+  // Determine temporalStatus from the validation result:
+  //   "valid" = validation ran + 0 violations + ≥1 edge checked
+  //   "invalid" = validation ran + ≥1 violation
+  //   "not-verified" = no edges could be checked (insufficient scheduling data)
+  const violationCount = temporalValidation.violations.length;
+  let temporalStatus: "valid" | "invalid" | "not-verified";
+  if (violationCount > 0) {
+    temporalStatus = "invalid";
+  } else if (temporalValidation.checkedEdges > 0) {
+    temporalStatus = "valid";
+  } else {
+    temporalStatus = "not-verified";
   }
 
-  // We do NOT call buildRoadmap here (it throws on temporal violations + is
-  // a separate read operation). The caller can separately call buildRoadmap
-  // to get exact execution duration + temporal validation. Here we only
-  // signal whether scheduling data exists.
-  const hasTemporalViolations = false; // conservative — would need buildRoadmap
+  // Check if any scheduling data exists (for executionDurationSource)
+  let hasSchedulingData = schedulingInputsForAlt.size > 0;
 
   let executionDurationYears: number | null = null;
   let executionDurationSource: "scheduling-data" | "unavailable" | "temporal-violation";
-  if (hasTemporalViolations) {
+  if (temporalStatus === "invalid") {
     executionDurationSource = "temporal-violation";
   } else if (hasSchedulingData) {
     executionDurationSource = "scheduling-data";
@@ -540,22 +636,28 @@ function buildTimelineEntry(
   const horizonSource: "objective-horizon" | "unavailable" =
     totalHorizon !== null ? "objective-horizon" : "unavailable";
 
+  const horizonNote = totalHorizon !== null
+    ? `Planning horizon: ${totalHorizon} year(s) (from objectives).`
+    : `No planning horizon available.`;
+
   const note =
-    executionDurationSource === "unavailable"
-      ? `No scheduling data for this alternative. Execution duration is unknown — ` +
-        `do not infer duration from the planning horizon or dependency chain length. ` +
-        (totalHorizon !== null
-          ? `Planning horizon: ${totalHorizon} year(s) (from objectives). `
-          : `No planning horizon available.`)
-      : executionDurationSource === "temporal-violation"
-        ? `Temporal violations detected in scheduling data. The schedule is NOT valid — ` +
-          `do not present it as a feasible timeline.`
-        : `Scheduling data exists for some programs. Execution duration requires ` +
-          `buildRoadmap to compute (not run here to keep comparison read-only + ` +
-          `avoid throwing on temporal violations). ` +
-          (totalHorizon !== null
-            ? `Planning horizon: ${totalHorizon} year(s) (from objectives).`
-            : `No planning horizon available.`);
+    temporalStatus === "invalid"
+      ? `TEMPORAL VIOLATIONS DETECTED: ${violationCount} violation(s). ` +
+        `The schedule is NOT valid — do not present it as a feasible timeline. ` +
+        `${temporalValidation.checkedEdges} edge(s) checked, ${temporalValidation.skippedEdges} skipped. ` +
+        horizonNote
+      : temporalStatus === "valid"
+        ? `Temporal validation PASSED: ${temporalValidation.checkedEdges} ordering edge(s) checked, ` +
+          `0 violations. ${temporalValidation.skippedEdges} edge(s) skipped (scheduling gap). ` +
+          `Execution duration requires buildRoadmap to compute (not run here to keep comparison read-only). ` +
+          horizonNote
+        : `Temporal status: not-verified. ${temporalValidation.skippedEdges} ordering edge(s) have ` +
+          `scheduling gaps — insufficient data to verify temporal consistency. ` +
+          (hasSchedulingData
+            ? `Some scheduling data exists but not enough to check any ordering edge. `
+            : `No scheduling data for this alternative. `) +
+          `Execution duration is unknown — do not infer duration from the planning horizon ` +
+          `or dependency chain length. ` + horizonNote;
 
   return {
     altId,
@@ -563,7 +665,10 @@ function buildTimelineEntry(
     horizonSource,
     executionDurationYears,
     executionDurationSource,
-    hasTemporalViolations,
+    temporalStatus,
+    temporalCheckedEdges: temporalValidation.checkedEdges,
+    temporalSkippedEdges: temporalValidation.skippedEdges,
+    temporalViolationCount: violationCount,
     note,
   };
 }
@@ -610,35 +715,39 @@ function buildEvidenceEntry(
     id: string; metadata: unknown;
   }>;
   const citedEvidenceIds = new Set<string>();
-  let totalClaims = 0;
-  let supportedClaims = 0;     // citing verified evidence
-  let weakClaims = 0;          // citing unverified/disputed evidence
-  let unsupportedClaims = 0;   // citing refuted OR non-existent evidence
+  let totalEvidenceRefs = 0;
+  let citationsOfVerifiedEvidence = 0;
+  let citationsOfUnverifiedEvidence = 0;
+  let citationsOfDisputedEvidence = 0;
+  let citationsOfRefutedEvidence = 0;
+  let citationsOfMissingEvidence = 0;
 
   for (const p of programs) {
     const meta = (p.metadata ?? {}) as Record<string, unknown>;
     const evidenceRefs = (meta.evidenceRefs as Array<{ evidenceId: string }>) ?? [];
     for (const ref of evidenceRefs) {
-      totalClaims++;
+      totalEvidenceRefs++;
       const eid = ref.evidenceId;
       if (!eid) {
-        unsupportedClaims++;
+        citationsOfMissingEvidence++;
         continue;
       }
       citedEvidenceIds.add(eid);
       const status = evidenceStatusMap.get(eid);
       if (!status) {
-        // Evidence doesn't exist in tenant scope → unsupported
-        unsupportedClaims++;
+        // Evidence doesn't exist in tenant scope → missing
+        citationsOfMissingEvidence++;
       } else if (status === "verified") {
-        supportedClaims++;
-      } else if (status === "unverified" || status === "disputed") {
-        weakClaims++;
+        citationsOfVerifiedEvidence++;
+      } else if (status === "unverified") {
+        citationsOfUnverifiedEvidence++;
+      } else if (status === "disputed") {
+        citationsOfDisputedEvidence++;
       } else if (status === "refuted") {
-        unsupportedClaims++;
+        citationsOfRefutedEvidence++;
       } else {
-        // Unknown status → treat as weak (conservative)
-        weakClaims++;
+        // Unknown status → treat as unverified (conservative)
+        citationsOfUnverifiedEvidence++;
       }
     }
   }
@@ -655,19 +764,25 @@ function buildEvidenceEntry(
     else if (status === "disputed") disputedEvidence++;
     else if (status === "refuted") refutedEvidence++;
     // If status is missing (evidence doesn't exist), it's not counted in any
-    // of these — it shows up in unsupportedClaims instead.
+    // of these — it shows up in citationsOfMissingEvidence instead.
   }
 
+  // 01-08-FIX: supportAssessment is always "not-assessed".
+  // We do NOT assert that verified evidence = supported claim.
   const note =
     citedEvidenceIds.size === 0
       ? `No evidence cited by this alternative's programs. ` +
-        `All claims lack evidentiary support.`
-      : `${citedEvidenceIds.size} distinct evidence item(s) cited across ${totalClaims} claim(s). ` +
-        `Supported (verified evidence): ${supportedClaims}. ` +
-        `Weak (unverified/disputed): ${weakClaims}. ` +
-        `Unsupported (refuted/non-existent): ${unsupportedClaims}. ` +
-        `Note: verified evidence does NOT automatically prove the strategic claim — ` +
-        `it is examinable support, not proof of causality.`;
+        `All ${totalEvidenceRefs} evidence reference(s) point to missing evidence.`
+      : `${citedEvidenceIds.size} distinct evidence item(s) cited across ${totalEvidenceRefs} evidence reference(s). ` +
+        `Evidence breakdown (distinct): ${verifiedEvidence} verified, ` +
+        `${unverifiedEvidence} unverified, ${disputedEvidence} disputed, ${refutedEvidence} refuted. ` +
+        `Citation breakdown: ${citationsOfVerifiedEvidence} cite verified, ` +
+        `${citationsOfUnverifiedEvidence} cite unverified, ${citationsOfDisputedEvidence} cite disputed, ` +
+        `${citationsOfRefutedEvidence} cite refuted, ${citationsOfMissingEvidence} cite missing. ` +
+        `SUPPORT NOT ASSESSED: evidence verificationStatus reflects the evidence's own ` +
+        `verification, NOT a verification that the evidence supports any specific claim. ` +
+        `Do not interpret "cites verified evidence" as "claim is supported" — the ` +
+        `claim-to-evidence support relationship has not been assessed.`;
 
   return {
     altId,
@@ -676,10 +791,13 @@ function buildEvidenceEntry(
     unverifiedEvidence,
     disputedEvidence,
     refutedEvidence,
-    totalClaims,
-    supportedClaims,
-    weakClaims,
-    unsupportedClaims,
+    totalEvidenceRefs,
+    supportAssessment: "not-assessed",
+    citationsOfVerifiedEvidence,
+    citationsOfUnverifiedEvidence,
+    citationsOfDisputedEvidence,
+    citationsOfRefutedEvidence,
+    citationsOfMissingEvidence,
     note,
   };
 }
@@ -751,14 +869,15 @@ function buildTradeoffs(
     );
   }
 
-  // Evidence strength differences
-  const evidenceStrong = evidenceStrength.filter((e) => e.supportedClaims > 0);
-  const evidenceWeak = evidenceStrength.filter((e) => e.unsupportedClaims > 0);
-  if (evidenceStrong.length > 0 && evidenceWeak.length > 0) {
+  // Evidence strength differences (01-08-FIX: use new field names)
+  const evidenceCitingVerified = evidenceStrength.filter((e) => e.citationsOfVerifiedEvidence > 0);
+  const evidenceCitingMissing = evidenceStrength.filter((e) => e.citationsOfMissingEvidence > 0);
+  if (evidenceCitingVerified.length > 0 && evidenceCitingMissing.length > 0) {
     lines.push(
-      `Evidence strength varies: some alternatives have more claims backed by verified evidence, ` +
-      `while others have more unsupported claims. Verified evidence is examinable support, ` +
-      `NOT proof that the strategic claim is correct.`
+      `Evidence citations vary: some alternatives cite more verified evidence, ` +
+      `while others cite more missing evidence. NOTE: citing verified evidence ` +
+      `does NOT mean the claim is supported — the claim-to-evidence support ` +
+      `relationship has not been assessed (supportAssessment = "not-assessed").`
     );
   }
 
@@ -831,20 +950,29 @@ function buildDataGaps(
         `execution duration unknown.`
       );
     }
-    if (t.hasTemporalViolations) {
+    if (t.temporalStatus === "invalid") {
       gaps.push(
         `Alternative "${alternatives.find((a) => a.altId === t.altId)?.strategyTitle ?? t.altId}": ` +
-        `temporal violations in scheduling data — schedule is NOT valid.`
+        `${t.temporalViolationCount} temporal violation(s) in scheduling data — schedule is NOT valid.`
+      );
+    }
+    if (t.temporalStatus === "not-verified" && t.executionDurationSource !== "unavailable") {
+      gaps.push(
+        `Alternative "${alternatives.find((a) => a.altId === t.altId)?.strategyTitle ?? t.altId}": ` +
+        `temporal status not-verified — insufficient scheduling data to verify all ordering edges.`
       );
     }
   }
 
+  // 01-08-FIX: use new field names (citationsOfMissingEvidence + citationsOfRefutedEvidence)
   for (const e of evidenceStrength) {
-    if (e.unsupportedClaims > 0) {
+    const missingOrRefuted = e.citationsOfMissingEvidence + e.citationsOfRefutedEvidence;
+    if (missingOrRefuted > 0) {
       const alt = alternatives.find((a) => a.altId === e.altId);
       gaps.push(
-        `Alternative "${alt?.strategyTitle ?? e.altId}": ${e.unsupportedClaims} ` +
-        `claim(s) cite refuted or non-existent evidence.`
+        `Alternative "${alt?.strategyTitle ?? e.altId}": ${missingOrRefuted} ` +
+        `evidence reference(s) cite refuted or non-existent evidence. ` +
+        `(Support not assessed — this counts citations, not claim support.)`
       );
     }
   }
