@@ -44,6 +44,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "budget:compute",
     // G01 (01-07): Implementation Roadmap & Timeline
     "roadmap:read",
+    // G01 (01-08): Scenario Comparison Engine
+    "comparison:read",
   ],
   analyst: [
     "tenant:read",
@@ -66,6 +68,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "budget:compute",
     // G01 (01-07): Implementation Roadmap & Timeline
     "roadmap:read",
+    // G01 (01-08): Scenario Comparison Engine
+    "comparison:read",
   ],
   reviewer: [
     "tenant:read",
@@ -85,6 +89,8 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "budget:read",
     // G01 (01-07): Implementation Roadmap & Timeline — read-only for reviewers
     "roadmap:read",
+    // G01 (01-08): Scenario Comparison Engine — read-only for reviewers
+    "comparison:read",
   ],
   observer: [
     "tenant:read",
