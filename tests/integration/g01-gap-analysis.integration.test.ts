@@ -115,7 +115,7 @@ describeIntegration("Gap classification (measurable / partial / unknown)", () =>
 
   it("agriculture objective → partial gap (FULL baseline + matching indicator + counter-evidence)", async () => {
     const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
-    const { computeGaps } = await import("@lib/state-builder/gap-analysis-service");
+    const { computeGaps } = await import("@/lib/state-builder/gap-analysis-service");
     const session = makeSession({
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
