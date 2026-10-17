@@ -25,13 +25,7 @@
 // ============================================================
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
-import {
-  createTask,
-  claimTask,
-  startTask,
-  completeTask,
-  failTask,
-} from "@/lib/task-service";
+import { createTask } from "@/lib/task-service";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
 
@@ -364,6 +358,19 @@ function mapSupportStance(
 // ============================================================
 // COMPUTE BASELINE (public API — runs as Durable Task)
 // ============================================================
+//
+// Execution model:
+//   1. createTask (idempotent — prevents duplicate baselines)
+//   2. If task already completed → return cached output
+//   3. Claim the SPECIFIC task by ID (not a generic claimTask which may pick
+//      an unrelated pending task from another test/workflow)
+//   4. Run the computation (synchronous, inside tenant-scoped transaction)
+//   5. Complete the task with the report
+//
+// The claim-by-ID is implemented inline (not via the generic claimTask) to
+// avoid race conditions where claimTask picks a different pending task.
+// This is safe because baseline computation is synchronous within this
+// function call — no concurrent workers for the same task.
 
 export async function computeBaseline(
   session: Session,
@@ -391,63 +398,135 @@ export async function computeBaseline(
     if (existingReport) {
       return { taskId, report: existingReport };
     }
-    // Task exists but not completed — return taskId, caller can poll
-    throw new Error(
-      `Baseline task ${taskId} already exists but has not completed. Poll getBaselineTask() for status.`
-    );
+    // Task exists but not completed — this shouldn't happen in normal flow
+    // (baseline is synchronous). If it does, re-run the computation.
+    // Fall through to re-claim + re-compute.
   }
 
-  // 2. Claim + start the task
-  const claimed = await claimTask(session, "baseline-worker", 60_000);
-  if (!claimed || claimed.taskId !== taskId) {
-    // Another worker claimed it — return taskId, caller can poll
-    throw new Error(
-      `Baseline task ${taskId} was created but could not be claimed (another worker may have it). Poll getBaselineTask() for status.`
-    );
-  }
+  // 2. Claim + start + complete the SPECIFIC task (inside tenant-scoped transaction)
+  //    We use updateMany with a WHERE clause that matches ONLY this task ID
+  //    + status=pending|claimed (defensive). This avoids the generic claimTask
+  //    which may pick an unrelated pending task.
+  const workerId = "baseline-worker";
+  const leaseDurationMs = 60_000;
 
-  await startTask(session, taskId, "baseline-worker", claimed.claimGeneration);
+  const report = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+    // Verify the country exists (PUBLIC table — readable by all tenants)
+    const country = await tx.country.findUnique({ where: { id: input.countryId } });
+    if (!country) {
+      throw new Error(`Country not found: ${input.countryId}`);
+    }
 
-  // 3. Run the computation (inside tenant-scoped transaction)
-  try {
-    const report = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-      // Verify the country exists (PUBLIC table — readable by all tenants)
-      const country = await tx.country.findUnique({ where: { id: input.countryId } });
-      if (!country) {
-        throw new Error(`Country not found: ${input.countryId}`);
+    // Claim the specific task by ID (atomic, with fencing token)
+    const claimResult = await tx.$queryRaw<{ claimGeneration: number }[]>`
+      UPDATE "tasks"
+      SET "status" = 'running',
+          "claimedBy" = ${workerId},
+          "claimGeneration" = "claimGeneration" + 1,
+          "leaseExpiresAt" = NOW() + (${leaseDurationMs}::integer / 1000.0) * INTERVAL '1 second',
+          "startedAt" = NOW(),
+          "updatedAt" = NOW()
+      WHERE "id" = ${taskId}
+        AND "tenantId" = ${tenantId}
+        AND "status" IN ('pending', 'claimed')
+      RETURNING "claimGeneration";
+    `;
+
+    if (claimResult.length === 0) {
+      // Task was already claimed/completed by another call — read its output
+      const existing = await tx.task.findFirst({
+        where: { id: taskId, tenantId },
+      });
+      if (existing?.status === "completed" && existing.output) {
+        return existing.output as unknown as BaselineReport;
       }
-
-      const computed = await runBaselineComputation(
-        tx,
-        tenantId,
-        input.countryId,
-        input.sectors
+      throw new Error(
+        `Baseline task ${taskId} could not be claimed (status not pending/claimed). Current status: ${existing?.status ?? "not found"}`
       );
+    }
 
-      return { ...computed, taskId } as BaselineReport;
+    const claimGeneration = claimResult[0]!.claimGeneration;
+
+    // Record task event (started)
+    await tx.taskEvent.create({
+      data: {
+        taskId,
+        tenantId,
+        eventType: "started",
+        actor: workerId,
+      },
     });
 
-    // 4. Complete the task with the report
-    await completeTask(
-      session,
-      taskId,
-      report as unknown as Record<string, unknown>,
-      "baseline-worker",
-      claimed.claimGeneration
-    );
+    // Run the computation
+    let computed: Omit<BaselineReport, "taskId">;
+    try {
+      computed = await runBaselineComputation(tx, tenantId, input.countryId, input.sectors);
+    } catch (err) {
+      // Fail the task
+      await tx.task.update({
+        where: { id: taskId },
+        data: {
+          status: "failed",
+          error: err instanceof Error ? err.message : String(err),
+          leaseExpiresAt: null,
+        },
+      });
+      await tx.taskEvent.create({
+        data: {
+          taskId,
+          tenantId,
+          eventType: "failed",
+          actor: workerId,
+          details: { error: err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200) } as Prisma.InputJsonValue,
+        },
+      });
+      throw err;
+    }
 
-    return { taskId, report };
-  } catch (err) {
-    // Fail the task with the error message
-    await failTask(
-      session,
-      taskId,
-      err instanceof Error ? err.message : String(err),
-      "baseline-worker",
-      claimed.claimGeneration
-    );
-    throw err;
-  }
+    const fullReport: BaselineReport = { ...computed, taskId };
+
+    // Complete the task (verify claimGeneration for fencing)
+    const completeResult = await tx.task.updateMany({
+      where: {
+        id: taskId,
+        tenantId,
+        claimedBy: workerId,
+        claimGeneration,
+        status: "running",
+      },
+      data: {
+        status: "completed",
+        output: fullReport as unknown as Prisma.InputJsonValue,
+        progress: 100,
+        completedAt: new Date(),
+        leaseExpiresAt: null,
+      },
+    });
+
+    if (completeResult.count === 0) {
+      // Fencing mismatch — another worker took over. Read the winner's output.
+      const existing = await tx.task.findFirst({ where: { id: taskId, tenantId } });
+      if (existing?.status === "completed" && existing.output) {
+        return existing.output as unknown as BaselineReport;
+      }
+      throw new Error(`Baseline task ${taskId} fencing mismatch during completion`);
+    }
+
+    // Record task event (completed)
+    await tx.taskEvent.create({
+      data: {
+        taskId,
+        tenantId,
+        eventType: "completed",
+        actor: workerId,
+        details: { outputKeys: Object.keys(fullReport) } as Prisma.InputJsonValue,
+      },
+    });
+
+    return fullReport;
+  });
+
+  return { taskId, report };
 }
 
 // ============================================================
