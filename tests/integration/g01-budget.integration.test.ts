@@ -137,6 +137,27 @@ async function clearProgramCostInputs(programId: string): Promise<void> {
   await setProgramCostInputs(programId, []);
 }
 
+// FIX-1 (01-06): varianceLow + varianceHigh + varianceSource are REQUIRED on
+// every cost input. No default variance is applied by the service. This helper
+// fills in test-fixture variance for existing tests so they can continue to
+// produce reproducible ranges. The varianceSource explicitly labels these as
+// test fixtures — not real economic estimates.
+const TEST_VARIANCE_LOW = 0.9;
+const TEST_VARIANCE_HIGH = 1.15;
+const TEST_VARIANCE_SOURCE = "[FICTIONAL TEST FIXTURE] 10%/15% variance for testing only — NOT a real economic estimate";
+
+// Helper: build a cost input with test-fixture variance defaults.
+// Allows tests to specify only the fields they care about; variance fields
+// are filled in automatically.
+function vInput(fields: Record<string, unknown>): Record<string, unknown> {
+  return {
+    varianceLow: TEST_VARIANCE_LOW,
+    varianceHigh: TEST_VARIANCE_HIGH,
+    varianceSource: TEST_VARIANCE_SOURCE,
+    ...fields,
+  };
+}
+
 // ============================================================
 // 01-06: Budget & Financing Estimates
 // ============================================================
@@ -234,7 +255,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         source: "[FICTIONAL FIXTURE] analyst-supplied test input",
         note: "50 irrigation units × $2000",
       },
-    ];
+    ].map(vInput);
     await setProgramCostInputs(targetProgram.programId, costInputs);
 
     // Verify the inputs validate cleanly
@@ -285,7 +306,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
     const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
@@ -306,7 +327,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         varianceLow: 1,
         varianceHigh: 1,
       },
-    ]);
+    ].map(vInput));
     const result2 = await estimateBudgets(session, { strategyAlternativeId: versionId });
     const estimate2 = result2.estimates.find((e) => e.programId === targetProgram.programId);
     expect(estimate2).toBeDefined();
@@ -360,7 +381,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         varianceLow: 1.2,
         varianceHigh: 0.8,
       },
-    ]);
+    ].map(vInput));
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some((e) => e.includes("varianceLow") && e.includes("varianceHigh"))).toBe(true);
   });
@@ -376,7 +397,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some((e) => e.includes("non-negative"))).toBe(true);
   });
@@ -392,7 +413,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some((e) => e.includes("ISO 4217"))).toBe(true);
   });
@@ -408,7 +429,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 0,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
     expect(errors.length).toBeGreaterThan(0);
     expect(errors.some((e) => e.includes("horizonYears"))).toBe(true);
   });
@@ -443,7 +464,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     const errors = validateCostInputs([
       {
@@ -460,7 +481,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
     expect(errors.some((e) => e.includes("multiple currencies"))).toBe(true);
 
     // estimateBudgets should put this program in insufficientData
@@ -496,7 +517,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 5,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
     const entry = result.insufficientData.find((e) => e.programId === targetProgram.programId);
@@ -527,7 +548,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
     const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
@@ -565,7 +586,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
           horizonYears: 1,
           source: "[FICTIONAL] test",
         },
-      ],
+      ].map(vInput),
       [
         {
           type: "treasury",
@@ -614,7 +635,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 2,
         source: "[FICTIONAL] analyst-supplied input #2",
       },
-    ]);
+    ].map(vInput));
 
     const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
     const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
@@ -668,7 +689,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
     expect(result.modelVersion).toBe("v1-deterministic");
@@ -707,7 +728,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
     const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
@@ -828,7 +849,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     // First run
     const result1 = await estimateBudgets(session, { strategyAlternativeId: versionId });
@@ -869,7 +890,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     // Launch two concurrent estimateBudgets calls
     const [result1, result2] = await Promise.all([
@@ -910,7 +931,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         horizonYears: 1,
         source: "[FICTIONAL] test",
       },
-    ]);
+    ].map(vInput));
 
     await estimateBudgets(analystSession, { strategyAlternativeId: versionId });
 
@@ -1039,7 +1060,7 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
         source: "[FICTIONAL FIXTURE] Demolandia Case B test input",
         note: "5000 seed kits × $50",
       },
-    ]);
+    ].map(vInput));
 
     const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
     const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
@@ -1076,5 +1097,361 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
     expect(parseFloat(dbLine!.maxAmount.toString())).toBe(402500);
     expect(dbLine!.currency).toBe("USD");
     expect(dbLine!.horizonYears).toBe(3);
+  });
+
+  // ============================================================
+  // 17. FIX-1: No variance → insufficient data (no arbitrary range)
+  // ------------------------------------------------------------
+  // A cost input WITHOUT explicit varianceLow/varianceHigh/varianceSource
+  // must NOT produce a range. The program goes to insufficientData.
+  // ============================================================
+  it("17. FIX-1: cost input without explicit variance → insufficient data", async () => {
+    const { estimateBudgets, validateCostInputs } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // Cost input WITHOUT variance fields — must be rejected
+    await setProgramCostInputs(targetProgram.programId, [
+      {
+        label: "input without variance",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] test — no variance specified",
+      },
+    ]);
+    // Note: NO .map(vInput) here — we're testing the raw case.
+
+    // validateCostInputs must report the missing variance
+    const errors = validateCostInputs([
+      {
+        label: "input without variance",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] test",
+      },
+    ]);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some((e) => e.includes("varianceLow is required"))).toBe(true);
+
+    // estimateBudgets must put the program in insufficientData (not estimates)
+    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    const entry = result.insufficientData.find((e) => e.programId === targetProgram.programId);
+    expect(entry).toBeDefined();
+    expect(entry!.gaps.some((g) => g.includes("varianceLow is required"))).toBe(true);
+
+    // NO budget line stored
+    const dbLine = await adminClient.budgetLine.findFirst({
+      where: { tenantId: tenantAId, programId: targetProgram.programId },
+    });
+    expect(dbLine).toBeNull();
+  });
+
+  // ============================================================
+  // 18. FIX-1: varianceSource required — documents variance provenance
+  // ============================================================
+  it("18. FIX-1: varianceLow + varianceHigh without varianceSource → rejected", async () => {
+    const { validateCostInputs } = await import("@/lib/state-builder/budget-service");
+
+    const errors = validateCostInputs([
+      {
+        label: "input with variance but no source",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] test",
+        varianceLow: 0.9,
+        varianceHigh: 1.15,
+        // varianceSource intentionally omitted
+      },
+    ]);
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some((e) => e.includes("varianceSource is required"))).toBe(true);
+  });
+
+  // ============================================================
+  // 19. FIX-2: Decimal-safe arithmetic (no floating-point precision loss)
+  // ------------------------------------------------------------
+  // Classic JS: 0.1 + 0.2 = 0.30000000000000004
+  // With Prisma.Decimal: 0.1 + 0.2 = 0.30 (exact)
+  // ============================================================
+  it("19. FIX-2: Decimal arithmetic prevents floating-point precision loss", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // Three inputs with amounts that would cause floating-point issues in JS:
+    // 0.1 * 10 * 0.9 = 0.9 (JS: 0.9000000000000001)
+    // 0.2 * 10 * 0.9 = 1.8 (JS: 1.8000000000000003)
+    // 0.3 * 10 * 0.9 = 2.7 (JS: 2.7000000000000002)
+    // Sum of min = 0.9 + 1.8 + 2.7 = 5.4 (JS: 5.400000000000001)
+    // With Decimal: 5.40 (exact)
+    await setProgramCostInputs(targetProgram.programId, [
+      vInput({ label: "decimal-sensitive 1", unitCost: { amount: 0.1, currency: "USD" }, unitCount: 10, horizonYears: 1, source: "[FICTIONAL] precision test", varianceLow: 0.9, varianceHigh: 1.1 }),
+      vInput({ label: "decimal-sensitive 2", unitCost: { amount: 0.2, currency: "USD" }, unitCount: 10, horizonYears: 1, source: "[FICTIONAL] precision test", varianceLow: 0.9, varianceHigh: 1.1 }),
+      vInput({ label: "decimal-sensitive 3", unitCost: { amount: 0.3, currency: "USD" }, unitCount: 10, horizonYears: 1, source: "[FICTIONAL] precision test", varianceLow: 0.9, varianceHigh: 1.1 }),
+    ]);
+
+    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
+    expect(estimate).toBeDefined();
+
+    // min = (0.1*10*0.9) + (0.2*10*0.9) + (0.3*10*0.9) = 0.9 + 1.8 + 2.7 = 5.40
+    // max = (0.1*10*1.1) + (0.2*10*1.1) + (0.3*10*1.1) = 1.1 + 2.2 + 3.3 = 6.60
+    expect(estimate!.costRange.min).toBe("5.40");
+    expect(estimate!.costRange.max).toBe("6.60");
+
+    // Re-run to verify determinism (Decimal arithmetic is reproducible)
+    const result2 = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    const estimate2 = result2.estimates.find((e) => e.programId === targetProgram.programId);
+    expect(estimate2!.costRange.min).toBe(estimate!.costRange.min);
+    expect(estimate2!.costRange.max).toBe(estimate!.costRange.max);
+  });
+
+  // ============================================================
+  // 20. FIX-2: Large values (no silent overflow)
+  // ============================================================
+  it("20. FIX-2: large cost values computed correctly (no overflow)", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // Large values: 9999999999.99 × 1000000 units
+    // base = 9999999999.99 * 1000000 = 9999999999990000.00
+    // min = base * 0.9 = 8999999999991000.00
+    // max = base * 1.15 = 11499999999988500.00
+    // This would overflow JS Number.MAX_SAFE_INTEGER (9007199254740991)
+    // but Decimal handles it exactly.
+    await setProgramCostInputs(targetProgram.programId, [
+      vInput({
+        label: "large-scale infrastructure",
+        unitCost: { amount: 9999999999.99, currency: "USD" },
+        unitCount: 1000000,
+        horizonYears: 10,
+        source: "[FICTIONAL] large-value precision test",
+        varianceLow: 0.9,
+        varianceHigh: 1.15,
+      }),
+    ]);
+
+    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
+    expect(estimate).toBeDefined();
+
+    // base = 9999999999.99 * 1000000 = 9999999999990000.00
+    // min = 9999999999990000 * 0.9 = 8999999999991000.00
+    // max = 9999999999990000 * 1.15 = 11499999999988500.00
+    // Decimal(20,2) can hold up to 99999999999999999999.99, so this fits.
+    expect(estimate!.costRange.min).toBe("8999999999991000.00");
+    expect(estimate!.costRange.max).toBe("11499999999988500.00");
+
+    // Verify min <= max (no overflow corruption)
+    expect(parseFloat(estimate!.costRange.min)).toBeLessThanOrEqual(parseFloat(estimate!.costRange.max));
+
+    // Verify the DB stored the exact values (no precision loss)
+    const dbLine = await adminClient.budgetLine.findFirst({
+      where: { tenantId: tenantAId, programId: targetProgram.programId },
+    });
+    expect(dbLine).toBeDefined();
+    expect(parseFloat(dbLine!.minAmount.toString())).toBe(8999999999991000);
+    expect(parseFloat(dbLine!.maxAmount.toString())).toBe(11499999999988500);
+  });
+
+  // ============================================================
+  // 21. FIX-3: Reject non-ISO 4217 currency codes
+  // ------------------------------------------------------------
+  // Previously, any 3-letter pattern was accepted (e.g. "XYZ", "AAA").
+  // Now only recognized ISO 4217 codes pass validation.
+  // ============================================================
+  it("21. FIX-3: rejects non-ISO 4217 currency codes", async () => {
+    const { validateCostInputs } = await import("@/lib/state-builder/budget-service");
+
+    // "XYZ" is 3 letters but NOT a real ISO 4217 code
+    const errors = validateCostInputs(
+      [
+        {
+          label: "bad currency",
+          unitCost: { amount: 100, currency: "XYZ" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] test",
+        },
+      ].map(vInput)
+    );
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some((e) => e.includes("not a recognized ISO 4217 currency code"))).toBe(true);
+
+    // "AAA" — also not a real code
+    const errors2 = validateCostInputs(
+      [
+        {
+          label: "bad currency 2",
+          unitCost: { amount: 100, currency: "AAA" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] test",
+        },
+      ].map(vInput)
+    );
+    expect(errors2.length).toBeGreaterThan(0);
+    expect(errors2.some((e) => e.includes("not a recognized ISO 4217 currency code"))).toBe(true);
+
+    // "usd" lowercase — must be uppercase per ISO 4217
+    const errors3 = validateCostInputs(
+      [
+        {
+          label: "lowercase currency",
+          unitCost: { amount: 100, currency: "usd" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] test",
+        },
+      ].map(vInput)
+    );
+    expect(errors3.length).toBeGreaterThan(0);
+    expect(errors3.some((e) => e.includes("not a recognized ISO 4217 currency code"))).toBe(true);
+  });
+
+  it("21b. FIX-3: accepts real ISO 4217 currency codes (USD, EUR, SYP, JOD)", async () => {
+    const { validateCostInputs } = await import("@/lib/state-builder/budget-service");
+
+    for (const currency of ["USD", "EUR", "SYP", "JOD", "EGP", "TRY"]) {
+      const errors = validateCostInputs(
+        [
+          {
+            label: `input in ${currency}`,
+            unitCost: { amount: 100, currency },
+            unitCount: 10,
+            horizonYears: 1,
+            source: "[FICTIONAL] test",
+          },
+        ].map(vInput)
+      );
+      // No currency-related errors for valid codes
+      expect(errors.some((e) => e.includes("ISO 4217"))).toBe(false);
+    }
+  });
+
+  // ============================================================
+  // 22. FIX-3: sourceType labeling — analyst-input labeled UNVERIFIED
+  // ============================================================
+  it("22. FIX-3: analyst-input sourceType labeled UNVERIFIED in assumptions", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // sourceType defaults to "analyst-input" — must be labeled UNVERIFIED
+    await setProgramCostInputs(targetProgram.programId, [
+      vInput({
+        label: "analyst assertion",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] analyst-supplied estimate",
+        // sourceType intentionally omitted — defaults to "analyst-input"
+      }),
+    ]);
+
+    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
+    expect(estimate).toBeDefined();
+
+    // The per-input assumption MUST include the UNVERIFIED label
+    const inputAssumption = estimate!.assumptions.find(
+      (a) => a.source.includes("analyst-supplied")
+    );
+    expect(inputAssumption).toBeDefined();
+    expect(inputAssumption!.description).toContain("UNVERIFIED");
+    expect(inputAssumption!.description).toContain("analyst-supplied assertion");
+
+    // The model-level assumption about source verification must be present
+    const verificationAssumption = estimate!.assumptions.find(
+      (a) => a.description.includes("Input verification") && a.description.includes("analyst-input")
+    );
+    expect(verificationAssumption).toBeDefined();
+  });
+
+  it("22b. FIX-3: verified-reference sourceType requires referenceId", async () => {
+    const { validateCostInputs } = await import("@/lib/state-builder/budget-service");
+
+    // sourceType="verified-reference" WITHOUT referenceId — must be rejected
+    const errors = validateCostInputs(
+      [
+        {
+          label: "verified without reference",
+          unitCost: { amount: 100, currency: "USD" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] test",
+          sourceType: "verified-reference",
+          // referenceId intentionally omitted
+        },
+      ].map(vInput)
+    );
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some((e) => e.includes("referenceId is required"))).toBe(true);
+  });
+
+  it("22c. FIX-3: verified-reference with referenceId → assumption includes referenceId", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    await setProgramCostInputs(targetProgram.programId, [
+      vInput({
+        label: "verified price reference",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] published price index citation",
+        sourceType: "verified-reference",
+        referenceId: "fixture-price-index-2024-001",
+      }),
+    ]);
+
+    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
+    expect(estimate).toBeDefined();
+
+    // The per-input assumption MUST include the referenceId
+    const inputAssumption = estimate!.assumptions.find(
+      (a) => a.source.includes("price index")
+    );
+    expect(inputAssumption).toBeDefined();
+    expect(inputAssumption!.description).toContain("verified-reference");
+    expect(inputAssumption!.description).toContain("fixture-price-index-2024-001");
+    // Should NOT contain the UNVERIFIED label (that's only for analyst-input)
+    expect(inputAssumption!.description).not.toContain("UNVERIFIED");
   });
 });

@@ -183,6 +183,20 @@ export interface BudgetResult {
 
 // ============================================================
 // TYPES — Cost Input (read from program.metadata.costInputs)
+// ------------------------------------------------------------
+// FIX-1 (01-06): varianceLow + varianceHigh are REQUIRED on every
+// cost input. There is NO default variance — applying an arbitrary
+// 0.9/1.15 multiplier without justification would give decision-makers
+// a false sense of precision. If the analyst cannot justify a variance,
+// the program returns "insufficient data for estimate" instead.
+//
+// FIX-3 (01-06): sourceType distinguishes analyst-supplied text from
+// verified data references. An input with sourceType="analyst-input"
+// is the analyst's assertion — it has NOT been independently verified.
+// An input with sourceType="verified-reference" must include a
+// referenceId pointing to a verifiable source (e.g. an Evidence row,
+// a published price index, a tender document). The model never
+// describes analyst-input as "verified market data".
 // ============================================================
 
 interface CostInput {
@@ -190,10 +204,24 @@ interface CostInput {
   unitCost: { amount: number; currency: Currency };
   unitCount: number;
   horizonYears: number;
+  // source — provenance text (who/what provided this input). Always required.
   source: string;
+  // FIX-3: sourceType — distinguishes analyst assertion from verified data.
+  // Default "analyst-input" if omitted (backward compatible for older callers,
+  // but always treated as UNVERIFIED).
+  sourceType?: "analyst-input" | "verified-reference";
+  // FIX-3: referenceId — required when sourceType="verified-reference".
+  // Points to the verifiable source (e.g. an Evidence row ID, a published
+  // price index citation, a tender document reference).
+  referenceId?: string;
   note?: string;
-  varianceLow?: number;   // multiplier for min (default 0.9)
-  varianceHigh?: number;  // multiplier for max (default 1.15)
+  // FIX-1: varianceLow + varianceHigh are REQUIRED. No defaults.
+  // The analyst must justify the range for each input. The varianceSource
+  // documents WHERE the variance comes from (e.g. "test-fixture",
+  // "historical-variance-2023", "expert-estimate-dr-x").
+  varianceLow: number;    // multiplier for min (e.g. 0.9 = 10% below base)
+  varianceHigh: number;   // multiplier for max (e.g. 1.15 = 15% above base)
+  varianceSource: string; // provenance for the variance multipliers
 }
 
 interface ProgramMetadataForBudget {
@@ -220,26 +248,65 @@ export class BudgetIntegrityError extends Error {
 }
 
 // ============================================================
-// CONSTANTS — Model defaults (all documented as assumptions)
+// CONSTANTS — FIX-1 + FIX-3
 // ============================================================
 
-// Default variance multipliers — NOT arbitrary padding. These reflect that
-// a unit-cost estimate is typically 10% optimistic (low) and 15% pessimistic
-// (high) when scaled to program level. These are EXPLICIT assumptions that
-// the analyst can override per-input. They are recorded in every estimate's
-// assumptions array so anyone can reproduce the calculation.
-const DEFAULT_VARIANCE_LOW = 0.9;
-const DEFAULT_VARIANCE_HIGH = 1.15;
+// FIX-1: NO DEFAULT VARIANCE.
+// The previous implementation used varianceLow=0.9 + varianceHigh=1.15
+// as automatic defaults. This was scientifically unjustified — there is
+// no empirical basis for applying the same 10%/15% margin to an
+// agricultural program, an education program, a health program, and
+// an infrastructure program across different countries. Documenting the
+// assumption made it reproducible, but reproducibility ≠ correctness.
+//
+// Now: varianceLow + varianceHigh + varianceSource are REQUIRED on every
+// cost input. If an analyst cannot justify a variance, the program
+// returns "insufficient data for estimate" rather than fabricating a range.
 
-// ISO 4217-style currency code pattern (3 uppercase letters).
-const CURRENCY_PATTERN = /^[A-Z]{3}$/;
+// FIX-3: ISO 4217 currency whitelist.
+// The previous implementation only checked the 3-letter pattern. This
+// accepted "XYZ" or "AAA" as valid currencies. Now we validate against
+// the active ISO 4217 currency codes. The list below is the set of
+// currently-assigned ISO 4217 codes (active + a few common historic ones).
+// Source: ISO 4217:2015 + amendments through 2024.
+const ISO_4217_CURRENCY_CODES: ReadonlySet<string> = new Set([
+  // Major reserve currencies
+  "USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD",
+  // Asia / Pacific
+  "CNY", "HKD", "SGD", "TWD", "KRW", "INR", "IDR", "MYR", "PHP", "THB",
+  "VND", "PKR", "BDT", "LKR", "NPR", "KHR", "LAK", "MMK", "BND", "FJD",
+  "PGK", "SBD", "VUV", "WST", "TOP", "JOD", "LBP", "ILS", "SAR", "AED",
+  "QAR", "KWD", "BHD", "OMR", "YER", "IRR", "IQD", "AFN", "MOP",
+  // Syria + neighbors (regional relevance for THE BALANCE)
+  "SYP", "TRY", "JOD", "LBP", "IQD", "EGP",
+  // Africa
+  "ZAR", "EGP", "NGN", "KES", "ETB", "GHS", "TZS", "UGX", "RWF", "BIF",
+  "CDF", "AOA", "MZN", "ZMW", "BWP", "MUR", "MAD", "DZD", "TND", "LYD",
+  "SDG", "SOS", "DJF", "ERN", "GMD", "GNF", "LRD", "MWK", "XOF", "XAF",
+  "XPF", "ZWL",
+  // Europe (non-Euro)
+  "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "RON", "BGN", "HRK", "RSD",
+  "ISK", "UAH", "MDL", "ALL", "BAM", "MKD", "RUB", "BYN", "GEL", "AMD",
+  "AZN", "TRY",
+  // Americas
+  "MXN", "BRL", "ARS", "CLP", "COP", "PEN", "CUP", "DOP", "GTQ", "HNL",
+  "NIO", "PAB", "PYG", "UYU", "VES", "BOB", "CRC", "JMD", "TTD", "BZD",
+  // Central Asia / Caucasus
+  "KZT", "UZS", "KGS", "TJS", "TMT", "AZN", "GEL", "AMD",
+]);
+
+// FIX-2: Rounding rule for financial arithmetic.
+// ROUND_HALF_UP is the standard cash rounding convention: 0.005 rounds
+// up to 0.01, 0.004 rounds down to 0.00. This matches how most
+// accounting systems handle cents.
+const DECIMAL_PLACES = 2;
 
 // ============================================================
 // HELPERS — validation
 // ============================================================
 
 function isValidCurrency(code: string): boolean {
-  return CURRENCY_PATTERN.test(code);
+  return ISO_4217_CURRENCY_CODES.has(code);
 }
 
 function isFinitePositiveNumber(n: unknown): n is number {
@@ -300,8 +367,13 @@ function parseCostInputs(
       errors.push(`costInputs[${i}].unitCost.amount must be a finite non-negative number`);
       continue;
     }
+    // FIX-3: currency must be a recognized ISO 4217 code (not just 3 letters).
     if (typeof currency !== "string" || !isValidCurrency(currency)) {
-      errors.push(`costInputs[${i}].unitCost.currency must be a 3-letter ISO 4217 code`);
+      errors.push(
+        `costInputs[${i}].unitCost.currency "${String(currency)}" is not a recognized ` +
+        `ISO 4217 currency code. The code must appear in the ISO 4217 whitelist. ` +
+        `Unknown or fabricated currency codes are rejected.`
+      );
       continue;
     }
 
@@ -317,38 +389,80 @@ function parseCostInputs(
       continue;
     }
 
-    // source (provenance)
+    // source (provenance text — who/what provided this input)
     if (typeof item.source !== "string" || item.source.trim().length === 0) {
       errors.push(`costInputs[${i}].source is missing (provenance required for every cost input)`);
       continue;
     }
 
-    // optional variance multipliers.
-    // We only enforce: both positive, and varianceLow <= varianceHigh.
-    // We do NOT enforce varianceLow <= 1 or varianceHigh >= 1 — an analyst
-    // may legitimately use a narrower range (e.g. 0.95 / 1.05) or wider
-    // (e.g. 0.7 / 1.3). The defaults (0.9 / 1.15) are documented assumptions;
-    // overrides are allowed as long as min <= max.
-    let varianceLow = DEFAULT_VARIANCE_LOW;
-    let varianceHigh = DEFAULT_VARIANCE_HIGH;
-    if (item.varianceLow !== undefined) {
-      if (!isFinitePositiveNumber(item.varianceLow)) {
-        errors.push(`costInputs[${i}].varianceLow must be a finite positive number`);
+    // FIX-3: sourceType — distinguishes analyst assertion from verified data.
+    // Default "analyst-input" if omitted. If "verified-reference", a
+    // referenceId is required.
+    let sourceType: "analyst-input" | "verified-reference" = "analyst-input";
+    if (item.sourceType !== undefined) {
+      if (item.sourceType !== "analyst-input" && item.sourceType !== "verified-reference") {
+        errors.push(
+          `costInputs[${i}].sourceType must be "analyst-input" or "verified-reference" ` +
+          `(got "${String(item.sourceType)}")`
+        );
         continue;
       }
-      varianceLow = item.varianceLow;
+      sourceType = item.sourceType;
     }
-    if (item.varianceHigh !== undefined) {
-      if (!isFinitePositiveNumber(item.varianceHigh)) {
-        errors.push(`costInputs[${i}].varianceHigh must be a finite positive number`);
+    let referenceId: string | undefined;
+    if (sourceType === "verified-reference") {
+      if (typeof item.referenceId !== "string" || item.referenceId.trim().length === 0) {
+        errors.push(
+          `costInputs[${i}].referenceId is required when sourceType="verified-reference" ` +
+          `(must point to a verifiable source: Evidence row ID, published price index, ` +
+          `tender document reference, etc.)`
+        );
         continue;
       }
-      varianceHigh = item.varianceHigh;
+      referenceId = item.referenceId;
     }
-    if (varianceLow > varianceHigh) {
+
+    // FIX-1: varianceLow + varianceHigh + varianceSource are REQUIRED.
+    // No default variance. If the analyst cannot justify a variance, the
+    // program returns "insufficient data" rather than fabricating a range.
+    if (item.varianceLow === undefined) {
       errors.push(
-        `costInputs[${i}].varianceLow (${varianceLow}) > varianceHigh (${varianceHigh}) — ` +
+        `costInputs[${i}].varianceLow is required — no default variance is applied. ` +
+        `The analyst must justify the lower-bound multiplier (e.g. 0.9 for 10% below base) ` +
+        `and document its source in varianceSource. Without a justified variance, the ` +
+        `program returns "insufficient data for estimate".`
+      );
+      continue;
+    }
+    if (item.varianceHigh === undefined) {
+      errors.push(
+        `costInputs[${i}].varianceHigh is required — no default variance is applied. ` +
+        `The analyst must justify the upper-bound multiplier (e.g. 1.15 for 15% above base) ` +
+        `and document its source in varianceSource.`
+      );
+      continue;
+    }
+    if (!isFinitePositiveNumber(item.varianceLow)) {
+      errors.push(`costInputs[${i}].varianceLow must be a finite positive number`);
+      continue;
+    }
+    if (!isFinitePositiveNumber(item.varianceHigh)) {
+      errors.push(`costInputs[${i}].varianceHigh must be a finite positive number`);
+      continue;
+    }
+    if (item.varianceLow > item.varianceHigh) {
+      errors.push(
+        `costInputs[${i}].varianceLow (${item.varianceLow}) > varianceHigh (${item.varianceHigh}) — ` +
         `min multiplier must not exceed max multiplier`
+      );
+      continue;
+    }
+    // varianceSource — documents WHERE the variance comes from.
+    if (typeof item.varianceSource !== "string" || item.varianceSource.trim().length === 0) {
+      errors.push(
+        `costInputs[${i}].varianceSource is required — document where the variance ` +
+        `multipliers come from (e.g. "test-fixture", "historical-variance-2023", ` +
+        `"expert-estimate-dr-x"). An unjustified variance is not allowed.`
       );
       continue;
     }
@@ -359,9 +473,12 @@ function parseCostInputs(
       unitCount: item.unitCount as number,
       horizonYears: item.horizonYears as number,
       source: item.source,
+      sourceType,
+      referenceId,
       note: typeof item.note === "string" ? item.note : undefined,
-      varianceLow,
-      varianceHigh,
+      varianceLow: item.varianceLow,
+      varianceHigh: item.varianceHigh,
+      varianceSource: item.varianceSource,
     });
   }
 
@@ -417,76 +534,181 @@ function validateInputsHomogeneous(inputs: CostInput[]): {
 
 /**
  * Compute the cost range from validated, homogeneous cost inputs.
+ *
+ * FIX-2 (01-06): All financial arithmetic uses Prisma.Decimal (decimal.js),
+ * NOT JavaScript floating-point numbers. This prevents the classic
+ * 0.1 + 0.2 = 0.30000000000000004 precision loss and ensures deterministic
+ * results across re-runs. The Decimal constructor accepts strings and
+ * numbers; we convert each input to Decimal at the start and never mix
+ * with JS number arithmetic.
+ *
+ * Rounding rule: ROUND_HALF_UP to 2 decimal places (DECIMAL_PLACES).
+ * This is the standard cash rounding convention: 0.005 → 0.01, 0.004 → 0.00.
+ * Applied at line-item level AND at the aggregate level.
+ *
+ * Guards:
+ *   - NaN/Infinity rejected at parse time (isFinitePositiveNumber)
+ *   - Decimal.isNaN() / Decimal.isFinite() defensive check after construction
+ *   - min > max integrity check (should be impossible given varianceLow <= varianceHigh)
+ *
  * Returns { min, max } as string-formatted Decimals (2 decimal places)
  * to preserve precision in storage.
  */
 function computeCostRange(inputs: CostInput[]): {
   min: string;
   max: string;
-  lineItems: Array<{ label: string; min: string; max: string; source: string }>;
+  lineItems: Array<{
+    label: string;
+    min: string;
+    max: string;
+    source: string;
+    sourceType: "analyst-input" | "verified-reference";
+    referenceId?: string;
+    base: string;
+    varianceLow: string;
+    varianceHigh: string;
+    varianceSource: string;
+  }>;
 } {
-  let minSum = 0;
-  let maxSum = 0;
-  const lineItems: Array<{ label: string; min: string; max: string; source: string }> = [];
+  // Use Prisma.Decimal for all arithmetic. Initialize sums at 0.
+  let minSum = new Prisma.Decimal(0);
+  let maxSum = new Prisma.Decimal(0);
+  const lineItems: Array<{
+    label: string;
+    min: string;
+    max: string;
+    source: string;
+    sourceType: "analyst-input" | "verified-reference";
+    referenceId?: string;
+    base: string;
+    varianceLow: string;
+    varianceHigh: string;
+    varianceSource: string;
+  }> = [];
 
   for (const inp of inputs) {
-    const base = inp.unitCost.amount * inp.unitCount;
-    const lineMin = base * inp.varianceLow!;
-    const lineMax = base * inp.varianceHigh!;
-    minSum += lineMin;
-    maxSum += lineMax;
+    // Convert all numeric inputs to Prisma.Decimal at the boundary.
+    // decimal.js accepts both string and number constructors; we use string
+    // to avoid any JS floating-point representation issues at construction.
+    const amountDec = new Prisma.Decimal(String(inp.unitCost.amount));
+    const countDec = new Prisma.Decimal(String(inp.unitCount));
+    const vLowDec = new Prisma.Decimal(String(inp.varianceLow));
+    const vHighDec = new Prisma.Decimal(String(inp.varianceHigh));
+
+    // Defensive: verify no NaN/Infinity slipped through (parse time should
+    // have caught these, but Decimal may accept edge cases like "Infinity"
+    // as a string).
+    if (!amountDec.isFinite() || !countDec.isFinite() ||
+        !vLowDec.isFinite() || !vHighDec.isFinite()) {
+      throw new BudgetIntegrityError(
+        `Non-finite Decimal encountered for cost input "${inp.label}". ` +
+        `This should have been caught at parse time — indicates a bug in validation. ` +
+        `amount=${amountDec.toString()}, count=${countDec.toString()}, ` +
+        `varianceLow=${vLowDec.toString()}, varianceHigh=${vHighDec.toString()}`
+      );
+    }
+
+    // base = amount × unitCount (Decimal multiplication — exact)
+    const base = amountDec.mul(countDec);
+    // lineMin = base × varianceLow; lineMax = base × varianceHigh
+    const lineMin = base.mul(vLowDec);
+    const lineMax = base.mul(vHighDec);
+
+    // Round each line item to 2 decimal places (ROUND_HALF_UP) BEFORE summing.
+    // This matches standard accounting practice: each line is rounded to cents,
+    // then the cents are summed. (Alternative: sum first, round once — but
+    // that can produce a different total than the sum of rounded lines, which
+    // is confusing for audit. We round-then-sum for transparency.)
+    const lineMinRounded = lineMin.toDecimalPlaces(DECIMAL_PLACES, Prisma.Decimal.ROUND_HALF_UP);
+    const lineMaxRounded = lineMax.toDecimalPlaces(DECIMAL_PLACES, Prisma.Decimal.ROUND_HALF_UP);
+
+    minSum = minSum.add(lineMinRounded);
+    maxSum = maxSum.add(lineMaxRounded);
+
     lineItems.push({
       label: inp.label,
-      min: lineMin.toFixed(2),
-      max: lineMax.toFixed(2),
+      min: lineMinRounded.toFixed(DECIMAL_PLACES),
+      max: lineMaxRounded.toFixed(DECIMAL_PLACES),
       source: inp.source,
+      sourceType: inp.sourceType ?? "analyst-input",
+      referenceId: inp.referenceId,
+      base: base.toFixed(DECIMAL_PLACES),
+      varianceLow: vLowDec.toString(),
+      varianceHigh: vHighDec.toString(),
+      varianceSource: inp.varianceSource,
     });
   }
 
+  // Round the aggregate sums to 2 decimal places.
+  const minFinal = minSum.toDecimalPlaces(DECIMAL_PLACES, Prisma.Decimal.ROUND_HALF_UP);
+  const maxFinal = maxSum.toDecimalPlaces(DECIMAL_PLACES, Prisma.Decimal.ROUND_HALF_UP);
+
   // Guard: if min > max (shouldn't happen given varianceLow <= varianceHigh,
-  // but defensive), surface it.
-  if (minSum > maxSum) {
+  // but defensive), surface it. Use Decimal comparison (not JS comparison).
+  if (minFinal.greaterThan(maxFinal)) {
     throw new BudgetIntegrityError(
-      `Computed min (${minSum}) > max (${maxSum}). This indicates a bug in variance ` +
-      `multiplier validation. Refusing to store an invalid range.`
+      `Computed min (${minFinal.toFixed(DECIMAL_PLACES)}) > max (${maxFinal.toFixed(DECIMAL_PLACES)}). ` +
+      `This indicates a bug in variance multiplier validation. Refusing to store an invalid range.`
     );
   }
 
   return {
-    min: minSum.toFixed(2),
-    max: maxSum.toFixed(2),
+    min: minFinal.toFixed(DECIMAL_PLACES),
+    max: maxFinal.toFixed(DECIMAL_PLACES),
     lineItems,
   };
 }
 
 /**
- * Build the assumptions array — documents every input + the model defaults
- * so anyone can reproduce the calculation. Mission pack §3: "حافظ على مراجع
- * المدخلات وأرقام نسخها اللازمة لإعادة الإنتاج" (preserve input references
- * and the version numbers needed for reproduction).
+ * Build the assumptions array — documents every input + the model so
+ * anyone can reproduce the calculation. Mission pack §3: "حافظ على مراجع
+ * المدخلات وأرقام نسخها اللازمة لإعادة الإنتاج" (preserve input
+ * references and the version numbers needed for reproduction).
+ *
+ * FIX-1 (01-06): documents the explicit varianceLow + varianceHigh +
+ * varianceSource for each input. No default-variance assumption is
+ * emitted — there is no default.
+ *
+ * FIX-3 (01-06): documents the sourceType for each input. Analyst-input
+ * sources are explicitly labeled as UNVERIFIED. Verified-reference sources
+ * include the referenceId. The model never describes analyst-input as
+ * "verified market data".
  */
 function buildAssumptions(
   inputs: CostInput[],
-  lineItems: Array<{ label: string; min: string; max: string; source: string }>,
+  lineItems: Array<{
+    label: string; min: string; max: string; source: string;
+    sourceType: "analyst-input" | "verified-reference";
+    referenceId?: string; base: string;
+    varianceLow: string; varianceHigh: string; varianceSource: string;
+  }>,
   currency: Currency,
   horizonYears: number
 ): Assumption[] {
   const assumptions: Assumption[] = [];
 
-  // Per-input assumptions
+  // Per-input assumptions — FIX-1 + FIX-3
   for (let i = 0; i < inputs.length; i++) {
     const inp = inputs[i]!;
     const li = lineItems[i]!;
+    const sourceType = inp.sourceType ?? "analyst-input";
+    const verificationNote = sourceType === "analyst-input"
+      ? ` [UNVERIFIED — analyst-supplied assertion; not independently verified]`
+      : ` [verified-reference; referenceId=${inp.referenceId ?? "MISSING"}]`;
+
     assumptions.push({
       description:
         `Cost input "${inp.label}": unitCost ${inp.unitCost.amount} ${inp.unitCost.currency} × ` +
-        `${inp.unitCount} units = base ${inp.unitCost.amount * inp.unitCount} ${currency}, ` +
-        `varianceLow ${inp.varianceLow} (min ${li.min}), varianceHigh ${inp.varianceHigh} (max ${li.max})` +
-        (inp.note ? `. Note: ${inp.note}` : ""),
+        `${inp.unitCount} units = base ${li.base} ${currency}. ` +
+        `varianceLow ${li.varianceLow} (min ${li.min}), varianceHigh ${li.varianceHigh} (max ${li.max}). ` +
+        `varianceSource: ${inp.varianceSource}.` +
+        (inp.note ? ` Note: ${inp.note}.` : "") +
+        verificationNote,
       source: inp.source,
       reproducesIn:
-        `lineMin = unitCost.amount * unitCount * varianceLow; ` +
-        `lineMax = unitCost.amount * unitCount * varianceHigh`,
+        `lineMin = (amount * unitCount * varianceLow).toDecimalPlaces(2, ROUND_HALF_UP); ` +
+        `lineMax = (amount * unitCount * varianceHigh).toDecimalPlaces(2, ROUND_HALF_UP); ` +
+        `costRange.min = sum(lineItems.min); costRange.max = sum(lineItems.max)`,
     });
   }
 
@@ -495,28 +717,44 @@ function buildAssumptions(
     description:
       `Cost range aggregated by summing line-item min/max across ${inputs.length} input(s). ` +
       `Currency: ${currency}. Horizon: ${horizonYears} year(s). ` +
-      `min = Σ(lineMin), max = Σ(lineMax). No NPV discounting applied (v1 model).`,
+      `min = Σ(lineMin), max = Σ(lineMax). No NPV discounting applied (v1 model). ` +
+      `Each line item rounded to 2 decimal places (ROUND_HALF_UP) BEFORE summing; ` +
+      `aggregate sum rounded again to 2 decimal places.`,
     source: "model-default (v1-deterministic)",
     reproducesIn:
-      `costRange.min = sum(lineItems.min); costRange.max = sum(lineItems.max); ` +
+      `Decimal arithmetic (Prisma.Decimal / decimal.js). ` +
       `modelVersion = ${BUDGET_MODEL_VERSION}`,
   });
 
+  // FIX-1: explicit statement that there is NO default variance.
   assumptions.push({
     description:
-      `Default variance multipliers: varianceLow=${DEFAULT_VARIANCE_LOW} (10% optimism guard), ` +
-      `varianceHigh=${DEFAULT_VARIANCE_HIGH} (15% pessimism guard). These reflect that a ` +
-      `unit-cost estimate is typically optimistic at the low end and pessimistic at the high ` +
-      `end when scaled to program level. An analyst can override these per-input.`,
+      `No default variance multipliers are applied. Each cost input carries ` +
+      `its own varianceLow + varianceHigh + varianceSource, justified by the ` +
+      `analyst. The model does NOT inject a generic 0.9/1.15 margin — that ` +
+      `would give a false sense of precision. If an input lacks a justified ` +
+      `variance, the program returns "insufficient data for estimate".`,
     source: "model-default (v1-deterministic)",
-    reproducesIn: `defaults: varianceLow=${DEFAULT_VARIANCE_LOW}, varianceHigh=${DEFAULT_VARIANCE_HIGH}`,
+  });
+
+  // FIX-3: explicit statement about source verification.
+  assumptions.push({
+    description:
+      `Input verification: inputs with sourceType="analyst-input" are ` +
+      `analyst-supplied assertions — they have NOT been independently verified ` +
+      `against market data, published price indices, or tender documents. ` +
+      `Inputs with sourceType="verified-reference" carry a referenceId pointing ` +
+      `to a verifiable source. The model never describes analyst-input as ` +
+      `"verified market data".`,
+    source: "model-default (v1-deterministic)",
   });
 
   assumptions.push({
     description:
       `simulated: true — the cost model uses no real market data. The structure is real ` +
-      `(deterministic, reproducible) but the numbers are illustrative. Do not present this ` +
-      `estimate as a verified government cost projection without independent validation.`,
+      `(deterministic, reproducible, Decimal-precise) but the numbers are illustrative. ` +
+      `Do not present this estimate as a verified government cost projection without ` +
+      `independent validation.`,
     source: "model-default (v1-deterministic)",
   });
 
