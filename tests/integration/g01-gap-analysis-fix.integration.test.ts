@@ -338,8 +338,8 @@ describeIntegration("FIX-3: Scientific Gap Calculation Integrity", () => {
     // readings (4.2% vs 5.5%) should downgrade to 'partial', not 'measurable'
     expect(gap!.gapType).toBe("partial");
     expect(gap!.notes.some((n) => n.includes("CONFLICT DETECTED") || n.includes("conflicting"))).toBe(true);
-    // The gap size should still be computed (using the primary value) but with uncertainty
-    expect(gap!.gapSize).toBeTruthy();
+    // FINAL CLOSURE: conflicting readings → gapSize is null (no arbitrary number from disputed value)
+    expect(gap!.gapSize).toBeNull();
   });
 
   it("counter-evidence for same metric → partial (FULL ≠ undisputed)", async () => {

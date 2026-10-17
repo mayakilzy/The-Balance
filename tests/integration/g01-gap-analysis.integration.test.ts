@@ -130,12 +130,11 @@ describeIntegration("Gap classification (measurable / partial / unknown)", () =>
     expect(gap).toBeTruthy();
     // FIX-3: agriculture has counter-evidence (Reuters + AP about crop yield decline)
     // → FULL observability but counter-evidence for the metric → downgraded to 'partial'
+    // FINAL CLOSURE: gapSize is null (no arbitrary number from disputed value)
     expect(gap!.gapType).toBe("partial");
-    expect(gap!.gapSize).toBeTruthy();
-    expect(gap!.gapSize).toContain("percentage points");
+    expect(gap!.gapSize).toBeNull(); // FINAL CLOSURE: no arbitrary gap from counter-evidence
+    expect(gap!.gapDirection).toBeNull(); // direction also unknown when disputed
     expect(gap!.unitMatch).toBe(true);
-    // Current 4.2% vs target 6% → gap = 1.8 pp below target
-    expect(gap!.gapDirection).toBe("below");
     expect(gap!.currentValue).toContain("4.2%");
     // Notes should explain the downgrade
     expect(gap!.notes.some((n) => n.includes("Counter-evidence") || n.includes("counter"))).toBe(true);
@@ -477,8 +476,7 @@ describeIntegration("Multiple objectives in same sector → organized report", (
     expect(gap2!.sector).toBe("finance");
 
     // Different gap sizes (4% vs 3% targets, current 7.2%)
-    expect(gap1!.gapSize).not.toBe(gap2!.gapSize);
-    // gap1: |7.2 - 4| = 3.2, gap2: |7.2 - 3| = 4.2
+    // finance sector has no counter-evidence → gapSize is computed (PARTIAL baseline)
     expect(gap1!.gapSize).toContain("3.2");
     expect(gap2!.gapSize).toContain("4.2");
 
@@ -743,8 +741,8 @@ describeIntegration("Gap analysis idempotency + recompute", () => {
     // The new report should reflect the updated target
     const gap2 = result2.report.gaps.find((g) => g.objectiveId === objectiveAgricultureId);
     expect(gap2!.targetValue).toBe("7%");
-    // Gap should be different: |4.2 - 7| = 2.8 vs old |4.2 - 6| = 1.8
-    expect(gap2!.gapSize).toContain("2.8");
+    // FINAL CLOSURE: agriculture has counter-evidence → gapSize is null (no arbitrary number)
+    expect(gap2!.gapSize).toBeNull();
 
     // Restore the objective
     await adminClient.objective.update({
@@ -816,10 +814,10 @@ describeIntegration("Gap report structure + honesty", () => {
       objectiveIds: [objectiveAgricultureId, objectiveEducationId],
     });
 
-    // Agriculture: partial gap (FIX-3: FULL baseline but counter-evidence → downgraded)
+    // Agriculture: partial gap (FINAL CLOSURE: counter-evidence → gapSize=null)
     const agGap = report.gaps.find((g) => g.objectiveId === objectiveAgricultureId);
     expect(agGap!.gapType).toBe("partial");
-    expect(agGap!.gapSize).toContain("percentage points");
+    expect(agGap!.gapSize).toBeNull(); // FINAL CLOSURE: no arbitrary number
     expect(agGap!.currentValue).toContain("4.2%");
 
     // Education: unknown gap
