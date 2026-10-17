@@ -642,3 +642,295 @@ describeIntegration("FIX-4: Durable Task Contract", () => {
     await adminClient.task.delete({ where: { id: taskId } }).catch(() => {});
   });
 });
+
+// ============================================================
+// 01-01-FIX Final Cache Validity Closure
+// ============================================================
+// Tests that the baseline fingerprint idempotency covers ALL material changes:
+//   1. CountryPackConfig sectors change → new report
+//   2. Evidence deletion → new report
+//   3. Verification status change → new report
+//   4. Source independence group change → new report
+//   5. No change → same task (idempotent)
+//   6. Tenant isolation + Durable Task Runtime still work
+describeIntegration("Cache Validity Closure (fingerprint idempotency)", () => {
+  beforeEach(async () => {
+    await adminClient.task.deleteMany({
+      where: { type: "baseline-compute", tenantId: tenantAId },
+    });
+    // Clean up test evidence + config from previous runs
+    await adminClient.evidence.deleteMany({
+      where: { claim: { contains: "[CACHE-TEST]" } },
+    });
+    await adminClient.countryPackConfig.deleteMany({
+      where: { metadata: { path: ["seededBy"], equals: "[CACHE-TEST]" } as never },
+    });
+  });
+
+  // Helper: create a fresh CountryPackConfig for testing (overrides the seeded one)
+  async function setTestConfig(sectors: string[]) {
+    await adminClient.countryPackConfig.upsert({
+      where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
+      update: {
+        sectors: sectors as never,
+        observability: {} as never,
+        planningAssumptions: {} as never,
+        metadata: { seededBy: "[CACHE-TEST]" } as never,
+      },
+      create: {
+        tenantId: tenantAId,
+        countryId,
+        sectors: sectors as never,
+        observability: {} as never,
+        planningAssumptions: {} as never,
+        metadata: { seededBy: "[CACHE-TEST]" } as never,
+      },
+    });
+  }
+
+  it("1. changing CountryPackConfig sectors produces a new report", async () => {
+    const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
+    const session = makeSession({
+      id: analystUserId,
+      tenantId: tenantAId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
+
+    // Set config with 2 sectors
+    await setTestConfig(["agriculture", "finance"]);
+    const result1 = await computeBaseline(session, { countryId });
+
+    // Change config to add a 3rd sector (new sector → should appear as LOW)
+    await setTestConfig(["agriculture", "finance", "energy_new"]);
+    const result2 = await computeBaseline(session, { countryId });
+
+    // Different task (fingerprint changed)
+    expect(result2.taskId).not.toBe(result1.taskId);
+
+    // The new report should include "energy_new" as LOW (no evidence)
+    const energyNew = result2.report.dimensions.find((d) => d.sector === "energy_new");
+    expect(energyNew).toBeTruthy();
+    expect(energyNew!.observabilityMode).toBe("LOW");
+
+    // The old report should NOT include "energy_new"
+    const energyNewInOld = result1.report.dimensions.find((d) => d.sector === "energy_new");
+    expect(energyNewInOld).toBeUndefined();
+  });
+
+  it("2. deleting evidence produces a new report", async () => {
+    const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
+    const session = makeSession({
+      id: analystUserId,
+      tenantId: tenantAId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
+
+    // Set config with a test sector
+    await setTestConfig(["cache_delete_test"]);
+
+    // Add evidence for the test sector
+    const evidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId,
+        claim: "[CACHE-TEST] Demolandia's cache_delete_test metric was 42% in 2024.",
+        type: "supporting",
+        verificationStatus: "verified",
+        metadata: { countryId, sector: "cache_delete_test", fictional: true },
+      } as never,
+    });
+
+    // Compute baseline — should include the evidence
+    const result1 = await computeBaseline(session, { countryId, sectors: ["cache_delete_test"] });
+    const dim1 = result1.report.dimensions.find((d) => d.sector === "cache_delete_test");
+    expect(dim1).toBeTruthy();
+    expect(dim1!.evidenceCount).toBe(1);
+
+    // Delete the evidence
+    await adminClient.evidence.delete({ where: { id: evidence.id } });
+
+    // Re-compute — should produce a NEW task (fingerprint changed) with LOW (no evidence)
+    const result2 = await computeBaseline(session, { countryId, sectors: ["cache_delete_test"] });
+    expect(result2.taskId).not.toBe(result1.taskId);
+
+    const dim2 = result2.report.dimensions.find((d) => d.sector === "cache_delete_test");
+    expect(dim2).toBeTruthy();
+    expect(dim2!.observabilityMode).toBe("LOW");
+    expect(dim2!.evidenceCount).toBe(0);
+  });
+
+  it("3. changing evidence verification status produces a new report", async () => {
+    const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
+    const session = makeSession({
+      id: analystUserId,
+      tenantId: tenantAId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
+
+    await setTestConfig(["cache_verify_test"]);
+
+    // Add UNVERIFIED evidence (→ PARTIAL)
+    const evidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId,
+        claim: "[CACHE-TEST] Demolandia's cache_verify_test was 15% in 2024.",
+        type: "supporting",
+        verificationStatus: "unverified",
+        metadata: { countryId, sector: "cache_verify_test", fictional: true },
+      } as never,
+    });
+
+    const result1 = await computeBaseline(session, { countryId, sectors: ["cache_verify_test"] });
+    const dim1 = result1.report.dimensions.find((d) => d.sector === "cache_verify_test");
+    expect(dim1!.observabilityMode).toBe("PARTIAL"); // unverified → PARTIAL
+
+    // Change verification status to "verified"
+    await adminClient.evidence.update({
+      where: { id: evidence.id },
+      data: { verificationStatus: "verified" },
+    });
+
+    // Re-compute — should produce a NEW task (fingerprint changed)
+    const result2 = await computeBaseline(session, { countryId, sectors: ["cache_verify_test"] });
+    expect(result2.taskId).not.toBe(result1.taskId);
+
+    // With verified status, the mode might change (still PARTIAL because single source,
+    // but the indicator's verificationStatus field should be "verified")
+    const dim2 = result2.report.dimensions.find((d) => d.sector === "cache_verify_test");
+    const indicator = dim2!.indicators.find((i) => i.claim.includes("[CACHE-TEST]"));
+    expect(indicator!.verificationStatus).toBe("verified");
+  });
+
+  it("4. changing source independence group produces a new report", async () => {
+    const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
+    const session = makeSession({
+      id: analystUserId,
+      tenantId: tenantAId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
+
+    await setTestConfig(["cache_indep_test"]);
+
+    // Create a test source + evidence
+    const testSource = await adminClient.source.upsert({
+      where: { code: "CACHE-TEST-SOURCE-1" },
+      update: {},
+      create: {
+        code: "CACHE-TEST-SOURCE-1",
+        displayName: "Cache Test Source 1",
+        type: "academic",
+        independenceGroup: "indep-group-A",
+      },
+    });
+
+    const evidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId,
+        sourceId: testSource.id,
+        claim: "[CACHE-TEST] Demolandia's cache_indep_test was 20% in 2024.",
+        type: "supporting",
+        verificationStatus: "verified",
+        metadata: { countryId, sector: "cache_indep_test", fictional: true },
+      } as never,
+    });
+
+    const result1 = await computeBaseline(session, { countryId, sectors: ["cache_indep_test"] });
+
+    // Change the source's independence group
+    await adminClient.source.update({
+      where: { id: testSource.id },
+      data: { independenceGroup: "indep-group-B" },
+    });
+
+    // Re-compute — should produce a NEW task (fingerprint changed because source.independenceGroup changed)
+    const result2 = await computeBaseline(session, { countryId, sectors: ["cache_indep_test"] });
+    expect(result2.taskId).not.toBe(result1.taskId);
+
+    // The indicator should reflect the new independence group
+    const dim2 = result2.report.dimensions.find((d) => d.sector === "cache_indep_test");
+    const indicator = dim2!.indicators.find((i) => i.evidenceId === evidence.id);
+    expect(indicator!.independenceGroup).toBe("indep-group-B");
+
+    // Clean up
+    await adminClient.source.delete({ where: { id: testSource.id } }).catch(() => {});
+  });
+
+  it("5. no change → same task (idempotent)", async () => {
+    const { computeBaseline } = await import("@/lib/state-builder/baseline-service");
+    const session = makeSession({
+      id: analystUserId,
+      tenantId: tenantAId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
+
+    await setTestConfig(["agriculture"]);
+
+    // Compute baseline
+    const result1 = await computeBaseline(session, { countryId });
+
+    // Re-compute immediately (no evidence/config change)
+    const result2 = await computeBaseline(session, { countryId });
+
+    // Same task (fingerprint identical → idempotent)
+    expect(result2.taskId).toBe(result1.taskId);
+    expect(result2.report.dimensions.length).toBe(result1.report.dimensions.length);
+
+    // Re-compute a third time — still same task
+    const result3 = await computeBaseline(session, { countryId });
+    expect(result3.taskId).toBe(result1.taskId);
+  });
+
+  it("6. tenant isolation preserved: Tenant B cannot read Tenant A's cached baseline", async () => {
+    const { computeBaseline, getBaselineTask } = await import("@/lib/state-builder/baseline-service");
+
+    // Tenant A computes a baseline
+    const sessionA = makeSession({
+      id: analystUserId,
+      tenantId: tenantAId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
+    await setTestConfig(["agriculture"]);
+    const { taskId } = await computeBaseline(sessionA, { countryId });
+
+    // Tenant B creates a user + tries to read Tenant A's task
+    const tenantBUser = await adminClient.user.create({
+      data: {
+        email: "cache-xtenant-01-01@demolandia.test",
+        name: "Cache Cross-Tenant User",
+        passwordHash: await hashPassword("test_cache_xtenant"),
+        status: "active",
+      },
+    });
+    await adminClient.membership.create({
+      data: {
+        userId: tenantBUser.id,
+        tenantId: tenantBId,
+        roleCode: "analyst",
+        status: "active",
+      },
+    });
+
+    const sessionB = makeSession({
+      id: tenantBUser.id,
+      tenantId: tenantBId,
+      roleCode: "analyst",
+      membershipStatus: "active",
+    });
+
+    try {
+      await expect(
+        getBaselineTask(sessionB, taskId)
+      ).rejects.toThrow(/not found in tenant scope/i);
+    } finally {
+      await adminClient.membership.delete({
+        where: { userId_tenantId: { userId: tenantBUser.id, tenantId: tenantBId } },
+      });
+      await adminClient.user.delete({ where: { id: tenantBUser.id } });
+    }
+  });
+});

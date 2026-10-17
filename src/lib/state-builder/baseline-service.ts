@@ -42,6 +42,7 @@ import {
 } from "@/lib/task-service";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
+import { createHash } from "node:crypto";
 
 // ============================================================
 // TYPES — BaselineReport (per ADR-0014)
@@ -508,17 +509,142 @@ async function runBaselineComputation(
 }
 
 // ============================================================
+// CACHE VALIDITY: Baseline Fingerprint (01-01-FIX Final Cache Validity Closure)
+// ------------------------------------------------------------
+// A deterministic SHA-256 fingerprint of ALL inputs that affect the baseline
+// report. Used as part of the idempotency key so that:
+//   - ANY material change → new fingerprint → new task → fresh report
+//   - No change → same fingerprint → same task → cached report returned
+//
+// Covered inputs:
+//   1. Evidence rows (for this tenant + country via metadata.countryId):
+//      id, claim, type, verificationStatus, observedAt, sourceId, updatedAt
+//      → covers: add, delete, content edit, verification status change
+//   2. Source rows (referenced by the evidence):
+//      id, independenceGroup, updatedAt
+//      → covers: source independence group change, source metadata edit
+//   3. CountryPackConfig (for this tenant + country):
+//      sectors, observability, planningAssumptions, updatedAt
+//      → covers: sector list change, config edit
+//   4. Request inputs: countryId, sectorsFilter
+//      → covers: different country, different sector scope
+//
+// The fingerprint is order-independent: rows are sorted by id before hashing,
+// so the same data in any order produces the same fingerprint.
+// ============================================================
+
+async function computeBaselineFingerprint(
+  session: Session,
+  input: ComputeBaselineInput
+): Promise<string> {
+  const data = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+    // 1. Evidence for this tenant + country (via metadata.countryId)
+    //    Include source for independenceGroup
+    const evidenceRows = await tx.evidence.findMany({
+      where: { tenantId },
+      include: {
+        source: {
+          select: {
+            id: true,
+            independenceGroup: true,
+            updatedAt: true,
+          },
+        },
+      },
+    });
+
+    // Filter to evidence attributed to THIS country (FIX-2 scoping)
+    const attributed = evidenceRows.filter((e) => {
+      const metadata = (e.metadata ?? {}) as unknown as Record<string, unknown>;
+      return typeof metadata.countryId === "string" && metadata.countryId === input.countryId;
+    });
+
+    // 2. CountryPackConfig for this tenant + country
+    const countryPackConfig = await tx.countryPackConfig.findUnique({
+      where: { tenantId_countryId: { tenantId, countryId: input.countryId } },
+    });
+
+    return { attributed, countryPackConfig };
+  });
+
+  // Build a canonical, order-independent fingerprint input
+  // Sort evidence by id for determinism
+  const sortedEvidence = [...data.attributed].sort((a, b) => a.id.localeCompare(b.id));
+
+  const evidencePart = sortedEvidence.map((e) => ({
+    id: e.id,
+    claim: e.claim,
+    type: e.type,
+    verificationStatus: e.verificationStatus,
+    observedAt: e.observedAt ? e.observedAt.toISOString() : null,
+    sourceId: e.sourceId,
+    sourceIndependenceGroup: e.source?.independenceGroup ?? null,
+    sourceUpdatedAt: e.source?.updatedAt ? e.source.updatedAt.toISOString() : null,
+    evidenceUpdatedAt: e.updatedAt.toISOString(),
+    // Include metadata fields that affect the report: sector + indicatorName + indicatorValue
+    // (other metadata fields like fictional/seededBy don't affect the report)
+    metadataSector: (e.metadata as unknown as Record<string, unknown>)?.sector ?? null,
+    metadataIndicatorName: (e.metadata as unknown as Record<string, unknown>)?.indicatorName ?? null,
+    metadataIndicatorValue: (e.metadata as unknown as Record<string, unknown>)?.indicatorValue ?? null,
+  }));
+
+  const configPart = data.countryPackConfig
+    ? {
+        id: data.countryPackConfig.id,
+        sectors: data.countryPackConfig.sectors,
+        observability: data.countryPackConfig.observability,
+        planningAssumptions: data.countryPackConfig.planningAssumptions,
+        updatedAt: data.countryPackConfig.updatedAt.toISOString(),
+      }
+    : null;
+
+  const fingerprintInput = {
+    countryId: input.countryId,
+    sectorsFilter: input.sectors ?? null,
+    evidence: evidencePart,
+    countryPackConfig: configPart,
+  };
+
+  // Canonical JSON (sorted keys for determinism)
+  const canonicalJson = JSON.stringify(fingerprintInput, Object.keys(fingerprintInput).sort());
+
+  // SHA-256 hash, truncated to 32 chars (128 bits — more than enough collision resistance)
+  const hash = createHash("sha256").update(canonicalJson).digest("hex").slice(0, 32);
+
+  return hash;
+}
+
+// ============================================================
 // COMPUTE BASELINE (public API — runs as Durable Task)
 // ============================================================
 //
-// FIX-4 changes:
-//   - Dynamic idempotency key: includes evidence state (count + last update)
-//     so adding new evidence produces a new task + fresh report.
-//   - Uses claimTaskById (G00 extension) instead of inline SQL:
-//     * Respects lease contract (never steals active tasks)
-//     * Reuses G00's fencing + event logging
-//   - If task already completed AND evidence hasn't changed → return cached report
-//   - If task already completed BUT evidence changed → create new task + recompute
+// Idempotency (FIX-4 + Cache Validity Closure):
+//   The idempotency key is derived from a DETERMINISTIC FINGERPRINT of ALL
+//   inputs that affect the baseline report:
+//     - evidence: id + claim + type + verificationStatus + observedAt + sourceId
+//                 + source.independenceGroup + source.updatedAt + evidence.updatedAt
+//                   (covers add, delete, content edit, verification change,
+//                    source independence change, source metadata change)
+//     - countryPackConfig: sectors + observability + planningAssumptions + updatedAt
+//                   (covers sector list change, config edit)
+//     - countryId + sectorsFilter (the request inputs)
+//
+//   If ANY of these change → fingerprint changes → new task → fresh report.
+//   If ALL are identical → same fingerprint → same task → cached report returned.
+//
+//   The fingerprint is a SHA-256 hash of a canonical JSON string, so it's
+//   deterministic regardless of row order. We include source.updatedAt +
+//   evidence.updatedAt to catch metadata edits that don't change the
+//   visible fields but do change the row.
+//
+//   This is NOT a new caching system — it's a more complete idempotency key.
+//   The report is still stored in the task's output JSONB (no separate cache).
+//
+// Task lifecycle:
+//   - createTask (idempotent — keyed by fingerprint)
+//   - If task already completed → return cached output
+//   - claimTaskById (respects lease contract — never steals active tasks)
+//   - startTask + runBaselineComputation + completeTask (G00 contracts)
 
 export async function computeBaseline(
   session: Session,
@@ -531,43 +657,27 @@ export async function computeBaseline(
     throw new Error("countryId is required");
   }
 
-  // FIX-4: Compute evidence state snapshot for dynamic idempotency key
-  // If evidence changes (new evidence added), the key changes → new task → fresh report
-  const evidenceState = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-    // Count evidence for this tenant scoped to this country (via metadata.countryId)
-    // + get the max updatedAt
-    const result = await tx.$queryRaw<{ count: bigint; maxUpdate: Date | null }[]>`
-      SELECT
-        COUNT(*)::text::bigint AS "count",
-        MAX("updatedAt") AS "maxUpdate"
-      FROM "evidence"
-      WHERE "tenantId" = ${tenantId}
-        AND (metadata->>'countryId') = ${input.countryId}
-    `;
-    return {
-      count: Number(result[0]?.count ?? 0),
-      maxUpdate: result[0]?.maxUpdate ? result[0].maxUpdate.toISOString() : "none",
-    };
-  });
+  // Compute the baseline fingerprint (covers ALL inputs that affect the report)
+  const fingerprint = await computeBaselineFingerprint(session, input);
 
-  // Dynamic idempotency key: country + sectors + evidence state
-  // If evidence changes → key changes → new task → fresh report
+  // Idempotency key: country + sectors + fingerprint
+  // If ANY input changes → fingerprint changes → new task → fresh report
   const sectorsPart = input.sectors?.join(",") ?? "all";
-  const idempotencyKey = `baseline:${input.countryId}:${sectorsPart}:ev-${evidenceState.count}:${evidenceState.maxUpdate}`;
+  const idempotencyKey = `baseline:${input.countryId}:${sectorsPart}:fp-${fingerprint}`;
 
-  // 1. Create the Durable Task (idempotent — prevents duplicate baselines for same evidence state)
+  // 1. Create the Durable Task (idempotent — prevents duplicate baselines for same fingerprint)
   const { taskId, created } = await createTask(session, {
     type: "baseline-compute",
-    goal: `Compute State Baseline for country ${input.countryId} (evidence: ${evidenceState.count} items, last update: ${evidenceState.maxUpdate})`,
+    goal: `Compute State Baseline for country ${input.countryId} (fingerprint: ${fingerprint.slice(0, 12)})`,
     input: {
       countryId: input.countryId,
       sectors: input.sectors ?? null,
-      evidenceSnapshot: { count: evidenceState.count, maxUpdate: evidenceState.maxUpdate },
+      fingerprint,
     } as unknown as Record<string, unknown>,
     idempotencyKey,
   });
 
-  // If the task already existed (same evidence state), return its output if completed
+  // If the task already existed (same fingerprint), return its output if completed
   if (!created) {
     const existingReport = await getBaselineTaskOutput(session, taskId);
     if (existingReport) {
@@ -576,7 +686,7 @@ export async function computeBaseline(
     // Task exists but not completed — fall through to claim + compute
   }
 
-  // 2. FIX-4: Claim the SPECIFIC task by ID using G00's claimTaskById
+  // 2. Claim the SPECIFIC task by ID using G00's claimTaskById
   //    This respects the lease contract (never steals active tasks)
   const workerId = "baseline-worker";
   const leaseDurationMs = 60_000;
