@@ -609,7 +609,13 @@ describeIntegration("01-07: Implementation Roadmap & Timeline", () => {
     expect(roadmap.budgetReadiness.programsWithoutEstimate).toBe(programs.length);
     expect(roadmap.budgetReadiness.insufficientDataProgramIds.length).toBe(programs.length);
     expect(roadmap.budgetReadiness.note).toContain("insufficient cost data");
-    expect(roadmap.budgetReadiness.note).not.toContain("funded");
+    // The note must NOT claim funding is available. It may use the word "funded"
+    // in a negative context ("do not assume these programs are funded"), but it
+    // must not assert funding exists.
+    expect(roadmap.budgetReadiness.note).not.toMatch(/funding is available/i);
+    expect(roadmap.budgetReadiness.note).not.toMatch(/programs? (?:is|are) funded\b/i);
+    // Explicitly says "do not assume ... funded"
+    expect(roadmap.budgetReadiness.note).toMatch(/do not assume/i);
   });
 
   it("11b. budget readiness reflects existing estimates (read-only, no fabrication)", async () => {
