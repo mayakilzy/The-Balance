@@ -650,7 +650,185 @@ async function main() {
 
   console.log(`  Objectives: Tenant A = 5, Tenant B = 2 (all fictional, clearly labeled)`);
   console.log(`  Cross-tenant isolation: Tenant A's objectives ≠ Tenant B's objectives`);
+
+  // ============================================================
+  // 11. G01 STATE BASELINE EVIDENCE (01-01)
+  // ============================================================
+  // Per ADR-0014: evidence tagged with metadata.sector for baseline computation.
+  // We add evidence to cover the 4 observability scenarios:
+  //   - FULL: agriculture (≥2 independent sources + ≥1 verified) — reuses the 4 G00 evidence + adds metadata.sector
+  //   - PARTIAL: finance (1 independent source, unverified)
+  //   - LOW: education (no evidence) + health (no evidence)
+  //   - Counter-evidence: already present in agriculture (Reuters + AP)
+  //   - Syndicated: Reuters + AP share independence_group "reuters-syndicate"
+  console.log("\nSeeding G01 State Baseline evidence (01-01)...");
+
+  // 11a. Tag the EXISTING G00 evidence with metadata.sector = "agriculture"
+  //     (These 4 evidence items already exist from G00 seed — we UPDATE metadata only.)
+  //     This makes them visible to the baseline engine without duplicating.
+  const agricultureEvidence = await prisma.evidence.findMany({
+    where: { tenantId: tenantA.id, claim: { contains: "agriculture" } },
+  });
+  for (const ev of agricultureEvidence) {
+    const existingMeta = (ev.metadata ?? {}) as unknown as Record<string, unknown>;
+    if (!existingMeta.sector) {
+      await prisma.evidence.update({
+        where: { id: ev.id },
+        data: {
+          metadata: { ...existingMeta, sector: "agriculture", fictional: true, seededBy: "01-01-seed" } as unknown as Prisma.InputJsonValue,
+        },
+      });
+    }
+  }
+  console.log(`  Tagged ${agricultureEvidence.length} existing agriculture evidence with metadata.sector`);
+
+  // 11b. Add PARTIAL evidence for "finance" sector (Tenant A)
+  //     1 source (IMF), unverified — PARTIAL observability
+  const financeEvidence = {
+    tenantId: tenantA.id,
+    sourceId: imfSource.id,
+    claim: "Demolandia's inflation rate was 7.2% in 2024 according to IMF WEO.",
+    summary: "IMF data on Demolandia inflation (fictional).",
+    type: "supporting",
+    verificationStatus: "unverified", // unverified → PARTIAL, not FULL
+    observedAt: new Date("2024-12-31"),
+    extractionMethod: "manual",
+    classification: "public",
+    confidenceNotes: "Single source, unverified — PARTIAL observability.",
+    metadata: { sector: "finance", fictional: true, seededBy: "01-01-seed" },
+  };
+  const existingFinance = await prisma.evidence.findFirst({
+    where: { tenantId: tenantA.id, claim: financeEvidence.claim },
+  });
+  if (!existingFinance) {
+    await prisma.evidence.create({ data: financeEvidence });
+    // Generate embedding for the new evidence
+    const embedResult = await provider.embed({
+      input: financeEvidence.claim,
+      dimensions: 384,
+    });
+    const newEv = await prisma.evidence.findFirst({
+      where: { tenantId: tenantA.id, claim: financeEvidence.claim },
+    });
+    if (newEv) {
+      const vectorLiteral = `[${embedResult.vectors[0]!.join(",")}]`;
+      await prisma.$executeRaw`
+        INSERT INTO "evidence_embeddings" ("id", "evidenceId", "tenantId", "embedding", "model", "createdAt")
+        VALUES (gen_random_uuid()::text, ${newEv.id}, ${tenantA.id}, ${vectorLiteral}::vector, ${provider.defaultEmbeddingModel}, NOW())
+      `;
+    }
+  }
+  console.log(`  Finance evidence: 1 item (PARTIAL — single source, unverified)`);
+
+  // 11c. Add FULL evidence for "finance" sector to Tenant B (different tenant, different evidence)
+  //     2 independent sources (IMF + World Bank) + 1 verified → FULL
+  const financeFullB1 = {
+    tenantId: tenantB.id,
+    sourceId: imfSource.id,
+    claim: "Demolandia's monetary base grew 6.8% in 2024 according to IMF.",
+    summary: "IMF data on Demolandia monetary base (fictional).",
+    type: "supporting",
+    verificationStatus: "verified",
+    observedAt: new Date("2024-12-31"),
+    extractionMethod: "manual",
+    classification: "public",
+    confidenceNotes: "Verified — IMF official statistics.",
+    metadata: { sector: "finance", fictional: true, seededBy: "01-01-seed" },
+  };
+  const financeFullB2 = {
+    tenantId: tenantB.id,
+    sourceId: worldBankSource.id,
+    claim: "World Bank confirms Demolandia monetary base growth at 6.7% for 2024.",
+    summary: "World Bank independent confirmation of monetary base growth.",
+    type: "supporting",
+    verificationStatus: "corroborated",
+    observedAt: new Date("2024-12-31"),
+    extractionMethod: "manual",
+    classification: "public",
+    confidenceNotes: "Corroborated — independent World Bank verification.",
+    metadata: { sector: "finance", fictional: true, seededBy: "01-01-seed" },
+  };
+  for (const ev of [financeFullB1, financeFullB2]) {
+    const existing = await prisma.evidence.findFirst({
+      where: { tenantId: ev.tenantId, claim: ev.claim },
+    });
+    if (!existing) {
+      const created = await prisma.evidence.create({ data: ev });
+      const embedResult = await provider.embed({ input: ev.claim, dimensions: 384 });
+      const vectorLiteral = `[${embedResult.vectors[0]!.join(",")}]`;
+      await prisma.$executeRaw`
+        INSERT INTO "evidence_embeddings" ("id", "evidenceId", "tenantId", "embedding", "model", "createdAt")
+        VALUES (gen_random_uuid()::text, ${created.id}, ${tenantB.id}, ${vectorLiteral}::vector, ${provider.defaultEmbeddingModel}, NOW())
+      `;
+    }
+  }
+  console.log(`  Tenant B finance evidence: 2 items (FULL — 2 independent sources + verified)`);
+
+  // 11d. Add evidence for "external" sector to Tenant B (1 source, PARTIAL)
+  const externalEvidence = {
+    tenantId: tenantB.id,
+    sourceId: imfSource.id,
+    claim: "Demolandia's foreign exchange reserves covered 4.8 months of imports in 2024.",
+    summary: "IMF data on Demolandia FX reserves (fictional).",
+    type: "supporting",
+    verificationStatus: "unverified",
+    observedAt: new Date("2024-12-31"),
+    extractionMethod: "manual",
+    classification: "public",
+    confidenceNotes: "Single source, unverified — PARTIAL observability.",
+    metadata: { sector: "external", fictional: true, seededBy: "01-01-seed" },
+  };
+  const existingExternal = await prisma.evidence.findFirst({
+    where: { tenantId: tenantB.id, claim: externalEvidence.claim },
+  });
+  if (!existingExternal) {
+    const created = await prisma.evidence.create({ data: externalEvidence });
+    const embedResult = await provider.embed({ input: externalEvidence.claim, dimensions: 384 });
+    const vectorLiteral = `[${embedResult.vectors[0]!.join(",")}]`;
+    await prisma.$executeRaw`
+      INSERT INTO "evidence_embeddings" ("id", "evidenceId", "tenantId", "embedding", "model", "createdAt")
+      VALUES (gen_random_uuid()::text, ${created.id}, ${tenantB.id}, ${vectorLiteral}::vector, ${provider.defaultEmbeddingModel}, NOW())
+    `;
+  }
+  console.log(`  Tenant B external evidence: 1 item (PARTIAL — single source, unverified)`);
+
+  // 11e. Education + health sectors have NO tagged evidence → LOW (unknown)
+  //     (This is intentional — the baseline engine must say "unknown" for these sectors.)
+  console.log(`  Education + health sectors: 0 evidence → LOW (unknown) — intentional for testing`);
+
+  // 11f. Add counter-evidence for Tenant B's finance sector (contradiction test)
+  const financeCounterB = {
+    tenantId: tenantB.id,
+    sourceId: reutersSyndicated.id,
+    claim: "Local economists dispute Demolandia monetary base figures, citing off-budget spending.",
+    summary: "Contradicts IMF/WB monetary base growth figures.",
+    type: "counter",
+    verificationStatus: "disputed",
+    observedAt: new Date("2024-11-15"),
+    extractionMethod: "interview",
+    classification: "public",
+    confidenceNotes: "Disputed — counter-evidence to IMF/WB figures.",
+    metadata: { sector: "finance", fictional: true, seededBy: "01-01-seed" },
+  };
+  const existingCounter = await prisma.evidence.findFirst({
+    where: { tenantId: tenantB.id, claim: financeCounterB.claim },
+  });
+  if (!existingCounter) {
+    const created = await prisma.evidence.create({ data: financeCounterB });
+    const embedResult = await provider.embed({ input: financeCounterB.claim, dimensions: 384 });
+    const vectorLiteral = `[${embedResult.vectors[0]!.join(",")}]`;
+    await prisma.$executeRaw`
+      INSERT INTO "evidence_embeddings" ("id", "evidenceId", "tenantId", "embedding", "model", "createdAt")
+      VALUES (gen_random_uuid()::text, ${created.id}, ${tenantB.id}, ${vectorLiteral}::vector, ${provider.defaultEmbeddingModel}, NOW())
+    `;
+  }
+  console.log(`  Tenant B finance counter-evidence: 1 item (contradiction test — shown side-by-side)`);
+
   console.log("\nG01 State Builder seed complete.");
+  console.log("  Baseline test scenarios:");
+  console.log("    Tenant A: agriculture=FULL (2 indep + verified), finance=PARTIAL (1 source, unverified)");
+  console.log("    Tenant B: finance=FULL (2 indep + verified + counter), external=PARTIAL (1 source)");
+  console.log("    Both tenants: education=LOW, health=LOW (no evidence → unknown)");
 }
 
 main()

@@ -32,6 +32,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "membership:read",
     "membership:write",
     "audit:read",
+    // G01 (01-01): State Baseline permissions
+    "baseline:read",
+    "baseline:compute",
   ],
   analyst: [
     "tenant:read",
@@ -42,6 +45,9 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "task:read",
     "task:write",
     "audit:read",
+    // G01 (01-01): State Baseline permissions
+    "baseline:read",
+    "baseline:compute",
   ],
   reviewer: [
     "tenant:read",
@@ -51,12 +57,16 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "strategy:approve",
     "task:read",
     "audit:read",
+    // G01 (01-01): State Baseline — read-only for reviewers
+    "baseline:read",
   ],
   observer: [
     "tenant:read",
     "evidence:read",
     "strategy:read",
     "task:read",
+    // G01 (01-01): State Baseline — read-only for observers
+    "baseline:read",
   ],
 };
 
