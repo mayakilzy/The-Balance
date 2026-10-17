@@ -201,14 +201,17 @@ async function validateEvidenceRefs(
   countryId: string,
   alternatives: Array<Omit<StrategyAlternative, "strategyId" | "versionId">>
 ): Promise<void> {
-  // Collect all evidence IDs from all alternatives
+  // Build a map of evidenceId → expected sector (from the program that cites it)
+  const evidenceSectorMap = new Map<string, string>();
   const allEvidenceIds = new Set<string>();
   for (const alt of alternatives) {
     for (const prog of alt.programs) {
       for (const ref of prog.evidenceRefs) {
         allEvidenceIds.add(ref.evidenceId);
+        evidenceSectorMap.set(ref.evidenceId, prog.sector);
       }
     }
+    // Counter-evidence doesn't need sector match (it may come from any sector)
     for (const ref of alt.counterEvidence) {
       allEvidenceIds.add(ref.evidenceId);
     }
@@ -235,6 +238,7 @@ async function validateEvidenceRefs(
 
   // FIX-B: FAIL-CLOSED — verify each evidence belongs to the requested country
   // Evidence WITHOUT metadata.countryId is REJECTED (not allowed as "unattributed")
+  // FIX-B-LAST: also verify evidence sector matches the program sector that cites it
   for (const evidence of evidenceRows) {
     const meta = (evidence.metadata ?? {}) as unknown as Record<string, unknown>;
     const evidenceCountryId = typeof meta.countryId === "string" ? meta.countryId : null;
@@ -252,6 +256,20 @@ async function validateEvidenceRefs(
         `Evidence validation failed: evidence ${evidence.id} belongs to country ${evidenceCountryId}, ` +
         `not the requested country ${countryId}. Cross-country evidence rejected.`
       );
+    }
+
+    // FIX-B-LAST: verify evidence sector matches the program that cites it
+    const expectedSector = evidenceSectorMap.get(evidence.id);
+    if (expectedSector) {
+      const evidenceSector = typeof meta.sector === "string" ? meta.sector : null;
+      if (evidenceSector && evidenceSector !== expectedSector) {
+        throw new Error(
+          `Evidence sector mismatch: evidence ${evidence.id} has sector "${evidenceSector}" ` +
+          `but is cited by a program in sector "${expectedSector}". ` +
+          `Evidence must belong to the same sector as the program that references it ` +
+          `(cross-sector evidence requires explicit documentation).`
+        );
+      }
     }
   }
 }
@@ -751,40 +769,44 @@ export async function composeStrategies(
     const alternatives: StrategyAlternative[] = [];
 
     for (const altData of allAltData) {
-      const result = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-        // Step 1: Check if strategy already exists (from a crashed previous run)
-        const existing = await tx.strategy.findFirst({
-          where: { tenantId, compositionBatchId, title: altData.title },
-          include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
-        });
+      // FIX-A-LAST: Each alternative is stored in a SINGLE transaction.
+      // If P2002 (unique violation) occurs, the transaction is ABORTED in PostgreSQL
+      // and cannot run further queries. We catch the error OUTSIDE the transaction
+      // and retry with a NEW transaction to find the winning strategy.
+      let strategyId: string;
+      let versionId: string;
 
-        if (existing && existing.versions.length > 0) {
-          // Reuse existing strategy from a previous (crashed) run
-          return { strategyId: existing.id, versionId: existing.versions[0]!.id, reused: true };
-        }
+      try {
+        const result = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+          // Step 1: Check if strategy already exists (from a crashed previous run)
+          const existing = await tx.strategy.findFirst({
+            where: { tenantId, compositionBatchId, title: altData.title },
+            include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
+          });
 
-        // Step 2: Create new Strategy WITH compositionBatchId in a single INSERT
-        // (not createStrategy → update — all in one atomic operation)
-        try {
+          if (existing && existing.versions.length > 0) {
+            return { strategyId: existing.id, versionId: existing.versions[0]!.id, reused: true };
+          }
+
+          // Step 2: Create new Strategy + Version + Event atomically
           const strategy = await tx.strategy.create({
             data: {
               tenantId,
               title: altData.title,
               description: altData.description,
               status: "draft",
-              compositionBatchId, // set at creation time — no window for crash
+              compositionBatchId,
               createdBy: session.user.id,
             },
           });
 
-          // Create the version with full metadata in the SAME transaction
           const version = await tx.strategyVersion.create({
             data: {
               strategyId: strategy.id,
               tenantId,
               versionNumber: 1,
               content: JSON.stringify(altData, null, 2),
-              status: "draft", // NEVER approved
+              status: "draft",
               createdBy: session.user.id,
               metadata: {
                 simulated: true,
@@ -804,7 +826,6 @@ export async function composeStrategies(
             },
           });
 
-          // Record event
           await tx.event.create({
             data: {
               tenantId,
@@ -817,26 +838,41 @@ export async function composeStrategies(
           });
 
           return { strategyId: strategy.id, versionId: version.id, reused: false };
-        } catch (createErr) {
-          // FIX-A: Unique constraint violation (P2002) — a concurrent worker
-          // already created this strategy. Find it and reuse.
-          if (createErr && typeof createErr === "object" && "code" in createErr && createErr.code === "P2002") {
-            const concurrent = await tx.strategy.findFirst({
+        });
+
+        strategyId = result.strategyId;
+        versionId = result.versionId;
+      } catch (createErr) {
+        // FIX-A-LAST: P2002 = unique constraint violation — a concurrent worker
+        // already created this strategy. The transaction above is now ABORTED
+        // (PostgreSQL doesn't allow queries after a constraint violation).
+        // We use a NEW transaction to find the winning strategy.
+        if (createErr && typeof createErr === "object" && "code" in createErr && createErr.code === "P2002") {
+          const concurrent = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+            return tx.strategy.findFirst({
               where: { tenantId, compositionBatchId, title: altData.title },
               include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
             });
-            if (concurrent && concurrent.versions.length > 0) {
-              return { strategyId: concurrent.id, versionId: concurrent.versions[0]!.id, reused: true };
-            }
+          });
+
+          if (concurrent && concurrent.versions.length > 0) {
+            strategyId = concurrent.id;
+            versionId = concurrent.versions[0]!.id;
+          } else {
+            throw new Error(
+              `P2002 recovery failed: unique constraint violation but no existing strategy found ` +
+              `for batch ${compositionBatchId}, title "${altData.title}". This may indicate a race condition.`
+            );
           }
+        } else {
           throw createErr;
         }
-      });
+      }
 
       alternatives.push({
         ...altData,
-        strategyId: result.strategyId,
-        versionId: result.versionId,
+        strategyId,
+        versionId,
       });
     }
 
