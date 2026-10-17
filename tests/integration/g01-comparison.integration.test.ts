@@ -148,6 +148,51 @@ async function addDependency(
   });
 }
 
+// Helper: ensure at least N programs exist for a strategy version.
+async function ensureProgramCount(
+  session: Session,
+  versionId: string,
+  minCount: number
+): Promise<Array<{ id: string; title: string; metadata: unknown }>> {
+  const programs = await adminClient.program.findMany({
+    where: { tenantId: tenantAId, strategyVersionId: versionId },
+    orderBy: { title: "asc" },
+  });
+  if (programs.length >= minCount) return programs;
+  const tenantId = session.user.tenantId!;
+  const needed = minCount - programs.length;
+  const sectors = ["test_sector_a", "test_sector_b", "test_sector_c"];
+  for (let i = 0; i < needed; i++) {
+    const idx = programs.length + i;
+    const created = await adminClient.program.create({
+      data: {
+        tenantId,
+        strategyVersionId: versionId,
+        title: `[FICTIONAL TEST FIXTURE] Comparison Program ${idx + 1}`,
+        sector: sectors[idx % sectors.length]!,
+        owningInstitutionId: null,
+        legalMandateRef: null,
+        rationale: `[FICTIONAL TEST FIXTURE] Created for comparison test.`,
+        status: "draft",
+        metadata: {
+          simulated: true,
+          sector: sectors[idx % sectors.length]!,
+          kpis: [],
+          requiredCapabilities: [],
+          mandateGap: true,
+          institutionAssignmentGap: true,
+          evidenceRefs: [],
+          counterEvidence: [],
+          expandedAt: new Date().toISOString(),
+          fictionalTestFixture: true,
+        },
+      },
+    });
+    programs.push(created);
+  }
+  return programs;
+}
+
 // ============================================================
 // 01-08: Scenario Comparison Engine
 // ============================================================
@@ -862,7 +907,7 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
       expect(e.supportAssessment).toBe("not-assessed");
       // The note MUST explicitly say support was not assessed
       expect(e.note).toContain("SUPPORT NOT ASSESSED");
-      expect(e.note).toContain("does not interpret");
+      expect(e.note.toLowerCase()).toContain("do not interpret");
       // Even if there are citations of verified evidence, that's NOT "supported"
       if (e.citationsOfVerifiedEvidence > 0) {
         // The note must warn against interpreting citations as support
@@ -910,22 +955,18 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
     const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
     const alt2 = await composeAndExpand(session, [objectiveInflationId]);
 
-    // alt1: add A → B dependency + valid scheduling
-    const alt1Programs = await adminClient.program.findMany({
-      where: { tenantId: tenantAId, strategyVersionId: alt1 },
-    });
-    if (alt1Programs.length >= 2) {
-      const [A, B] = alt1Programs;
-      await addDependency(session, alt1, A!.id, B!.id, "requires",
-        "[FICTIONAL] A → B for temporal test");
-      // A: 2026-2027, B: 2028-2029 (valid — A ends before B starts)
-      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
-      metaA.scheduling = { startYear: 2026, endYear: 2027 };
-      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
-      const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
-      metaB.scheduling = { startYear: 2028, endYear: 2029 };
-      await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
-    }
+    // alt1: ensure ≥2 programs, add A → B dependency + valid scheduling
+    const alt1Programs = await ensureProgramCount(session, alt1, 2);
+    const [A, B] = alt1Programs;
+    await addDependency(session, alt1, A!.id, B!.id, "requires",
+      "[FICTIONAL] A → B for temporal test");
+    // A: 2026-2027, B: 2028-2029 (valid — A ends before B starts)
+    const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+    metaA.scheduling = { startYear: 2026, endYear: 2027 };
+    await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+    const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
+    metaB.scheduling = { startYear: 2028, endYear: 2029 };
+    await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
 
     const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
 
@@ -949,22 +990,18 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
     const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
     const alt2 = await composeAndExpand(session, [objectiveInflationId]);
 
-    // alt1: add A → B dependency + REVERSED scheduling
-    const alt1Programs = await adminClient.program.findMany({
-      where: { tenantId: tenantAId, strategyVersionId: alt1 },
-    });
-    if (alt1Programs.length >= 2) {
-      const [A, B] = alt1Programs;
-      await addDependency(session, alt1, A!.id, B!.id, "requires",
-        "[FICTIONAL] A → B for reversed temporal test");
-      // REVERSED: A 2030-2032, B 2027-2029 (B starts before A ends → violation)
-      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
-      metaA.scheduling = { startYear: 2030, endYear: 2032 };
-      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
-      const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
-      metaB.scheduling = { startYear: 2027, endYear: 2029 };
-      await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
-    }
+    // alt1: ensure ≥2 programs, add A → B dependency + REVERSED scheduling
+    const alt1Programs = await ensureProgramCount(session, alt1, 2);
+    const [A, B] = alt1Programs;
+    await addDependency(session, alt1, A!.id, B!.id, "requires",
+      "[FICTIONAL] A → B for reversed temporal test");
+    // REVERSED: A 2030-2032, B 2027-2029 (B starts before A ends → violation)
+    const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+    metaA.scheduling = { startYear: 2030, endYear: 2032 };
+    await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+    const metaB = (B!.metadata ?? {}) as Record<string, unknown>;
+    metaB.scheduling = { startYear: 2027, endYear: 2029 };
+    await adminClient.program.update({ where: { id: B!.id }, data: { metadata: metaB as never } });
 
     const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
 
@@ -1014,20 +1051,16 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
     const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
     const alt2 = await composeAndExpand(session, [objectiveInflationId]);
 
-    // alt1: A → B, but only A has scheduling (B has none)
-    const alt1Programs = await adminClient.program.findMany({
-      where: { tenantId: tenantAId, strategyVersionId: alt1 },
-    });
-    if (alt1Programs.length >= 2) {
-      const [A, B] = alt1Programs;
-      await addDependency(session, alt1, A!.id, B!.id, "requires",
-        "[FICTIONAL] A → B, only A scheduled");
-      // Only A has scheduling
-      const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
-      metaA.scheduling = { startYear: 2026, endYear: 2027 };
-      await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
-      // B: no scheduling
-    }
+    // alt1: ensure ≥2 programs, A → B, only A has scheduling (B has none)
+    const alt1Programs = await ensureProgramCount(session, alt1, 2);
+    const [A, B] = alt1Programs;
+    await addDependency(session, alt1, A!.id, B!.id, "requires",
+      "[FICTIONAL] A → B, only A scheduled");
+    // Only A has scheduling
+    const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
+    metaA.scheduling = { startYear: 2026, endYear: 2027 };
+    await adminClient.program.update({ where: { id: A!.id }, data: { metadata: metaA as never } });
+    // B: no scheduling
 
     const result = await compareScenarios(session, { alternativeIds: [alt1, alt2] });
 
@@ -1049,10 +1082,8 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
 
     // alt1: valid schedule
     const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
-    const alt1Programs = await adminClient.program.findMany({
-      where: { tenantId: tenantAId, strategyVersionId: alt1 },
-    });
-    if (alt1Programs.length >= 2) {
+    const alt1Programs = await ensureProgramCount(session, alt1, 2);
+    {
       const [A, B] = alt1Programs;
       await addDependency(session, alt1, A!.id, B!.id, "requires", "[FICTIONAL] A → B valid");
       const metaA = (A!.metadata ?? {}) as Record<string, unknown>;
@@ -1065,10 +1096,8 @@ describeIntegration("01-08: Scenario Comparison Engine", () => {
 
     // alt2: invalid (reversed) schedule
     const alt2 = await composeAndExpand(session, [objectiveInflationId]);
-    const alt2Programs = await adminClient.program.findMany({
-      where: { tenantId: tenantAId, strategyVersionId: alt2 },
-    });
-    if (alt2Programs.length >= 2) {
+    const alt2Programs = await ensureProgramCount(session, alt2, 2);
+    {
       const [A, B] = alt2Programs;
       await addDependency(session, alt2, A!.id, B!.id, "requires", "[FICTIONAL] A → B invalid");
       // Reversed: A 2030-2032, B 2027-2029
