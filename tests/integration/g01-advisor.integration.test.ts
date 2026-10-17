@@ -381,10 +381,10 @@ describeIntegration("01-09: Development Advisor v1", () => {
 
     // If no counter-evidence was detected, the note must say so honestly
     const hasNoCounterEvidenceNote = report.counterEvidence.some(
-      (c) => c.includes("No counter-evidence was detected") || c.includes("NOT a claim that no counter-evidence exists")
+      (c) => c.includes("No counter-evidence references were found") || c.includes("NOT a claim that no counter-evidence exists")
     );
     const hasActualCounterEvidence = report.counterEvidence.some(
-      (c) => c.includes("missing or refuted evidence")
+      (c) => c.includes("Counter-evidence (from alternative")
     );
     // One of these must be true — either we found counter-evidence OR we honestly say none was found
     expect(hasNoCounterEvidenceNote || hasActualCounterEvidence).toBe(true);
@@ -913,12 +913,12 @@ describeIntegration("01-09: Development Advisor v1", () => {
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
-    // Compose with agriculture → alt1+alt2 linked to agriculture objective
+    // Compose with agriculture → alt1; inflation → alt2 (different objectives → different versionIds)
     const alt1 = await composeAndExpand(session, [objectiveAgricultureId]);
-    const alt2 = await composeAndExpand(session, [objectiveAgricultureId]);
+    const alt2 = await composeAndExpand(session, [objectiveInflationId]);
 
     // Education objective is valid (exists, same country) but NOT linked to alt1 or alt2
-    // (they were composed with agriculture, not education)
+    // (alt1 was composed with agriculture, alt2 with inflation — not education)
     await expect(advise(session, {
       countryId,
       objectiveIds: [objectiveAgricultureId, objectiveEducationId],
@@ -979,8 +979,9 @@ describeIntegration("01-09: Development Advisor v1", () => {
         expect(ce).toContain("verificationStatus=");
         expect(ce).toContain("sourceCode=");
         expect(ce).toContain("Claim:");
-        // Must NOT be a data-quality warning
-        expect(ce).not.toContain("data-quality warning");
+        // Must be an actual counter-evidence reference (not a data-quality warning)
+        // The note says "not a data-quality warning" which is a clarification, not a warning
+        expect(ce).toContain("actual counter-evidence reference");
       }
     }
   });
