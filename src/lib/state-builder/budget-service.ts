@@ -190,13 +190,45 @@ export interface BudgetResult {
 // a false sense of precision. If the analyst cannot justify a variance,
 // the program returns "insufficient data for estimate" instead.
 //
-// FIX-3 (01-06): sourceType distinguishes analyst-supplied text from
-// verified data references. An input with sourceType="analyst-input"
-// is the analyst's assertion — it has NOT been independently verified.
-// An input with sourceType="verified-reference" must include a
-// referenceId pointing to a verifiable source (e.g. an Evidence row,
-// a published price index, a tender document). The model never
-// describes analyst-input as "verified market data".
+// FINAL PROVENANCE CLOSURE (01-06): sourceType distinguishes analyst-
+// supplied text from data references. The previous taxonomy used
+// "verified-reference", which was misleading — it implied verification
+// had happened when in fact only a non-empty referenceId was required.
+// The new taxonomy is honest about what verification actually occurred:
+//
+//   - "analyst-input"        — analyst assertion. UNVERIFIED. No
+//                              referenceId expected. The model never
+//                              describes this as verified.
+//
+//   - "evidence-reference"   — references an internal Evidence row by ID.
+//                              The service VALIDATES the evidence:
+//                                * exists in the same tenant (RLS)
+//                                * has metadata.countryId matching the
+//                                  strategy version's country
+//                                * verificationStatus is checked
+//                              If the evidence's verificationStatus ===
+//                              "verified", the input is labeled
+//                              "evidence-verified" in assumptions. If
+//                              verificationStatus is anything else
+//                              (unverified, disputed, refuted), the input
+//                              is labeled "evidence-pending-verification".
+//                              In BOTH cases, an explicit note says the
+//                              evidence does NOT automatically prove the
+//                              price — it is examinable support, not
+//                              price verification.
+//                              If the evidence is missing, cross-tenant,
+//                              or cross-country → REJECTED (fail-closed).
+//
+//   - "external-reference"   — references an external source (published
+//                              price index, tender document, market data
+//                              feed). The referenceId is a citation string.
+//                              We have NO verification mechanism for
+//                              external references yet → the input is
+//                              labeled "external-pending-verification"
+//                              with an explicit note that external
+//                              verification is not yet implemented. The
+//                              model NEVER describes external references
+//                              as "verified".
 // ============================================================
 
 interface CostInput {
@@ -206,13 +238,16 @@ interface CostInput {
   horizonYears: number;
   // source — provenance text (who/what provided this input). Always required.
   source: string;
-  // FIX-3: sourceType — distinguishes analyst assertion from verified data.
-  // Default "analyst-input" if omitted (backward compatible for older callers,
-  // but always treated as UNVERIFIED).
-  sourceType?: "analyst-input" | "verified-reference";
-  // FIX-3: referenceId — required when sourceType="verified-reference".
-  // Points to the verifiable source (e.g. an Evidence row ID, a published
-  // price index citation, a tender document reference).
+  // FINAL PROVENANCE CLOSURE: sourceType taxonomy.
+  //   "analyst-input"      — analyst assertion (UNVERIFIED)
+  //   "evidence-reference" — references internal Evidence row (validated)
+  //   "external-reference" — references external source (no verification yet)
+  // Default "analyst-input" if omitted (backward compatible; always UNVERIFIED).
+  sourceType?: "analyst-input" | "evidence-reference" | "external-reference";
+  // referenceId — required when sourceType is "evidence-reference" or
+  // "external-reference". For evidence-reference, this is an Evidence row ID
+  // (validated against tenant + country scope). For external-reference, this
+  // is a citation string (e.g. "WB-PI-2024-Q3", "tender-2024-001").
   referenceId?: string;
   note?: string;
   // FIX-1: varianceLow + varianceHigh are REQUIRED. No defaults.
@@ -263,12 +298,20 @@ export class BudgetIntegrityError extends Error {
 // cost input. If an analyst cannot justify a variance, the program
 // returns "insufficient data for estimate" rather than fabricating a range.
 
-// FIX-3: ISO 4217 currency whitelist.
-// The previous implementation only checked the 3-letter pattern. This
-// accepted "XYZ" or "AAA" as valid currencies. Now we validate against
-// the active ISO 4217 currency codes. The list below is the set of
-// currently-assigned ISO 4217 codes (active + a few common historic ones).
+// FIX-3: ISO 4217 currency support list.
+// IMPORTANT: This is a VERSIONED INTERNAL SUPPORT LIST, not an authoritative
+// reference of all currently-active ISO 4217 currencies. It was compiled from
+// ISO 4217:2015 + amendments through 2024, and includes some historic codes
+// (e.g. HRK — Croatian kuna, superseded by EUR in 2023; ZWL — Zimbabwean dollar
+// 2009 series, multiple re-denominations since). The list requires periodic
+// review and update as ISO publishes amendments. Codes here are accepted by
+// the budget service; codes NOT here are rejected (fail-closed against typos
+// and fabricated currencies). For production deployment, the list should be
+// synchronized with the latest ISO 4217 amendment and cross-checked against
+// the central bank of each tenant country.
+//
 // Source: ISO 4217:2015 + amendments through 2024.
+// Last review: 2024-Q4.
 const ISO_4217_CURRENCY_CODES: ReadonlySet<string> = new Set([
   // Major reserve currencies
   "USD", "EUR", "JPY", "GBP", "CHF", "CAD", "AUD", "NZD",
@@ -284,7 +327,7 @@ const ISO_4217_CURRENCY_CODES: ReadonlySet<string> = new Set([
   "CDF", "AOA", "MZN", "ZMW", "BWP", "MUR", "MAD", "DZD", "TND", "LYD",
   "SDG", "SOS", "DJF", "ERN", "GMD", "GNF", "LRD", "MWK", "XOF", "XAF",
   "XPF", "ZWL",
-  // Europe (non-Euro)
+  // Europe (non-Euro) — includes historic HRK (Croatian kuna, superseded by EUR 2023)
   "SEK", "NOK", "DKK", "PLN", "CZK", "HUF", "RON", "BGN", "HRK", "RSD",
   "ISK", "UAH", "MDL", "ALL", "BAM", "MKD", "RUB", "BYN", "GEL", "AMD",
   "AZN", "TRY",
@@ -395,27 +438,46 @@ function parseCostInputs(
       continue;
     }
 
-    // FIX-3: sourceType — distinguishes analyst assertion from verified data.
-    // Default "analyst-input" if omitted. If "verified-reference", a
-    // referenceId is required.
-    let sourceType: "analyst-input" | "verified-reference" = "analyst-input";
+    // FINAL PROVENANCE CLOSURE: sourceType taxonomy.
+    //   "analyst-input"      — analyst assertion (UNVERIFIED, no referenceId)
+    //   "evidence-reference" — references internal Evidence row (validated in tx)
+    //   "external-reference" — references external source (no verification yet)
+    // Default "analyst-input" if omitted.
+    //
+    // The previous "verified-reference" taxonomy was misleading — it implied
+    // verification had happened when only a non-empty referenceId was required.
+    // The new taxonomy is honest: "evidence-reference" triggers ACTUAL evidence
+    // validation in the transaction (existence + tenant + country + verificationStatus),
+    // and "external-reference" is explicitly labeled "pending-verification (external)"
+    // because we have no external verification mechanism yet.
+    let sourceType: "analyst-input" | "evidence-reference" | "external-reference" = "analyst-input";
     if (item.sourceType !== undefined) {
-      if (item.sourceType !== "analyst-input" && item.sourceType !== "verified-reference") {
+      if (item.sourceType !== "analyst-input" &&
+          item.sourceType !== "evidence-reference" &&
+          item.sourceType !== "external-reference") {
         errors.push(
-          `costInputs[${i}].sourceType must be "analyst-input" or "verified-reference" ` +
-          `(got "${String(item.sourceType)}")`
+          `costInputs[${i}].sourceType must be "analyst-input", "evidence-reference", ` +
+          `or "external-reference" (got "${String(item.sourceType)}"). ` +
+          `Note: "verified-reference" was renamed in the FINAL PROVENANCE CLOSURE — ` +
+          `use "evidence-reference" for internal Evidence rows (validated against ` +
+          `tenant + country + verificationStatus) or "external-reference" for ` +
+          `external citations (labeled pending-verification).`
         );
         continue;
       }
       sourceType = item.sourceType;
     }
     let referenceId: string | undefined;
-    if (sourceType === "verified-reference") {
+    if (sourceType === "evidence-reference" || sourceType === "external-reference") {
       if (typeof item.referenceId !== "string" || item.referenceId.trim().length === 0) {
         errors.push(
-          `costInputs[${i}].referenceId is required when sourceType="verified-reference" ` +
-          `(must point to a verifiable source: Evidence row ID, published price index, ` +
-          `tender document reference, etc.)`
+          `costInputs[${i}].referenceId is required when sourceType="${sourceType}". ` +
+          (sourceType === "evidence-reference"
+            ? `For evidence-reference, this must be an Evidence row ID (validated ` +
+              `against tenant + country scope + verificationStatus in the transaction).`
+            : `For external-reference, this is a citation string (e.g. "WB-PI-2024-Q3", ` +
+              `"tender-2024-001"). External references are labeled pending-verification ` +
+              `because no external verification mechanism is implemented yet.`)
         );
         continue;
       }
@@ -532,6 +594,170 @@ function validateInputsHomogeneous(inputs: CostInput[]): {
   };
 }
 
+// ============================================================
+// FINAL PROVENANCE CLOSURE: Evidence-reference validation
+// ------------------------------------------------------------
+// For sourceType="evidence-reference", we validate the cited Evidence row
+// against tenant + country scope + verificationStatus. The result is a
+// per-input verification state that buildAssumptions uses to label the
+// input honestly.
+//
+// Verification states:
+//   "analyst-unverified"          — sourceType="analyst-input" (default)
+//   "evidence-verified"           — sourceType="evidence-reference", evidence
+//                                    exists + in scope + verificationStatus="verified"
+//   "evidence-pending-verification" — sourceType="evidence-reference", evidence
+//                                    exists + in scope but verificationStatus is
+//                                    "unverified" | "disputed" | "refuted"
+//   "external-pending-verification" — sourceType="external-reference" (no
+//                                    external verification mechanism yet)
+//
+// IMPORTANT: even "evidence-verified" does NOT mean the evidence proves the
+// price. The evidence is examinable support — a human cited it. The
+// assumption text explicitly says: "evidence does NOT automatically prove
+// the price; it is examinable support, not price verification."
+//
+// If evidence is missing, cross-tenant, or cross-country → the input is
+// REJECTED (fail-closed). The program goes to insufficientData with a gap
+// explaining the rejection.
+// ============================================================
+
+export type InputVerificationState =
+  | "analyst-unverified"
+  | "evidence-verified"
+  | "evidence-pending-verification"
+  | "external-pending-verification";
+
+export interface VerifiedInput extends CostInput {
+  verificationState: InputVerificationState;
+  // For evidence-reference: the evidence's verificationStatus (if found).
+  // For other sourceTypes: undefined.
+  evidenceVerificationStatus?: string;
+}
+
+/**
+ * Validate evidence-reference inputs against the Evidence table.
+ * Returns:
+ *   - verifiedInputs: the inputs with verificationState populated
+ *   - errors: per-input validation errors (missing evidence, cross-tenant,
+ *     cross-country). If any error is present, the program should go to
+ *     insufficientData.
+ *
+ * analyst-input and external-reference inputs pass through with their
+ * respective default verification states (no DB lookup needed).
+ */
+async function validateEvidenceReferences(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  strategyCountryId: string,
+  inputs: CostInput[]
+): Promise<{ verifiedInputs: VerifiedInput[] | null; errors: string[] }> {
+  const errors: string[] = [];
+  const verifiedInputs: VerifiedInput[] = [];
+
+  // Collect all evidence-reference referenceIds for a single batch query
+  const evidenceRefIds: string[] = [];
+  for (const inp of inputs) {
+    if (inp.sourceType === "evidence-reference" && inp.referenceId) {
+      evidenceRefIds.push(inp.referenceId);
+    }
+  }
+
+  // Batch-fetch all cited evidence rows in one query (RLS enforces tenant scope)
+  let evidenceMap: Map<string, { id: string; metadata: unknown; verificationStatus: string }> = new Map();
+  if (evidenceRefIds.length > 0) {
+    const evidenceRows = await tx.evidence.findMany({
+      where: { tenantId, id: { in: evidenceRefIds } },
+      select: { id: true, metadata: true, verificationStatus: true },
+    });
+    evidenceMap = new Map(evidenceRows.map((e) => [e.id, e]));
+  }
+
+  for (let i = 0; i < inputs.length; i++) {
+    const inp = inputs[i]!;
+    const sourceType = inp.sourceType ?? "analyst-input";
+
+    if (sourceType === "analyst-input") {
+      verifiedInputs.push({
+        ...inp,
+        verificationState: "analyst-unverified",
+      });
+      continue;
+    }
+
+    if (sourceType === "external-reference") {
+      // External references have no verification mechanism yet.
+      // Always labeled "external-pending-verification".
+      verifiedInputs.push({
+        ...inp,
+        verificationState: "external-pending-verification",
+      });
+      continue;
+    }
+
+    // sourceType === "evidence-reference" — validate the evidence
+    const refId = inp.referenceId!;
+    const evidence = evidenceMap.get(refId);
+
+    if (!evidence) {
+      // Missing OR cross-tenant (RLS hides other tenants' rows, so a missing
+      // result covers both cases). Fail-closed.
+      errors.push(
+        `costInputs[${i}] (label "${inp.label}"): evidence-reference "${refId}" ` +
+        `was not found in tenant ${tenantId}. The reference may not exist, or it ` +
+        `belongs to a different tenant (RLS hides cross-tenant rows). ` +
+        `Fail-closed: a non-existent or cross-tenant evidence reference cannot ` +
+        `be labeled as evidence-reference. Either fix the referenceId, or use ` +
+        `sourceType="analyst-input" if this is an analyst assertion.`
+      );
+      continue;
+    }
+
+    // Fail-closed: evidence MUST have metadata.countryId (same as portfolio-service)
+    const evMeta = (evidence.metadata ?? {}) as Record<string, unknown>;
+    const evidenceCountryId = typeof evMeta.countryId === "string"
+      ? evMeta.countryId : null;
+    if (!evidenceCountryId) {
+      errors.push(
+        `costInputs[${i}] (label "${inp.label}"): evidence "${refId}" has no ` +
+        `metadata.countryId. Fail-closed policy: evidence must be explicitly ` +
+        `attributed to a country. Unattributed evidence cannot be used as an ` +
+        `evidence-reference for a cost input.`
+      );
+      continue;
+    }
+
+    // Cross-country evidence is rejected
+    if (evidenceCountryId !== strategyCountryId) {
+      errors.push(
+        `costInputs[${i}] (label "${inp.label}"): evidence "${refId}" belongs to ` +
+        `country ${evidenceCountryId}, but the strategy version is for country ` +
+        `${strategyCountryId}. Cross-country evidence references are not allowed.`
+      );
+      continue;
+    }
+
+    // Evidence exists + in scope. Determine verification state from verificationStatus.
+    // verificationStatus values: "unverified" | "verified" | "disputed" | "refuted"
+    const evStatus = evidence.verificationStatus;
+    const verificationState: InputVerificationState =
+      evStatus === "verified"
+        ? "evidence-verified"
+        : "evidence-pending-verification";
+
+    verifiedInputs.push({
+      ...inp,
+      verificationState,
+      evidenceVerificationStatus: evStatus,
+    });
+  }
+
+  if (errors.length > 0) {
+    return { verifiedInputs: null, errors };
+  }
+  return { verifiedInputs, errors };
+}
+
 /**
  * Compute the cost range from validated, homogeneous cost inputs.
  *
@@ -554,7 +780,7 @@ function validateInputsHomogeneous(inputs: CostInput[]): {
  * Returns { min, max } as string-formatted Decimals (2 decimal places)
  * to preserve precision in storage.
  */
-function computeCostRange(inputs: CostInput[]): {
+function computeCostRange(inputs: VerifiedInput[]): {
   min: string;
   max: string;
   lineItems: Array<{
@@ -562,8 +788,10 @@ function computeCostRange(inputs: CostInput[]): {
     min: string;
     max: string;
     source: string;
-    sourceType: "analyst-input" | "verified-reference";
+    sourceType: "analyst-input" | "evidence-reference" | "external-reference";
     referenceId?: string;
+    verificationState: InputVerificationState;
+    evidenceVerificationStatus?: string;
     base: string;
     varianceLow: string;
     varianceHigh: string;
@@ -578,8 +806,10 @@ function computeCostRange(inputs: CostInput[]): {
     min: string;
     max: string;
     source: string;
-    sourceType: "analyst-input" | "verified-reference";
+    sourceType: "analyst-input" | "evidence-reference" | "external-reference";
     referenceId?: string;
+    verificationState: InputVerificationState;
+    evidenceVerificationStatus?: string;
     base: string;
     varianceLow: string;
     varianceHigh: string;
@@ -632,6 +862,8 @@ function computeCostRange(inputs: CostInput[]): {
       source: inp.source,
       sourceType: inp.sourceType ?? "analyst-input",
       referenceId: inp.referenceId,
+      verificationState: inp.verificationState,
+      evidenceVerificationStatus: inp.evidenceVerificationStatus,
       base: base.toFixed(DECIMAL_PLACES),
       varianceLow: vLowDec.toString(),
       varianceHigh: vHighDec.toString(),
@@ -669,17 +901,29 @@ function computeCostRange(inputs: CostInput[]): {
  * varianceSource for each input. No default-variance assumption is
  * emitted — there is no default.
  *
- * FIX-3 (01-06): documents the sourceType for each input. Analyst-input
- * sources are explicitly labeled as UNVERIFIED. Verified-reference sources
- * include the referenceId. The model never describes analyst-input as
- * "verified market data".
+ * FINAL PROVENANCE CLOSURE (01-06): documents the verification state for
+ * each input honestly:
+ *   - analyst-unverified          → "[UNVERIFIED — analyst-supplied assertion]"
+ *   - evidence-verified           → "[evidence-verified; referenceId=...; evidence
+ *                                    does NOT automatically prove the price]"
+ *   - evidence-pending-verification → "[evidence-pending-verification;
+ *                                    referenceId=...; evidence verificationStatus=...]"
+ *   - external-pending-verification → "[external-pending-verification; referenceId=...;
+ *                                    no external verification mechanism implemented yet]"
+ *
+ * The model NEVER labels an input as simply "verified". Even evidence-verified
+ * inputs get the explicit caveat: "evidence does NOT automatically prove the
+ * price; it is examinable support, not price verification."
  */
 function buildAssumptions(
-  inputs: CostInput[],
+  inputs: VerifiedInput[],
   lineItems: Array<{
     label: string; min: string; max: string; source: string;
-    sourceType: "analyst-input" | "verified-reference";
-    referenceId?: string; base: string;
+    sourceType: "analyst-input" | "evidence-reference" | "external-reference";
+    referenceId?: string;
+    verificationState: InputVerificationState;
+    evidenceVerificationStatus?: string;
+    base: string;
     varianceLow: string; varianceHigh: string; varianceSource: string;
   }>,
   currency: Currency,
@@ -687,21 +931,48 @@ function buildAssumptions(
 ): Assumption[] {
   const assumptions: Assumption[] = [];
 
-  // Per-input assumptions — FIX-1 + FIX-3
+  // Per-input assumptions — FIX-1 + FINAL PROVENANCE CLOSURE
   for (let i = 0; i < inputs.length; i++) {
     const inp = inputs[i]!;
     const li = lineItems[i]!;
     const sourceType = inp.sourceType ?? "analyst-input";
-    const verificationNote = sourceType === "analyst-input"
-      ? ` [UNVERIFIED — analyst-supplied assertion; not independently verified]`
-      : ` [verified-reference; referenceId=${inp.referenceId ?? "MISSING"}]`;
+
+    // Build the verification note based on the ACTUAL verification state
+    // (set by validateEvidenceReferences). This is the honest label —
+    // never "verified" without qualification.
+    let verificationNote: string;
+    if (li.verificationState === "analyst-unverified") {
+      verificationNote = ` [UNVERIFIED — analyst-supplied assertion; not independently verified]`;
+    } else if (li.verificationState === "evidence-verified") {
+      verificationNote =
+        ` [evidence-verified; referenceId=${inp.referenceId ?? "MISSING"}; ` +
+        `evidence verificationStatus="verified". ` +
+        `IMPORTANT: evidence does NOT automatically prove the price — ` +
+        `it is examinable support, not price verification. ` +
+        `The evidence was cited by a human; its verificationStatus reflects ` +
+        `the evidence's own verification, not a verification that the evidence ` +
+        `supports this specific cost input.]`;
+    } else if (li.verificationState === "evidence-pending-verification") {
+      verificationNote =
+        ` [evidence-pending-verification; referenceId=${inp.referenceId ?? "MISSING"}; ` +
+        `evidence verificationStatus="${li.evidenceVerificationStatus ?? "unknown"}". ` +
+        `The cited evidence exists and is in tenant+country scope, but its ` +
+        `verificationStatus is not "verified". Do not treat this input as verified.]`;
+    } else {
+      // external-pending-verification
+      verificationNote =
+        ` [external-pending-verification; referenceId=${inp.referenceId ?? "MISSING"}. ` +
+        `External references have no verification mechanism implemented yet. ` +
+        `Do not treat this input as verified.]`;
+    }
 
     assumptions.push({
       description:
         `Cost input "${inp.label}": unitCost ${inp.unitCost.amount} ${inp.unitCost.currency} × ` +
         `${inp.unitCount} units = base ${li.base} ${currency}. ` +
         `varianceLow ${li.varianceLow} (min ${li.min}), varianceHigh ${li.varianceHigh} (max ${li.max}). ` +
-        `varianceSource: ${inp.varianceSource}.` +
+        `varianceSource: ${inp.varianceSource}. ` +
+        `sourceType: ${sourceType}.` +
         (inp.note ? ` Note: ${inp.note}.` : "") +
         verificationNote,
       source: inp.source,
@@ -737,15 +1008,22 @@ function buildAssumptions(
     source: "model-default (v1-deterministic)",
   });
 
-  // FIX-3: explicit statement about source verification.
+  // FINAL PROVENANCE CLOSURE: explicit statement about the verification taxonomy.
   assumptions.push({
     description:
-      `Input verification: inputs with sourceType="analyst-input" are ` +
-      `analyst-supplied assertions — they have NOT been independently verified ` +
-      `against market data, published price indices, or tender documents. ` +
-      `Inputs with sourceType="verified-reference" carry a referenceId pointing ` +
-      `to a verifiable source. The model never describes analyst-input as ` +
-      `"verified market data".`,
+      `Input verification taxonomy (FINAL PROVENANCE CLOSURE): ` +
+      `"analyst-input" = UNVERIFIED analyst assertion. ` +
+      `"evidence-reference" = references an internal Evidence row, validated ` +
+      `against tenant + country scope + verificationStatus. If the evidence's ` +
+      `verificationStatus is "verified", the input is labeled "evidence-verified" ` +
+      `(but the evidence does NOT automatically prove the price). Otherwise ` +
+      `"evidence-pending-verification". ` +
+      `"external-reference" = references an external source (price index, tender ` +
+      `document); labeled "external-pending-verification" because no external ` +
+      `verification mechanism is implemented yet. ` +
+      `The model NEVER labels an input as simply "verified" — even evidence-verified ` +
+      `inputs get the explicit caveat that the evidence is examinable support, ` +
+      `not price verification.`,
     source: "model-default (v1-deterministic)",
   });
 
@@ -844,15 +1122,30 @@ export async function estimateBudgets(
   //  "التزامن وعدم التخزين الجزئي").
   try {
     return await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-      // 1. Validate the strategy version belongs to this tenant
-      const version = await tx.strategyVersion.findFirst({
+      // 1. Validate the strategy version belongs to this tenant + fetch its
+      // metadata (for countryId — needed by evidence-reference validation).
+      // FINAL PROVENANCE CLOSURE: combined the existence check + metadata fetch
+      // into a single query. The countryId from metadata.inputSnapshot is used
+      // to validate evidence-reference inputs against the same country scope.
+      const strategyVersion = await tx.strategyVersion.findFirst({
         where: { id: input.strategyAlternativeId, tenantId },
-        select: { id: true },
+        select: { id: true, metadata: true },
       });
-      if (!version) {
+      if (!strategyVersion) {
         throw new BudgetValidationError(
           `Strategy version ${input.strategyAlternativeId} not found in tenant scope. ` +
           `Cannot estimate budgets for a strategy that doesn't belong to this tenant.`
+        );
+      }
+      const svMeta = (strategyVersion.metadata ?? {}) as Record<string, unknown>;
+      const inputSnapshot = (svMeta.inputSnapshot ?? {}) as Record<string, unknown>;
+      const strategyCountryId = typeof inputSnapshot.countryId === "string"
+        ? inputSnapshot.countryId : null;
+      if (!strategyCountryId) {
+        throw new BudgetValidationError(
+          `Strategy version ${input.strategyAlternativeId} has no countryId in ` +
+          `metadata.inputSnapshot. Cannot validate evidence-reference inputs ` +
+          `without the strategy country scope.`
         );
       }
 
@@ -921,9 +1214,29 @@ export async function estimateBudgets(
           continue;
         }
 
-        // Compute the cost range
-        const { min, max, lineItems } = computeCostRange(inputs);
-        const assumptions = buildAssumptions(inputs, lineItems, currency, horizonYears);
+        // FINAL PROVENANCE CLOSURE: validate evidence-reference inputs.
+        // For sourceType="evidence-reference", verify the cited Evidence row
+        // exists in tenant + country scope and check its verificationStatus.
+        // Missing / cross-tenant / cross-country evidence → fail-closed
+        // (program goes to insufficientData). analyst-input and external-reference
+        // inputs pass through with their respective default verification states.
+        const { verifiedInputs, errors: evidenceErrors } =
+          await validateEvidenceReferences(tx, tenantId, strategyCountryId, inputs);
+        if (verifiedInputs === null || evidenceErrors.length > 0) {
+          insufficient.push({
+            programId: program.id,
+            programTitle: program.title,
+            programSector: program.sector,
+            reason: evidenceErrors[0] ?? "evidence-reference validation failed",
+            gaps: evidenceErrors,
+          });
+          continue;
+        }
+
+        // Compute the cost range (uses verifiedInputs — verificationState
+        // is included in lineItems for buildAssumptions)
+        const { min, max, lineItems } = computeCostRange(verifiedInputs);
+        const assumptions = buildAssumptions(verifiedInputs, lineItems, currency, horizonYears);
 
         // If no financing sources, surface a "financing data gap" assumption
         const finalFinSources = finSources;

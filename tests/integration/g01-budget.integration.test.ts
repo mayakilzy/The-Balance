@@ -1396,19 +1396,19 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
     expect(verificationAssumption).toBeDefined();
   });
 
-  it("22b. FIX-3: verified-reference sourceType requires referenceId", async () => {
+  it("22b. evidence-reference sourceType requires referenceId", async () => {
     const { validateCostInputs } = await import("@/lib/state-builder/budget-service");
 
-    // sourceType="verified-reference" WITHOUT referenceId — must be rejected
+    // sourceType="evidence-reference" WITHOUT referenceId — must be rejected
     const errors = validateCostInputs(
       [
         {
-          label: "verified without reference",
+          label: "evidence-ref without referenceId",
           unitCost: { amount: 100, currency: "USD" },
           unitCount: 10,
           horizonYears: 1,
           source: "[FICTIONAL] test",
-          sourceType: "verified-reference",
+          sourceType: "evidence-reference",
           // referenceId intentionally omitted
         },
       ].map(vInput)
@@ -1417,7 +1417,292 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
     expect(errors.some((e) => e.includes("referenceId is required"))).toBe(true);
   });
 
-  it("22c. FIX-3: verified-reference with referenceId → assumption includes referenceId", async () => {
+  it("22c. old 'verified-reference' sourceType is rejected with migration hint", async () => {
+    const { validateCostInputs } = await import("@/lib/state-builder/budget-service");
+
+    // The old "verified-reference" taxonomy was removed in the FINAL PROVENANCE
+    // CLOSURE. Callers must migrate to "evidence-reference" or "external-reference".
+    const errors = validateCostInputs(
+      [
+        {
+          label: "old verified-reference",
+          unitCost: { amount: 100, currency: "USD" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] test",
+          sourceType: "verified-reference",
+          referenceId: "some-id",
+        },
+      ].map(vInput)
+    );
+    expect(errors.length).toBeGreaterThan(0);
+    expect(errors.some((e) => e.includes("verified-reference") && e.includes("renamed"))).toBe(true);
+  });
+
+  // ============================================================
+  // 23. FINAL PROVENANCE CLOSURE: fabricated evidenceId → rejected
+  // ============================================================
+  it("23. evidence-reference with fabricated (non-existent) evidenceId → rejected", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // A fabricated evidenceId that doesn't exist in any tenant
+    await setProgramCostInputs(targetProgram.programId, [
+      vInput({
+        label: "fabricated evidence reference",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] test — fabricated evidenceId",
+        sourceType: "evidence-reference",
+        referenceId: "fabricated-evidence-id-that-does-not-exist-12345",
+      }),
+    ]);
+
+    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    // The program must be in insufficientData (not estimates)
+    const entry = result.insufficientData.find((e) => e.programId === targetProgram.programId);
+    expect(entry).toBeDefined();
+    expect(entry!.gaps.some((g) => g.includes("was not found in tenant"))).toBe(true);
+    expect(entry!.gaps.some((g) => g.includes("Fail-closed"))).toBe(true);
+
+    // NO budget line stored
+    const dbLine = await adminClient.budgetLine.findFirst({
+      where: { tenantId: tenantAId, programId: targetProgram.programId },
+    });
+    expect(dbLine).toBeNull();
+  });
+
+  // ============================================================
+  // 24. evidence-reference with cross-tenant evidence → rejected
+  // ============================================================
+  it("24. evidence-reference with cross-tenant evidence → rejected", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const sessionA = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // Find an evidence row in tenant B (if any)
+    const tenantBEvidence = await adminClient.evidence.findFirst({
+      where: { tenantId: tenantBId },
+    });
+    if (!tenantBEvidence) {
+      // Skip — no tenant B evidence seeded; the fabricated-evidenceId test (23)
+      // already covers the RLS-hides-cross-tenant case.
+      return;
+    }
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      sessionA, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // Use tenant B's evidence ID in tenant A's strategy — RLS will hide it,
+    // so the validation will report "not found in tenant"
+    await setProgramCostInputs(targetProgram.programId, [
+      vInput({
+        label: "cross-tenant evidence reference",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] test — cross-tenant evidence",
+        sourceType: "evidence-reference",
+        referenceId: tenantBEvidence.id,
+      }),
+    ]);
+
+    const result = await estimateBudgets(sessionA, { strategyAlternativeId: versionId });
+    const entry = result.insufficientData.find((e) => e.programId === targetProgram.programId);
+    expect(entry).toBeDefined();
+    expect(entry!.gaps.some((g) => g.includes("was not found in tenant"))).toBe(true);
+  });
+
+  // ============================================================
+  // 25. evidence-reference with cross-country evidence → rejected
+  // ============================================================
+  it("25. evidence-reference with cross-country evidence → rejected", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // Create evidence in a DIFFERENT country (P04 Testland), same tenant A
+    const otherCountry = await adminClient.country.upsert({
+      where: { iso3: "P04" },
+      update: {},
+      create: { iso3: "P04", iso2: "P4", displayName: "P04 Testland", status: "active" },
+    });
+    const crossCountryEvidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId,
+        claim: "Cross-country evidence for provenance test",
+        type: "neutral",
+        verificationStatus: "verified",
+        metadata: {
+          countryId: otherCountry.id,
+          sector: "agriculture",
+          fictional: true,
+          seededBy: "01-06-final-provenance-test",
+        } as never,
+      },
+    });
+
+    try {
+      await setProgramCostInputs(targetProgram.programId, [
+        vInput({
+          label: "cross-country evidence reference",
+          unitCost: { amount: 100, currency: "USD" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] test — cross-country evidence",
+          sourceType: "evidence-reference",
+          referenceId: crossCountryEvidence.id,
+        }),
+      ]);
+
+      const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+      const entry = result.insufficientData.find((e) => e.programId === targetProgram.programId);
+      expect(entry).toBeDefined();
+      expect(entry!.gaps.some((g) => g.includes("Cross-country evidence references are not allowed"))).toBe(true);
+    } finally {
+      await adminClient.evidence.delete({ where: { id: crossCountryEvidence.id } });
+      await adminClient.country.deleteMany({ where: { iso3: "P04" } });
+    }
+  });
+
+  // ============================================================
+  // 26. evidence-reference with UNVERIFIED evidence → labeled "pending-verification"
+  // ============================================================
+  it("26. evidence-reference with unverified evidence → labeled evidence-pending-verification", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // Fetch a real Demolandia evidence (same tenant + same country)
+    // The seeded evidence has verificationStatus="unverified" by default
+    const realEvidence = await adminClient.evidence.findFirst({
+      where: { tenantId: tenantAId },
+    });
+    if (!realEvidence) throw new Error("Test setup failed: no evidence seeded for tenantA");
+
+    await setProgramCostInputs(targetProgram.programId, [
+      vInput({
+        label: "unverified evidence reference",
+        unitCost: { amount: 100, currency: "USD" },
+        unitCount: 10,
+        horizonYears: 1,
+        source: "[FICTIONAL] cites unverified evidence",
+        sourceType: "evidence-reference",
+        referenceId: realEvidence.id,
+      }),
+    ]);
+
+    const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+    const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
+    expect(estimate).toBeDefined();
+
+    const inputAssumption = estimate!.assumptions.find(
+      (a) => a.source.includes("cites unverified evidence")
+    );
+    expect(inputAssumption).toBeDefined();
+    // Must be labeled "evidence-pending-verification" (NOT "evidence-verified")
+    expect(inputAssumption!.description).toContain("evidence-pending-verification");
+    expect(inputAssumption!.description).not.toContain("evidence-verified");
+    // Must NOT contain the analyst-input UNVERIFIED label
+    expect(inputAssumption!.description).not.toContain("[UNVERIFIED — analyst-supplied");
+    // Must include the referenceId
+    expect(inputAssumption!.description).toContain(realEvidence.id);
+  });
+
+  // ============================================================
+  // 27. evidence-reference with VERIFIED evidence → labeled "evidence-verified"
+  //     BUT explicit caveat: "evidence does NOT automatically prove the price"
+  // ============================================================
+  it("27. evidence-reference with verified evidence → evidence-verified + price-not-proven caveat", async () => {
+    const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const { versionId, programs } = await setupAlternativeWithPrograms(
+      session, [objectiveAgricultureId]
+    );
+    const targetProgram = programs[0]!;
+
+    // Create a VERIFIED evidence row in tenant A + Demolandia country
+    const verifiedEvidence = await adminClient.evidence.create({
+      data: {
+        tenantId: tenantAId,
+        claim: "Verified price reference for provenance test",
+        type: "neutral",
+        verificationStatus: "verified",
+        metadata: {
+          countryId,
+          sector: "agriculture",
+          fictional: true,
+          seededBy: "01-06-final-provenance-test",
+        } as never,
+      },
+    });
+
+    try {
+      await setProgramCostInputs(targetProgram.programId, [
+        vInput({
+          label: "verified evidence reference",
+          unitCost: { amount: 100, currency: "USD" },
+          unitCount: 10,
+          horizonYears: 1,
+          source: "[FICTIONAL] cites verified evidence",
+          sourceType: "evidence-reference",
+          referenceId: verifiedEvidence.id,
+        }),
+      ]);
+
+      const result = await estimateBudgets(session, { strategyAlternativeId: versionId });
+      const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
+      expect(estimate).toBeDefined();
+
+      const inputAssumption = estimate!.assumptions.find(
+        (a) => a.source.includes("cites verified evidence")
+      );
+      expect(inputAssumption).toBeDefined();
+      // Must be labeled "evidence-verified"
+      expect(inputAssumption!.description).toContain("evidence-verified");
+      // MUST include the explicit caveat that the evidence does NOT prove the price
+      expect(inputAssumption!.description).toContain("does NOT automatically prove the price");
+      expect(inputAssumption!.description).toContain("examinable support, not price verification");
+      // Must NOT contain the analyst-input UNVERIFIED label
+      expect(inputAssumption!.description).not.toContain("[UNVERIFIED — analyst-supplied");
+      // Must include the referenceId
+      expect(inputAssumption!.description).toContain(verifiedEvidence.id);
+    } finally {
+      await adminClient.evidence.delete({ where: { id: verifiedEvidence.id } });
+    }
+  });
+
+  // ============================================================
+  // 28. external-reference → labeled "external-pending-verification"
+  //     (no verification mechanism implemented yet)
+  // ============================================================
+  it("28. external-reference → labeled external-pending-verification (never verified)", async () => {
     const { estimateBudgets } = await import("@/lib/state-builder/budget-service");
     const session = makeSession({
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
@@ -1430,13 +1715,13 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
 
     await setProgramCostInputs(targetProgram.programId, [
       vInput({
-        label: "verified price reference",
+        label: "external price index citation",
         unitCost: { amount: 100, currency: "USD" },
         unitCount: 10,
         horizonYears: 1,
-        source: "[FICTIONAL] published price index citation",
-        sourceType: "verified-reference",
-        referenceId: "fixture-price-index-2024-001",
+        source: "[FICTIONAL] external price index",
+        sourceType: "external-reference",
+        referenceId: "WB-PI-2024-Q3",
       }),
     ]);
 
@@ -1444,14 +1729,18 @@ describeIntegration("01-06: Budget & Financing Estimates", () => {
     const estimate = result.estimates.find((e) => e.programId === targetProgram.programId);
     expect(estimate).toBeDefined();
 
-    // The per-input assumption MUST include the referenceId
     const inputAssumption = estimate!.assumptions.find(
-      (a) => a.source.includes("price index")
+      (a) => a.source.includes("external price index")
     );
     expect(inputAssumption).toBeDefined();
-    expect(inputAssumption!.description).toContain("verified-reference");
-    expect(inputAssumption!.description).toContain("fixture-price-index-2024-001");
-    // Should NOT contain the UNVERIFIED label (that's only for analyst-input)
-    expect(inputAssumption!.description).not.toContain("UNVERIFIED");
+    // Must be labeled "external-pending-verification"
+    expect(inputAssumption!.description).toContain("external-pending-verification");
+    // Must include the explicit note about no verification mechanism
+    expect(inputAssumption!.description).toContain("no verification mechanism implemented yet");
+    // Must include the referenceId
+    expect(inputAssumption!.description).toContain("WB-PI-2024-Q3");
+    // Must NOT be labeled "verified" in any form
+    expect(inputAssumption!.description).not.toContain("evidence-verified");
+    expect(inputAssumption!.description).not.toContain("[UNVERIFIED — analyst-supplied");
   });
 });
