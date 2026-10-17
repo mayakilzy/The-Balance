@@ -10,6 +10,7 @@
 import { db } from "@/lib/db";
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
+import { writeAuditTx } from "@/lib/audit";  // 01-10: atomic audit write
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
 
@@ -162,7 +163,7 @@ export async function approveStrategyVersion(
       data: { status: "approved" },
     });
 
-    // Record event
+    // Record domain event (G00 behavior — domain timeline)
     await tx.event.create({
       data: {
         tenantId,
@@ -175,6 +176,24 @@ export async function approveStrategyVersion(
           versionNumber: version.versionNumber,
           approvalNotes: approvalNotes?.slice(0, 200),
         } as Prisma.InputJsonValue,
+      },
+    });
+
+    // 01-10: ATOMIC audit_log write (per §13 Correction B)
+    // This write is INSIDE the same transaction as the approval — if it fails,
+    // the entire transaction rolls back (no approved version without audit).
+    // This is the compliance-grade sovereign audit trail (independent from events).
+    await writeAuditTx(tx, {
+      tenantId,
+      actor: userId,
+      action: "strategy.version_approved",
+      status: "ok",
+      details: {
+        strategyVersionId: approved.id,
+        strategyId: version.strategyId,
+        versionNumber: version.versionNumber,
+        approvedBy: userId,
+        approvalNotes: approvalNotes?.slice(0, 200),
       },
     });
 
