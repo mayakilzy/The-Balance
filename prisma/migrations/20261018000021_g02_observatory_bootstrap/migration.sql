@@ -470,27 +470,27 @@ CREATE TRIGGER "observation_chain_integrity_trigger"
 -- ============================================================
 -- 7. VERIFICATION
 -- ============================================================
+-- Per G01 pattern: use pg_class (which has both relrowsecurity AND
+-- relforcerowsecurity columns). pg_tables does NOT have forcerowsecurity.
 DO $$
 DECLARE
     t_name TEXT;
-    rls_count INTEGER;
+    rls_ok BOOLEAN;
+    policy_count INTEGER;
 BEGIN
     FOR t_name IN SELECT unnest(ARRAY['indicator_definitions','observation_periods','observations','variance_records','alerts']) LOOP
-        -- RLS enabled + forced
-        SELECT count(*) INTO rls_count
-        FROM pg_tables
-        WHERE tablename = t_name
-          AND rowsecurity = TRUE
-          AND forcerowsecurity = TRUE;
-        IF rls_count = 0 THEN
+        -- RLS enabled + forced (using pg_class, same pattern as G01 migration 0017)
+        SELECT c.relrowsecurity AND c.relforcerowsecurity INTO rls_ok
+        FROM pg_class c WHERE c.relname = t_name;
+        IF NOT rls_ok THEN
             RAISE EXCEPTION 'RLS not FORCE-enabled on %', t_name;
         END IF;
         -- balance_app policy exists
-        SELECT count(*) INTO rls_count
+        SELECT count(*) INTO policy_count
         FROM pg_policies
         WHERE tablename = t_name
           AND policyname = 'tenant_isolation_balance_app';
-        IF rls_count = 0 THEN
+        IF policy_count = 0 THEN
             RAISE EXCEPTION 'tenant_isolation_balance_app policy missing on %', t_name;
         END IF;
     END LOOP;
