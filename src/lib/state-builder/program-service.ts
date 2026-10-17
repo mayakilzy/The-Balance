@@ -65,6 +65,7 @@ export interface ProgramContract {
   owningInstitutionName: string | null;
   legalMandateRef: string | null;
   mandateGap: boolean;
+  institutionAssignmentGap: boolean; // FIX-1: no documented sector-institution relationship
   // Capabilities + KPIs
   requiredCapabilities: RequiredCapability[];
   kpis: KPI[];
@@ -92,37 +93,41 @@ export interface ExpandProgramsResult {
     withInstitution: number;
     withMandateGap: number;
     withoutInstitution: number;
+    withInstitutionAssignmentGap: number;
   };
 }
 
 // ============================================================
-// DETERMINISTIC INSTITUTION ASSIGNMENT
+// FIX-1: NO AUTOMATIC INSTITUTION ASSIGNMENT
 // ============================================================
-// Map sectors to institutions based on the Country Pack's PUBLIC
-// institutions table. This is deterministic — no LLM, no fabrication.
-// If no institution matches the sector, owningInstitutionId = null
-// and mandateGap = true.
-
-const SECTOR_INSTITUTION_MAP: Record<string, string[]> = {
-  // sector → institution types (in priority order)
-  agriculture: ["ministry", "agency"],
-  finance: ["ministry", "authority"],
-  education: ["ministry"],
-  health: ["ministry", "authority"],
-  monetary: ["authority"],
-  external: ["authority", "ministry"],
-};
-
-function getPreferredInstitutionTypes(sector: string): string[] {
-  return SECTOR_INSTITUTION_MAP[sector] ?? ["ministry", "agency", "authority"];
-}
+// We do NOT assign programs to institutions based on type alone.
+// A ministry is not automatically responsible for a sector just because
+// it's a ministry. We need a DOCUMENTED sector-institution relationship.
+//
+// Demolandia does not have documented sector-institution relationships.
+// Therefore ALL programs get owningInstitutionId = null and
+// institutionAssignmentGap = true.
+//
+// This is the honest approach: "we haven't determined the responsible
+// institution yet" is better than assigning an arbitrary ministry.
+//
+// Future: when CountryPackConfig includes an institution-sector mapping,
+// we can use it. Until then, we don't guess.
 
 // ============================================================
-// DETERMINISTIC KPI GENERATION
+// FIX-2: EXACT PROGRAM-OBJECTIVE-KPI MAPPING
 // ============================================================
-// KPIs are derived from the objective's targetMetric + targetValue.
-// No fabricated targets — they come from the objective.
-// sourceKind is determined by the sector + metric type.
+// KPIs are derived from the objective that is SPECIFICALLY linked to
+// the program — not just any objective in the same sector.
+//
+// If there are multiple objectives in the same sector, we CANNOT
+// determine which one the program was created for (the composer doesn't
+// carry objectiveId in ProgramProposal). In that case, we honestly say
+// "cannot determine exact objective mapping" instead of picking one.
+//
+// If there is exactly one objective in the sector → use it for KPI.
+// If there are zero → no KPI.
+// If there are multiple → no KPI + note about ambiguity.
 
 const METRIC_SOURCE_KIND: Record<string, KpiSourceKind> = {
   agricultural_gdp_growth_rate: "official_statistics",
@@ -140,19 +145,31 @@ function getSourceKindForMetric(metric: string): KpiSourceKind {
 
 function generateKPIs(
   sector: string,
-  objectiveTargetMetric: string | null,
-  objectiveTargetValue: string | null,
-  objectiveHorizon: number | null
+  matchingObjectives: Array<{
+    id: string;
+    title: string;
+    targetMetric: string;
+    targetValue: string;
+    horizon: number;
+  }>
 ): KPI[] {
-  if (!objectiveTargetMetric || !objectiveTargetValue) {
+  // FIX-2: If multiple objectives in the same sector, don't guess
+  if (matchingObjectives.length === 0) {
     return [];
   }
 
-  const sourceKind = getSourceKindForMetric(objectiveTargetMetric);
+  if (matchingObjectives.length > 1) {
+    // Multiple objectives in the same sector — cannot determine exact mapping
+    return [];
+  }
+
+  // Exactly one objective → safe to generate KPI
+  const obj = matchingObjectives[0]!;
+  const sourceKind = getSourceKindForMetric(obj.targetMetric);
   return [
     {
-      name: objectiveTargetMetric,
-      target: objectiveTargetValue,
+      name: obj.targetMetric,
+      target: obj.targetValue,
       frequency: "annual",
       sourceKind,
       notes: sourceKind === "unspecified"
@@ -265,12 +282,12 @@ export async function expandPrograms(
       );
     }
 
-    // 4. Fetch PUBLIC institutions for this country
+    // 4. Fetch PUBLIC institutions for this country (for display, not assignment)
     const institutions = await tx.institution.findMany({
       where: { countryId },
     });
 
-    // 5. Fetch objectives (for KPI generation)
+    // 5. Fetch objectives (for KPI generation — FIX-2: exact mapping)
     const objectiveIds = (alternativeData.objectives ?? []).map((o) => o.objectiveId);
     const objectives = objectiveIds.length > 0
       ? await tx.objective.findMany({
@@ -282,38 +299,38 @@ export async function expandPrograms(
     const programContracts: ProgramContract[] = [];
 
     for (const progData of alternativeData.programs) {
-      // 6a. Find matching institution for this sector
-      const preferredTypes = getPreferredInstitutionTypes(progData.sector);
-      let matchedInstitution: typeof institutions[0] | null = null;
-
-      for (const prefType of preferredTypes) {
-        matchedInstitution = institutions.find((i) => i.type === prefType) ?? null;
-        if (matchedInstitution) break;
-      }
+      // FIX-1: Do NOT assign institutions based on type alone.
+      // Demolandia has no documented sector-institution relationships.
+      // owningInstitutionId = null, institutionAssignmentGap = true.
+      // This is the honest approach — we don't guess responsibility.
+      const matchedInstitution = null;
+      const institutionAssignmentGap = true;
 
       // 6b. Determine legal mandate
-      const { legalMandateRef, mandateGap } = determineLegalMandate(
-        matchedInstitution?.type ?? null
-      );
+      const { legalMandateRef, mandateGap } = determineLegalMandate(null);
 
-      // 6c. Find the objective for this sector (for KPI generation)
-      const matchingObjective = objectives.find((o) => {
+      // FIX-2: Find ALL objectives matching this sector (not just the first)
+      const matchingObjectives = objectives.filter((o) => {
         const meta = (o.metadata ?? {}) as unknown as Record<string, unknown>;
         return typeof meta.sector === "string" && meta.sector === progData.sector;
       });
 
-      // 6d. Generate KPIs from the objective
-      const kpis = generateKPIs(
-        progData.sector,
-        matchingObjective?.targetMetric ?? null,
-        matchingObjective?.targetValue ?? null,
-        matchingObjective?.horizon ?? null
-      );
+      // 6d. Generate KPIs — FIX-2: only if exactly one objective matches
+      const kpis = generateKPIs(progData.sector, matchingObjectives.map((o) => ({
+        id: o.id,
+        title: o.title,
+        targetMetric: o.targetMetric,
+        targetValue: o.targetValue,
+        horizon: o.horizon,
+      })));
 
       // 6e. Generate required capabilities
       const requiredCapabilities = generateCapabilities(progData.sector);
 
-      // 6f. Check if a Program record already exists (idempotent resume)
+      // FIX-3: Idempotent storage with P2002 recovery (like Strategy Composer)
+      let programId: string;
+
+      // Check if a Program record already exists (idempotent resume)
       const existingProgram = await tx.program.findFirst({
         where: {
           tenantId,
@@ -322,14 +339,12 @@ export async function expandPrograms(
         },
       });
 
-      let programId: string;
-
       if (existingProgram) {
         // Reuse existing program — update its metadata
         await tx.program.update({
           where: { id: existingProgram.id },
           data: {
-            owningInstitutionId: matchedInstitution?.id ?? null,
+            owningInstitutionId: null, // FIX-1: no automatic assignment
             legalMandateRef,
             rationale: progData.rationale,
             metadata: {
@@ -338,6 +353,7 @@ export async function expandPrograms(
               kpis,
               requiredCapabilities,
               mandateGap,
+              institutionAssignmentGap,
               evidenceRefs: progData.evidenceRefs,
               counterEvidence: alternativeData.counterEvidence ?? [],
               expandedAt: new Date().toISOString(),
@@ -347,29 +363,41 @@ export async function expandPrograms(
         programId = existingProgram.id;
       } else {
         // Create new Program record
-        const newProgram = await tx.program.create({
-          data: {
-            tenantId,
-            strategyVersionId: strategyVersion.id,
-            title: progData.title,
-            sector: progData.sector,
-            owningInstitutionId: matchedInstitution?.id ?? null,
-            legalMandateRef,
-            rationale: progData.rationale,
-            status: "draft", // NEVER auto-approved
-            metadata: {
-              simulated: true,
+        try {
+          const newProgram = await tx.program.create({
+            data: {
+              tenantId,
+              strategyVersionId: strategyVersion.id,
+              title: progData.title,
               sector: progData.sector,
-              kpis,
-              requiredCapabilities,
-              mandateGap,
-              evidenceRefs: progData.evidenceRefs,
-              counterEvidence: alternativeData.counterEvidence ?? [],
-              expandedAt: new Date().toISOString(),
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
-        programId = newProgram.id;
+              owningInstitutionId: null, // FIX-1: no automatic assignment
+              legalMandateRef,
+              rationale: progData.rationale,
+              status: "draft",
+              metadata: {
+                simulated: true,
+                sector: progData.sector,
+                kpis,
+                requiredCapabilities,
+                mandateGap,
+                institutionAssignmentGap,
+                evidenceRefs: progData.evidenceRefs,
+                counterEvidence: alternativeData.counterEvidence ?? [],
+                expandedAt: new Date().toISOString(),
+              } as unknown as Prisma.InputJsonValue,
+            },
+          });
+          programId = newProgram.id;
+        } catch (createErr) {
+          // FIX-3: P2002 = unique constraint violation (migration 0019)
+          if (createErr && typeof createErr === "object" && "code" in createErr && createErr.code === "P2002") {
+            // A concurrent worker already created this program. Find it and reuse.
+            // Note: we're inside withAuthenticatedTenant, so the transaction is aborted.
+            // We throw a special error that the outer catch handles.
+            throw { _p2002: true, _title: progData.title };
+          }
+          throw createErr;
+        }
       }
 
       // 6g. Build the contract object
@@ -378,11 +406,12 @@ export async function expandPrograms(
         title: progData.title,
         sector: progData.sector,
         strategyVersionId: strategyVersion.id,
-        owningInstitutionId: matchedInstitution?.id ?? null,
-        owningInstitutionCode: matchedInstitution?.code ?? null,
-        owningInstitutionName: matchedInstitution?.displayName ?? null,
+        owningInstitutionId: null,
+        owningInstitutionCode: null,
+        owningInstitutionName: null,
         legalMandateRef,
         mandateGap,
+        institutionAssignmentGap,
         requiredCapabilities,
         kpis,
         rationale: progData.rationale,
@@ -399,6 +428,7 @@ export async function expandPrograms(
       withInstitution: programContracts.filter((p) => p.owningInstitutionId !== null).length,
       withMandateGap: programContracts.filter((p) => p.mandateGap).length,
       withoutInstitution: programContracts.filter((p) => p.owningInstitutionId === null).length,
+      withInstitutionAssignmentGap: programContracts.filter((p) => p.institutionAssignmentGap).length,
     };
 
     return {
@@ -406,6 +436,14 @@ export async function expandPrograms(
       programs: programContracts,
       summary,
     };
+  }).catch(async (err) => {
+    // FIX-3: Handle P2002 outside the failed transaction (same pattern as Strategy Composer)
+    if (err && typeof err === "object" && "_p2002" in err) {
+      // Re-run expandPrograms — the idempotent findFirst will find the existing program
+      // This is safe because the second call will find the program created by the concurrent worker
+      return expandPrograms(session, input);
+    }
+    throw err;
   });
 }
 
@@ -445,6 +483,7 @@ export async function getPrograms(
         owningInstitutionName: inst?.displayName ?? null,
         legalMandateRef: p.legalMandateRef,
         mandateGap: (meta.mandateGap as boolean) ?? true,
+        institutionAssignmentGap: (meta.institutionAssignmentGap as boolean) ?? true,
         requiredCapabilities: (meta.requiredCapabilities as RequiredCapability[]) ?? [],
         kpis: (meta.kpis as KPI[]) ?? [],
         rationale: p.rationale ?? "",

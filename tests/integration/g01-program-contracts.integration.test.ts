@@ -396,13 +396,15 @@ describeIntegration("Program Contracts — expandPrograms", () => {
       id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
     });
 
-    // Compose with agriculture (has institution: Ministry of Planning) + education (may or may not)
+    // Compose with agriculture + education
     const versionId = await getComposedVersionId(session, [objectiveAgricultureId, objectiveEducationId]);
     const result = await expandPrograms(session, { strategyAlternativeId: versionId });
 
-    // At least one program should have an institution assigned
-    const withInstitution = result.programs.filter((p) => p.owningInstitutionId !== null);
-    expect(withInstitution.length).toBeGreaterThan(0);
+    // FIX-1: NO institutions assigned (no documented sector-institution relationships)
+    for (const prog of result.programs) {
+      expect(prog.owningInstitutionId).toBeNull();
+      expect(prog.institutionAssignmentGap).toBe(true);
+    }
 
     // All programs should have mandateGap=true (Demolandia has no legal mandates)
     for (const prog of result.programs) {
@@ -411,7 +413,141 @@ describeIntegration("Program Contracts — expandPrograms", () => {
 
     // Summary should be correct
     expect(result.summary.totalPrograms).toBe(result.programs.length);
-    expect(result.summary.withInstitution).toBe(withInstitution.length);
+    expect(result.summary.withInstitution).toBe(0); // FIX-1: no automatic assignment
+    expect(result.summary.withInstitutionAssignmentGap).toBe(result.programs.length);
     expect(result.summary.withMandateGap).toBe(result.programs.length);
+  });
+});
+
+// ============================================================
+// 01-04-FIX: Institutional & Program Integrity Closure
+// ============================================================
+describeIntegration("01-04-FIX: Integrity Closure", () => {
+  beforeEach(async () => {
+    await adminClient.task.deleteMany({
+      where: { type: { in: ["strategy-compose", "gap-analysis", "baseline-compute"] }, tenantId: tenantAId },
+    });
+    const strategies = await adminClient.strategy.findMany({
+      where: { tenantId: tenantAId, compositionBatchId: { startsWith: "compose-" } },
+    });
+    for (const s of strategies) {
+      const versions = await adminClient.strategyVersion.findMany({ where: { strategyId: s.id } });
+      const versionIds = versions.map((v: { id: string }) => v.id);
+      if (versionIds.length > 0) {
+        await adminClient.program.deleteMany({ where: { strategyVersionId: { in: versionIds } } });
+      }
+      await adminClient.strategyVersion.deleteMany({ where: { strategyId: s.id } });
+      await adminClient.strategy.delete({ where: { id: s.id } });
+    }
+  });
+
+  // FIX-1: No automatic institution assignment
+  it("FIX-1: agriculture program does NOT get assigned to an arbitrary ministry", async () => {
+    const { expandPrograms } = await import("@/lib/state-builder/program-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const versionId = await getComposedVersionId(session, [objectiveAgricultureId]);
+    const result = await expandPrograms(session, { strategyAlternativeId: versionId });
+
+    for (const prog of result.programs) {
+      // FIX-1: owningInstitutionId must be null (no documented relationship)
+      expect(prog.owningInstitutionId).toBeNull();
+      expect(prog.owningInstitutionCode).toBeNull();
+      expect(prog.owningInstitutionName).toBeNull();
+      expect(prog.institutionAssignmentGap).toBe(true);
+    }
+  });
+
+  // FIX-2: KPI only when exactly one objective in the sector
+  it("FIX-2: single objective in sector → KPI generated with correct sourceKind", async () => {
+    const { expandPrograms } = await import("@/lib/state-builder/program-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // Agriculture has exactly one objective → KPI should be generated
+    const versionId = await getComposedVersionId(session, [objectiveAgricultureId]);
+    const result = await expandPrograms(session, { strategyAlternativeId: versionId });
+
+    const agPrograms = result.programs.filter((p) => p.sector === "agriculture");
+    for (const prog of agPrograms) {
+      if (prog.kpis.length > 0) {
+        const kpi = prog.kpis[0]!;
+        expect(kpi.name).toBe("agricultural_gdp_growth_rate");
+        expect(kpi.sourceKind).toBe("official_statistics");
+      }
+    }
+  });
+
+  it("FIX-2: multiple objectives in same sector → no KPI (no arbitrary choice)", async () => {
+    const { expandPrograms } = await import("@/lib/state-builder/program-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // Create a second objective in the finance sector (inflation + unemployment both in finance)
+    const secondFinanceObjective = await adminClient.objective.create({
+      data: {
+        tenantId: tenantAId, countryId,
+        title: "[FIX-2-TEST] Second finance objective",
+        targetMetric: "unemployment_rate",
+        targetValue: "8%",
+        horizon: 3, status: "active", createdBy: adminUserId,
+        metadata: { sector: "finance", fictional: true },
+      } as never,
+    });
+
+    try {
+      const versionId = await getComposedVersionId(session, [objectiveInflationId, secondFinanceObjective.id]);
+      const result = await expandPrograms(session, { strategyAlternativeId: versionId });
+
+      // Finance programs should have NO KPIs (two objectives in same sector)
+      const financePrograms = result.programs.filter((p) => p.sector === "finance");
+      for (const prog of financePrograms) {
+        expect(prog.kpis.length).toBe(0); // FIX-2: no arbitrary KPI selection
+      }
+    } finally {
+      await adminClient.objective.delete({ where: { id: secondFinanceObjective.id } });
+    }
+  });
+
+  // FIX-3: Program uniqueness under concurrency
+  it("FIX-3: DB unique constraint on (tenantId, strategyVersionId, title)", async () => {
+    const indexExists = await adminClient.$queryRaw<{ exists: boolean }[]>`
+      SELECT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE indexname = 'programs_tenant_strategyVersion_title_key'
+      ) AS exists
+    `;
+    expect(indexExists[0]!.exists).toBe(true);
+  });
+
+  it("FIX-3: re-expansion does not create duplicate programs", async () => {
+    const { expandPrograms } = await import("@/lib/state-builder/program-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const versionId = await getComposedVersionId(session, [objectiveAgricultureId]);
+
+    // First expansion
+    const result1 = await expandPrograms(session, { strategyAlternativeId: versionId });
+
+    // Second expansion (same version)
+    const result2 = await expandPrograms(session, { strategyAlternativeId: versionId });
+
+    // Same programs (no duplicates)
+    expect(result2.programs.length).toBe(result1.programs.length);
+    const ids1 = new Set(result1.programs.map((p) => p.programId));
+    const ids2 = new Set(result2.programs.map((p) => p.programId));
+    expect(ids2).toEqual(ids1);
+
+    // Verify DB has no duplicates
+    const dbPrograms = await adminClient.program.findMany({
+      where: { tenantId: tenantAId, strategyVersionId: versionId },
+    });
+    expect(dbPrograms.length).toBe(result1.programs.length);
   });
 });

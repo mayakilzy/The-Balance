@@ -75,14 +75,14 @@ echo "[3/8] Running prisma migrate deploy..."
 bunx prisma migrate deploy
 echo "  Migrations applied."
 
-# Verify migrations table exists and has 16+ entries (16 G00 + 2 G01 = 17 minimum)
+# Verify migrations table exists and has 16+ entries (16 G00 + 3 G01 = 17 minimum)
 MIGRATION_COUNT=$(PGPASSWORD=balance_admin_dev_only psql -h "$DB_HOST" -p "$DB_PORT" -U balance_admin -d "$DB_NAME" -t -A <<'SQL'
 SELECT count(*) FROM "_prisma_migrations" WHERE finished_at IS NOT NULL;
 SQL
 )
 echo "  Applied migrations: $MIGRATION_COUNT"
-if [ "$MIGRATION_COUNT" -lt 18 ]; then
-  echo "FAIL: Expected at least 17 migrations (16 G00 + 2 G01), found $MIGRATION_COUNT"
+if [ "$MIGRATION_COUNT" -lt 19 ]; then
+  echo "FAIL: Expected at least 17 migrations (16 G00 + 3 G01), found $MIGRATION_COUNT"
   exit 1
 fi
 
@@ -236,7 +236,7 @@ fi
 
 echo ""
 echo "=== FRESH INSTALL VERIFICATION: PASS ==="
-echo "  - Database started empty, all 17 migrations applied (16 G00 + 2 G01)"
+echo "  - Database started empty, all 17 migrations applied (16 G00 + 3 G01)"
 echo "  - Seed created Demolandia v2 fixture + test users + G01 data"
 echo "  - RLS enabled on all 22 private tables (14 G00 + 8 G01)"
 echo "  - balance_app: not superuser, no bypassrls"
