@@ -277,8 +277,11 @@ describeIntegration("Cross-tenant Objective isolation (RLS, balance_app)", () =>
 describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", () => {
   beforeEach(async () => {
     // Clean up test configs from previous runs.
-    // Use a robust filter: delete all configs with seededBy=[TEST-01-00] in metadata.
-    // Prisma 6 Json filter: use `equals` (not `string_equals` which doesn't exist).
+    // The seed creates CountryPackConfig for (tenantA, country) and (tenantB, country),
+    // so we can't `create` new ones — we use `upsert` in the tests to override
+    // the seeded configs with test-specific data. The cleanup here restores the
+    // seeded state by deleting any config with seededBy=[TEST-01-00] metadata.
+    // (The seeded configs have metadata.seededBy = "01-00-seed", so they're not touched.)
     await adminClient.countryPackConfig.deleteMany({
       where: { metadata: { path: ["seededBy"], equals: "[TEST-01-00]" } as never },
     });
@@ -287,10 +290,21 @@ describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", (
   it("two tenants in the same country have DIFFERENT PRIVATE CountryPackConfigs", async () => {
     // This is THE test for Correction A: same country, two tenants, each with
     // their own PRIVATE config. RLS must prevent cross-tenant visibility.
+    //
+    // The seed already created configs for (tenantA, country) and (tenantB, country).
+    // We UPSERT (override) them with test-specific data tagged with seededBy=[TEST-01-00]
+    // so beforeEach can clean them up on re-runs.
 
-    // Setup: admin creates a config for each tenant (same country, different sectors).
-    await adminClient.countryPackConfig.create({
-      data: {
+    // Override Tenant A's config
+    await adminClient.countryPackConfig.upsert({
+      where: { tenantId_countryId: { tenantId: tenantAId, countryId } },
+      update: {
+        sectors: ["agriculture", "education"] as never,
+        observability: { agriculture: "FULL" } as never,
+        planningAssumptions: { note: "Tenant A's private plan" } as never,
+        metadata: { seededBy: "[TEST-01-00]" } as never,
+      },
+      create: {
         tenantId: tenantAId,
         countryId,
         sectors: ["agriculture", "education"] as never,
@@ -299,8 +313,16 @@ describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", (
         metadata: { seededBy: "[TEST-01-00]" } as never,
       },
     });
-    await adminClient.countryPackConfig.create({
-      data: {
+    // Override Tenant B's config
+    await adminClient.countryPackConfig.upsert({
+      where: { tenantId_countryId: { tenantId: tenantBId, countryId } },
+      update: {
+        sectors: ["finance", "monetary"] as never,
+        observability: { finance: "FULL" } as never,
+        planningAssumptions: { note: "Tenant B's private plan" } as never,
+        metadata: { seededBy: "[TEST-01-00]" } as never,
+      },
+      create: {
         tenantId: tenantBId,
         countryId,
         sectors: ["finance", "monetary"] as never,
@@ -341,9 +363,17 @@ describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", (
   });
 
   it("Tenant A cannot read Tenant B's CountryPackConfig planning assumptions", async () => {
-    // Setup: Tenant B has a config with private planning assumptions.
-    await adminClient.countryPackConfig.create({
-      data: {
+    // Setup: Override Tenant B's config with private planning assumptions.
+    // (The seed already created a config for (tenantB, country); we upsert to override.)
+    await adminClient.countryPackConfig.upsert({
+      where: { tenantId_countryId: { tenantId: tenantBId, countryId } },
+      update: {
+        sectors: ["finance"] as never,
+        observability: {} as never,
+        planningAssumptions: { secret: "TENANT_B_CONFIDENTIAL" } as never,
+        metadata: { seededBy: "[TEST-01-00]" } as never,
+      },
+      create: {
         tenantId: tenantBId,
         countryId,
         sectors: ["finance"] as never,
@@ -354,12 +384,18 @@ describeIntegration("Cross-tenant CountryPackConfig isolation (Correction A)", (
     });
 
     // Act: Tenant A queries configs for the same country.
+    // Tenant A's seeded config has sectors ["agriculture","finance","education","health"],
+    // so it should see exactly 1 config (its own). Tenant B's config must NOT be visible.
     await appClient.$transaction(async (tx) => {
       await setTenantContext(tx, tenantAId);
       const configs = await tx.countryPackConfig.findMany({ where: { countryId } });
-      // Tenant A should see ZERO configs (it has no config for this country in this test).
-      // Tenant B's config must NOT be visible.
-      expect(configs.length).toBe(0);
+      // Tenant A should see ONLY its own config (1 row).
+      // Tenant B's config must NOT be visible (RLS blocks it).
+      expect(configs.length).toBe(1);
+      expect(configs[0]!.tenantId).toBe(tenantAId);
+      // Verify Tenant A's config does NOT contain Tenant B's secret.
+      const planningAssumptions = configs[0]!.planningAssumptions as unknown as Record<string, unknown>;
+      expect(planningAssumptions.secret).toBeUndefined();
     });
   });
 });
