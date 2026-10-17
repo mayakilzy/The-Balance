@@ -37,7 +37,6 @@ import {
   completeTask,
   failTask,
 } from "@/lib/task-service";
-import { createStrategy, createStrategyVersion } from "@/lib/strategy-service";
 import { computeBaseline } from "@/lib/state-builder/baseline-service";
 import { computeGaps } from "@/lib/state-builder/gap-analysis-service";
 import { getLLMProvider } from "@/lib/llm";
@@ -186,11 +185,15 @@ function sanitizeEvidenceForPrompt(claim: string): string {
 }
 
 // ============================================================
-// FIX-2: EVIDENCE VALIDATION
+// FIX-B: FAIL-CLOSED EVIDENCE VALIDATION
 // ============================================================
 // Before storing alternatives, validate that ALL evidence refs point to
 // real evidence in the tenant + country scope. This is an independent
 // verification — not just trusting that baseline indicators are correct.
+//
+// FIX-B: FAIL-CLOSED — evidence WITHOUT metadata.countryId is REJECTED.
+// If we can't prove the evidence belongs to this country, we don't accept it
+// as a supporting reference for a country-specific strategy.
 
 async function validateEvidenceRefs(
   tx: Prisma.TransactionClient,
@@ -230,18 +233,26 @@ async function validateEvidenceRefs(
     );
   }
 
-  // FIX-2: Verify each evidence belongs to the requested country (via metadata.countryId)
+  // FIX-B: FAIL-CLOSED — verify each evidence belongs to the requested country
+  // Evidence WITHOUT metadata.countryId is REJECTED (not allowed as "unattributed")
   for (const evidence of evidenceRows) {
     const meta = (evidence.metadata ?? {}) as unknown as Record<string, unknown>;
     const evidenceCountryId = typeof meta.countryId === "string" ? meta.countryId : null;
-    if (evidenceCountryId && evidenceCountryId !== countryId) {
+
+    if (!evidenceCountryId) {
+      throw new Error(
+        `Evidence validation failed: evidence ${evidence.id} has no metadata.countryId. ` +
+        `Fail-closed policy: evidence must be explicitly attributed to a country. ` +
+        `Unattributed evidence cannot be used as a supporting reference.`
+      );
+    }
+
+    if (evidenceCountryId !== countryId) {
       throw new Error(
         `Evidence validation failed: evidence ${evidence.id} belongs to country ${evidenceCountryId}, ` +
         `not the requested country ${countryId}. Cross-country evidence rejected.`
       );
     }
-    // Evidence without metadata.countryId is allowed but noted as "unattributed"
-    // (the baseline already filtered these — this is defense-in-depth)
   }
 }
 
@@ -356,13 +367,18 @@ function generateAlternativeA(ctx: CompositionContext): Omit<StrategyAlternative
     }
   }
 
+  // FIX-C: riskTolerance affects the assumptions wording
+  const riskTolerance = (ctx as CompositionContext & { _riskTolerance?: string })._riskTolerance ?? "moderate";
+  const riskLabel = riskTolerance === "conservative" ? "Conservative risk posture" :
+    riskTolerance === "bold" ? "Bold risk posture" : "Moderate risk posture";
+
   return {
     title: "Evidence-Led Incremental Reform",
     description:
       "A conservative strategy focusing on sectors with verified evidence. " +
       "Programs are proposed only where supporting evidence exists. " +
       "Unknown gaps are explicitly noted — no fabricated programs for sectors without data.",
-    approach: "Incremental, evidence-backed reform prioritizing sectors with FULL or PARTIAL observability.",
+    approach: `Incremental, evidence-backed reform prioritizing sectors with FULL or PARTIAL observability. ${riskLabel}.`,
     objectives: objectives.map((obj) => ({
       objectiveId: obj.id,
       objectiveTitle: obj.title,
@@ -372,6 +388,7 @@ function generateAlternativeA(ctx: CompositionContext): Omit<StrategyAlternative
     programs,
     assumptions: [
       "Existing evidence reflects the current state of the country (fictional Demolandia).",
+      `Risk tolerance: ${riskTolerance}. ${riskTolerance === "conservative" ? "Only programs with verified evidence are proposed." : riskTolerance === "bold" ? "Bolder assumptions allowed but still evidence-grounded." : "Standard incremental approach."}`,
       "Incremental reform is feasible within the stated time horizons.",
       "No major exogenous shocks are assumed.",
       "Programs are proposed only where evidence supports them — no speculation.",
@@ -448,13 +465,28 @@ function generateAlternativeB(ctx: CompositionContext): Omit<StrategyAlternative
     }
   }
 
+  // FIX-C: prioritySector — reorder programs so the priority sector comes first
+  const prioritySector = (ctx as CompositionContext & { _prioritySector?: string })._prioritySector;
+  if (prioritySector) {
+    programs.sort((a, b) => {
+      if (a.sector === prioritySector && b.sector !== prioritySector) return -1;
+      if (b.sector === prioritySector && a.sector !== prioritySector) return 1;
+      return 0;
+    });
+  }
+
+  // FIX-C: riskTolerance affects the assumptions wording
+  const riskTolerance = (ctx as CompositionContext & { _riskTolerance?: string })._riskTolerance ?? "moderate";
+
   return {
     title: "Gap-Targeted Accelerated Development",
     description:
       "A bolder strategy targeting all objectives, including sectors with unknown gaps. " +
       "Programs for unknown sectors are explicitly labeled exploratory. " +
-      "Counter-evidence is preserved and noted as a risk factor.",
-    approach: "Accelerated development prioritizing gap closure across all sectors, with explicit data-limitation notes.",
+      "Counter-evidence is preserved and noted as a risk factor." +
+      (prioritySector ? ` Priority sector: ${prioritySector}.` : ""),
+    approach: "Accelerated development prioritizing gap closure across all sectors, with explicit data-limitation notes." +
+      (prioritySector ? ` ${prioritySector} is prioritized.` : ""),
     objectives: objectives.map((obj) => ({
       objectiveId: obj.id,
       objectiveTitle: obj.title,
@@ -464,6 +496,7 @@ function generateAlternativeB(ctx: CompositionContext): Omit<StrategyAlternative
     programs,
     assumptions: [
       "Existing evidence reflects the current state (fictional Demolandia).",
+      `Risk tolerance: ${riskTolerance}. ${riskTolerance === "bold" ? "Higher risk accepted for faster gap closure." : riskTolerance === "conservative" ? "Conservative approach even within accelerated framework." : "Moderate risk accepted."}`,
       "Accelerated reform is feasible but carries higher risk.",
       "Unknown gaps require additional evidence collection before implementation.",
       "Counter-evidence may indicate implementation challenges.",
@@ -696,76 +729,114 @@ export async function composeStrategies(
     const altBData = generateAlternativeB(ctx);
     const allAltData = [altAData, altBData];
 
-    // FIX-2: Validate ALL evidence refs BEFORE storing anything
+    // FIX-A: Validate ALL evidence refs BEFORE storing anything
     // This prevents partial storage if evidence is invalid
     await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
       await validateEvidenceRefs(tx, tenantId, input.countryId, allAltData);
     });
 
-    // FIX-1: Idempotent resume — check if strategies already exist for this batch
-    // If a previous run crashed after storing some (but not all) alternatives,
-    // we resume by reusing existing strategies and only creating missing ones.
+    // FIX-A: Idempotent resume with DB-level unique constraint.
+    // Migration 0018 added a UNIQUE partial index on (tenantId, compositionBatchId, title).
+    // This means even if two concurrent workers try to create the same alternative,
+    // the DB rejects the second insertion with a unique violation.
+    //
+    // Each alternative is stored in a SINGLE atomic transaction:
+    //   1. Try to findFirst by (tenantId, compositionBatchId, title)
+    //   2. If found → reuse (from a crashed previous run)
+    //   3. If not found → create Strategy + compositionBatchId + version metadata atomically
+    //      If a concurrent worker wins → unique violation → catch → findFirst → reuse
+    //
+    // This closes the crash window: the Strategy row is created WITH compositionBatchId
+    // in the same INSERT, and the version metadata is updated in the same transaction.
     const alternatives: StrategyAlternative[] = [];
 
     for (const altData of allAltData) {
-      // Check if a strategy with this title + compositionBatchId already exists
-      const existingStrategy = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-        return tx.strategy.findFirst({
+      const result = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+        // Step 1: Check if strategy already exists (from a crashed previous run)
+        const existing = await tx.strategy.findFirst({
           where: { tenantId, compositionBatchId, title: altData.title },
           include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
         });
-      });
 
-      if (existingStrategy && existingStrategy.versions.length > 0) {
-        // Strategy already exists from a previous (crashed) run — reuse it
-        alternatives.push({
-          ...altData,
-          strategyId: existingStrategy.id,
-          versionId: existingStrategy.versions[0]!.id,
-        });
-        continue;
-      }
+        if (existing && existing.versions.length > 0) {
+          // Reuse existing strategy from a previous (crashed) run
+          return { strategyId: existing.id, versionId: existing.versions[0]!.id, reused: true };
+        }
 
-      // Create new Strategy + StrategyVersion
-      const { strategyId, versionId } = await createStrategy(session, {
-        title: altData.title,
-        description: altData.description,
-        initialContent: JSON.stringify(altData, null, 2),
-      });
+        // Step 2: Create new Strategy WITH compositionBatchId in a single INSERT
+        // (not createStrategy → update — all in one atomic operation)
+        try {
+          const strategy = await tx.strategy.create({
+            data: {
+              tenantId,
+              title: altData.title,
+              description: altData.description,
+              status: "draft",
+              compositionBatchId, // set at creation time — no window for crash
+              createdBy: session.user.id,
+            },
+          });
 
-      // Update the strategy with compositionBatchId + version metadata
-      await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
-        await tx.strategy.update({
-          where: { id: strategyId },
-          data: { compositionBatchId },
-        });
+          // Create the version with full metadata in the SAME transaction
+          const version = await tx.strategyVersion.create({
+            data: {
+              strategyId: strategy.id,
+              tenantId,
+              versionNumber: 1,
+              content: JSON.stringify(altData, null, 2),
+              status: "draft", // NEVER approved
+              createdBy: session.user.id,
+              metadata: {
+                simulated: true,
+                provider: provider.name,
+                compositionBatchId,
+                llmResponse: llmResult.content.slice(0, 1000),
+                llmModel: llmResult.model,
+                inputSnapshot: altData.inputSnapshot,
+                approach: altData.approach,
+                objectives: altData.objectives,
+                programs: altData.programs,
+                assumptions: altData.assumptions,
+                counterEvidence: altData.counterEvidence,
+                uncertainty: altData.uncertainty,
+                dependencies: altData.dependencies,
+              } as unknown as Prisma.InputJsonValue,
+            },
+          });
 
-        await tx.strategyVersion.update({
-          where: { id: versionId },
-          data: {
-            metadata: {
-              simulated: true,
-              provider: provider.name,
-              compositionBatchId,
-              llmResponse: llmResult.content.slice(0, 1000),
-              llmModel: llmResult.model,
-              inputSnapshot: altData.inputSnapshot,
-              approach: altData.approach,
-              objectives: altData.objectives,
-              programs: altData.programs,
-              assumptions: altData.assumptions,
-              counterEvidence: altData.counterEvidence,
-              uncertainty: altData.uncertainty,
-              dependencies: altData.dependencies,
-            } as unknown as Prisma.InputJsonValue,
-          },
-        });
+          // Record event
+          await tx.event.create({
+            data: {
+              tenantId,
+              eventType: "strategy.created",
+              actor: session.user.id,
+              entityType: "strategy",
+              entityId: strategy.id,
+              metadata: { title: altData.title, compositionBatchId, versionId: version.id } as Prisma.InputJsonValue,
+            },
+          });
+
+          return { strategyId: strategy.id, versionId: version.id, reused: false };
+        } catch (createErr) {
+          // FIX-A: Unique constraint violation (P2002) — a concurrent worker
+          // already created this strategy. Find it and reuse.
+          if (createErr && typeof createErr === "object" && "code" in createErr && createErr.code === "P2002") {
+            const concurrent = await tx.strategy.findFirst({
+              where: { tenantId, compositionBatchId, title: altData.title },
+              include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
+            });
+            if (concurrent && concurrent.versions.length > 0) {
+              return { strategyId: concurrent.id, versionId: concurrent.versions[0]!.id, reused: true };
+            }
+          }
+          throw createErr;
+        }
       });
 
       alternatives.push({
         ...altData,
-        strategyId,
-        versionId,
+        strategyId: result.strategyId,
+        versionId: result.versionId,
       });
     }
 

@@ -51,8 +51,8 @@ SQL
 if [ "$MIGRATION_COUNT" = "ERROR" ] || [ -z "$MIGRATION_COUNT" ]; then
   echo "  FAIL: Cannot read _prisma_migrations table (balance_admin may lack access or table missing)"
   FAIL=1
-elif [ "$MIGRATION_COUNT" -lt 17 ]; then
-  echo "  FAIL: Expected >=17 applied migrations (16 G00 + 1 G01), found $MIGRATION_COUNT"
+elif [ "$MIGRATION_COUNT" -lt 18 ]; then
+  echo "  FAIL: Expected >=17 applied migrations (16 G00 + 2 G01), found $MIGRATION_COUNT"
   FAIL=1
 else
   echo "  OK: $MIGRATION_COUNT migrations applied"
