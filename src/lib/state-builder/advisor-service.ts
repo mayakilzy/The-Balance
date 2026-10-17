@@ -264,10 +264,113 @@ export async function advise(
       }
     }
 
+    // === FIX-1: OBJECTIVE SCOPE INTEGRITY ===
+    // Verify that every objectiveId in the input:
+    //   1. Exists in the tenant scope
+    //   2. Belongs to the requested country
+    //   3. Is linked to at least one of the alternatives being compared
+    //      (via the strategy version's inputSnapshot.objectiveIds)
+    const objectiveRecords = await tx.objective.findMany({
+      where: { tenantId, id: { in: input.objectiveIds } },
+      select: { id: true, countryId: true },
+    });
+    const objectiveMap = new Map(objectiveRecords.map((o) => [o.id, o]));
+
+    // Check 1: every objectiveId exists in tenant
+    const missingObjectives = input.objectiveIds.filter((oid) => !objectiveMap.has(oid));
+    if (missingObjectives.length > 0) {
+      throw new AdvisorValidationError(
+        `${missingObjectives.length} objective(s) not found in tenant scope: ` +
+        `${missingObjectives.join(", ")}. ` +
+        `All objectiveIds must exist in the same tenant as the alternatives.`
+      );
+    }
+
+    // Check 2: every objective belongs to the requested country
+    const wrongCountryObjectives = input.objectiveIds.filter((oid) => {
+      const obj = objectiveMap.get(oid);
+      return obj && obj.countryId !== input.countryId;
+    });
+    if (wrongCountryObjectives.length > 0) {
+      throw new AdvisorValidationError(
+        `${wrongCountryObjectives.length} objective(s) belong to a different country: ` +
+        `${wrongCountryObjectives.join(", ")}. ` +
+        `All objectives must belong to country ${input.countryId}.`
+      );
+    }
+
+    // Check 3: every objective must be linked to at least one alternative
+    // (via the strategy version's inputSnapshot.objectiveIds)
+    const allLinkedObjectiveIds = new Set<string>();
+    for (const sv of strategyVersions) {
+      const meta = (sv.metadata ?? {}) as Record<string, unknown>;
+      const inputSnapshot = (meta.inputSnapshot ?? {}) as Record<string, unknown>;
+      const svObjectiveIds = inputSnapshot.objectiveIds;
+      if (Array.isArray(svObjectiveIds)) {
+        for (const oid of svObjectiveIds) {
+          if (typeof oid === "string") allLinkedObjectiveIds.add(oid);
+        }
+      }
+    }
+    const unlinkedObjectives = input.objectiveIds.filter((oid) => !allLinkedObjectiveIds.has(oid));
+    if (unlinkedObjectives.length > 0) {
+      throw new AdvisorValidationError(
+        `${unlinkedObjectives.length} objective(s) are not linked to any of the alternatives ` +
+        `being compared: ${unlinkedObjectives.join(", ")}. ` +
+        `All objectives must appear in at least one alternative's inputSnapshot.objectiveIds. ` +
+        `The advisor cannot produce a recommendation for objectives that were not part of ` +
+        `the strategy composition.`
+      );
+    }
+
+    // === FIX-2: EXTRACT ACTUAL COUNTER-EVIDENCE ===
+    // Counter-evidence is stored in the strategy version metadata as an array of
+    // { evidenceId, claim, sourceCode }. These are ACTUAL counter-evidence references
+    // from the composer (01-03), NOT data-quality warnings about missing/refuted evidence.
+    // We extract them here and pass to buildAdvisoryReport.
+    const actualCounterEvidence: Array<{
+      evidenceId: string;
+      claim: string;
+      sourceCode: string | null;
+      altId: string;
+    }> = [];
+    for (const sv of strategyVersions) {
+      const meta = (sv.metadata ?? {}) as Record<string, unknown>;
+      const counterEvidence = (meta.counterEvidence as Array<{
+        evidenceId: string;
+        claim: string;
+        sourceCode: string | null;
+      }> | undefined) ?? [];
+      for (const ce of counterEvidence) {
+        if (ce.evidenceId && ce.claim) {
+          actualCounterEvidence.push({
+            evidenceId: ce.evidenceId,
+            claim: ce.claim,
+            sourceCode: ce.sourceCode ?? null,
+            altId: sv.id,
+          });
+        }
+      }
+    }
+
+    // Also fetch the verificationStatus of each counter-evidence item
+    // (to include in the counter-evidence description)
+    const counterEvidenceIds = [...new Set(actualCounterEvidence.map((ce) => ce.evidenceId))];
+    const counterEvidenceRecords = counterEvidenceIds.length > 0
+      ? await tx.evidence.findMany({
+          where: { tenantId, id: { in: counterEvidenceIds } },
+          select: { id: true, verificationStatus: true, claim: true },
+        })
+      : [];
+    const counterEvidenceStatusMap = new Map<string, { verificationStatus: string; claim: string }>();
+    for (const e of counterEvidenceRecords) {
+      counterEvidenceStatusMap.set(e.id, { verificationStatus: e.verificationStatus, claim: e.claim });
+    }
+
     // === BUILD THE ADVISORY REPORT ===
     // The advisor analyzes the comparison matrix + produces a conditional
     // recommendation (or abstains if evidence is insufficient).
-    const report = buildAdvisoryReport(input, comparison);
+    const report = buildAdvisoryReport(input, comparison, actualCounterEvidence, counterEvidenceStatusMap);
 
     return report;
   });
@@ -284,7 +387,14 @@ export async function advise(
 
 function buildAdvisoryReport(
   input: AdviseInput,
-  comparison: ScenarioComparison
+  comparison: ScenarioComparison,
+  actualCounterEvidence: Array<{
+    evidenceId: string;
+    claim: string;
+    sourceCode: string | null;
+    altId: string;
+  }>,
+  counterEvidenceStatusMap: Map<string, { verificationStatus: string; claim: string }>
 ): AdvisoryReport {
   const conditions: string[] = [];
   const risks: string[] = [];
@@ -347,18 +457,21 @@ function buildAdvisoryReport(
     );
   }
 
-  // 3. Evidence strength
+  // 3. Evidence strength — FIX-2: data-quality warnings go to risks/uncertainty, NOT counterEvidence
   const altsWithMissingEvidence = comparison.matrix.evidenceStrength.filter(
     (e) => e.citationsOfMissingEvidence > 0 || e.citationsOfRefutedEvidence > 0
   );
   if (altsWithMissingEvidence.length > 0) {
+    // FIX-2: This is a DATA-QUALITY WARNING, not counter-evidence.
+    // Move to risks + uncertainty (was incorrectly in counterEvidence before).
     uncertaintySources.push(
       `${altsWithMissingEvidence.length} alternative(s) cite missing or refuted evidence — ` +
       `some claims lack evidentiary support.`
     );
-    counterEvidence.push(
+    risks.push(
       `${altsWithMissingEvidence.length} alternative(s) have evidence references pointing to ` +
-      `missing or refuted evidence. These claims should be treated with caution.`
+      `missing or refuted evidence. These claims should be treated with caution. ` +
+      `(This is a data-quality warning, not counter-evidence.)`
     );
   }
   // Always add the evidence-integrity caveat (from 01-08-FIX)
@@ -367,6 +480,41 @@ function buildAdvisoryReport(
     `citing verified evidence does NOT mean the claim is supported. ` +
     `The claim-to-evidence support relationship has not been verified.`
   );
+
+  // === FIX-2: ACTUAL COUNTER-EVIDENCE ===
+  // Counter-evidence is extracted from the strategy version metadata (by the caller).
+  // These are actual references to Evidence rows that were identified as counter-evidence
+  // by the composer (01-03). We present them with their evidenceId, claim, sourceCode,
+  // and verificationStatus.
+  //
+  // IMPORTANT: a counter-evidence reference is NOT the same as a refuted evidence citation.
+  // Counter-evidence is evidence that CONTRADICTS or WEAKENS a strategic claim.
+  // Refuted evidence is evidence whose own verification failed.
+  // We do NOT assume that refuted evidence is counter-evidence for a different claim.
+  if (actualCounterEvidence.length > 0) {
+    for (const ce of actualCounterEvidence) {
+      const status = counterEvidenceStatusMap.get(ce.evidenceId);
+      const verificationStatus = status?.verificationStatus ?? "unknown";
+      const evidenceClaim = status?.claim ?? ce.claim;
+      counterEvidence.push(
+        `Counter-evidence (from alternative ${ce.altId}): evidenceId=${ce.evidenceId}, ` +
+        `sourceCode=${ce.sourceCode ?? "unknown"}, verificationStatus="${verificationStatus}". ` +
+        `Claim: "${evidenceClaim}". ` +
+        `Note: this is an actual counter-evidence reference from the strategy composition (01-03), ` +
+        `not a data-quality warning. The counter-evidence's verificationStatus reflects the ` +
+        `evidence's own verification, NOT a verification that it contradicts any specific claim.`
+      );
+    }
+  } else {
+    // No actual counter-evidence was found in the strategy version metadata.
+    // This is NOT a claim that no counter-evidence exists in reality.
+    counterEvidence.push(
+      `No counter-evidence references were found in the strategy version metadata. ` +
+      `This is NOT a claim that no counter-evidence exists in reality — ` +
+      `it means the system did not find registered counter-evidence within the scope ` +
+      `of the data used. Additional counter-evidence may exist outside the system.`
+    );
+  }
 
   // 4. Risk profile
   const altsWithHighRisks = comparison.matrix.riskProfile.filter(
@@ -400,32 +548,38 @@ function buildAdvisoryReport(
     );
   }
 
-  // === DETERMINE ABSTENTION ===
-  // The advisor abstains from recommending a specific alternative when:
-  //   - ANY alternative has an invalid timeline (temporal violations)
-  //   - ALL alternatives lack cost data (no financial comparison possible)
-  //   - ANY alternative has > 50% claims citing missing/refuted evidence
+  // === FIX-3: DETERMINE ABSTENTION (no arbitrary 50% threshold) ===
+  // The advisor abstains from recommending a specific alternative ONLY when:
+  //   - ANY alternative has an invalid timeline (temporal violations make the
+  //     timeline recommendation indefensible)
+  //   - ALL alternatives lack cost data (financial comparison is impossible —
+  //     a key dimension of the comparison is entirely missing)
+  //
+  // The previous >50% evidence-gap threshold was arbitrary and unsupported.
+  // Evidence gaps are surfaced as risks + uncertainty, NOT as automatic
+  // abstention triggers. A single alternative with evidence gaps does NOT
+  // prevent the advisor from analyzing the other alternatives.
+  //
+  // When some alternatives have data gaps but others don't, the advisor
+  // produces a PARTIAL recommendation (conditional, with caveats about
+  // the alternatives that lack data).
   const hasInvalidTimeline = altsWithInvalidTimeline.length > 0;
   const allLackCost = comparison.matrix.totalCost.every((c) => c.programsWithEstimate === 0);
-  const hasSevereEvidenceGaps = comparison.matrix.evidenceStrength.some(
-    (e) => e.totalEvidenceRefs > 0 &&
-           (e.citationsOfMissingEvidence + e.citationsOfRefutedEvidence) / e.totalEvidenceRefs > 0.5
-  );
 
-  const abstained = hasInvalidTimeline || allLackCost || hasSevereEvidenceGaps;
+  const abstained = hasInvalidTimeline || allLackCost;
 
   // === BUILD RECOMMENDATION TEXT ===
   let recommendation: string;
   if (abstained) {
     const reasons: string[] = [];
     if (hasInvalidTimeline) {
-      reasons.push("one or more alternatives have invalid (contradictory) schedules");
+      reasons.push(
+        `${altsWithInvalidTimeline.length} alternative(s) have invalid (contradictory) schedules ` +
+        `— temporal recommendations are indefensible`
+      );
     }
     if (allLackCost) {
       reasons.push("no alternative has budget estimates — financial comparison is impossible");
-    }
-    if (hasSevereEvidenceGaps) {
-      reasons.push("one or more alternatives have severe evidence gaps (>50% of citations point to missing/refuted evidence)");
     }
     recommendation =
       `Insufficient evidence to recommend a specific alternative. ` +
@@ -440,6 +594,14 @@ function buildAdvisoryReport(
     const evidenceRich = comparison.matrix.evidenceStrength.filter((e) => e.citationsOfVerifiedEvidence > 0);
     const riskLow = comparison.matrix.riskProfile.filter((r) => r.highRisks === 0 && r.conflictCount === 0);
 
+    // FIX-3: distinguish between "all alternatives have complete data" vs "some have gaps"
+    const someLackCost = altsWithoutCost.length > 0 && !allLackCost;
+    const partialNote = someLackCost
+      ? ` NOTE: ${altsWithoutCost.length} alternative(s) have partial cost data — ` +
+        `the financial comparison is incomplete. The recommendation is conditional on ` +
+        `completing the missing cost estimates.`
+      : "";
+
     recommendation =
       `Conditional recommendation: the comparison matrix is available for ${comparison.alternatives.length} alternatives. ` +
       `${costComplete.length} alternative(s) have complete cost data, ` +
@@ -447,7 +609,8 @@ function buildAdvisoryReport(
       `${riskLow.length} have no high/critical risks or conflicts. ` +
       `The advisor does NOT declare a winner — the decision is the human's responsibility. ` +
       `Review the conditions, risks, counterEvidence, and alternativeViewpoints before deciding. ` +
-      `All recommendations are conditional on verifying the assumptions and resolving the identified data gaps.`;
+      `All recommendations are conditional on verifying the assumptions and resolving the identified data gaps.` +
+      partialNote;
   }
 
   // === BUILD UNCERTAINTY SUMMARY ===
