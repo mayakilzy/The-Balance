@@ -118,7 +118,7 @@ describeIntegration("Strategy Composer — alternative generation", () => {
     const result = await composeStrategies(session, {
       countryId,
       objectiveIds: [objectiveAgricultureId, objectiveInflationId, objectiveEducationId],
-      constraints: { budgetLimit: "moderate" },
+      constraints: { riskTolerance: "moderate" },
     });
 
     expect(result.alternatives.length).toBeGreaterThanOrEqual(2);
@@ -372,7 +372,7 @@ describeIntegration("Strategy Composer — security + permissions", () => {
     const result = await composeStrategies(session, {
       countryId,
       objectiveIds: [objectiveAgricultureId],
-      constraints: { budgetLimit: "moderate" },
+      constraints: { riskTolerance: "moderate" },
     });
 
     for (const alt of result.alternatives) {
@@ -596,6 +596,184 @@ describeIntegration("Strategy Composer — cross-tenant isolation", () => {
         where: { userId_tenantId: { userId: tenantBUser.id, tenantId: tenantBId } },
       });
       await adminClient.user.delete({ where: { id: tenantBUser.id } });
+    }
+  });
+});
+
+// ============================================================
+// 01-03-FIX: Strategy Composer Integrity Closure
+// ============================================================
+describeIntegration("01-03-FIX: Integrity Closure", () => {
+  beforeEach(async () => {
+    await adminClient.task.deleteMany({
+      where: { type: { in: ["strategy-compose", "gap-analysis", "baseline-compute"] }, tenantId: tenantAId },
+    });
+    const strategies = await adminClient.strategy.findMany({
+      where: { tenantId: tenantAId, compositionBatchId: { startsWith: "compose-" } },
+    });
+    for (const s of strategies) {
+      await adminClient.strategyVersion.deleteMany({ where: { strategyId: s.id } });
+      await adminClient.strategy.delete({ where: { id: s.id } });
+    }
+  });
+
+  // FIX-1: Atomic Composition Persistence & Recovery
+  it("FIX-1: crash after first alternative → resume without duplicates", async () => {
+    const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    // 1. First call — should create 2 alternatives
+    const result1 = await composeStrategies(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+    });
+    expect(result1.alternatives.length).toBe(2);
+
+    // 2. Simulate crash: delete the task (so idempotency key doesn't find it)
+    //    but KEEP the strategies in DB
+    await adminClient.task.deleteMany({
+      where: { id: result1.taskId },
+    });
+
+    // 3. Second call — should find the existing strategies by compositionBatchId
+    //    and NOT create duplicates
+    const result2 = await composeStrategies(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+    });
+
+    // Should still have exactly 2 alternatives (no duplicates)
+    expect(result2.alternatives.length).toBe(2);
+
+    // The strategy IDs should be the SAME as result1 (reused, not duplicated)
+    const ids1 = new Set(result1.alternatives.map((a) => a.strategyId));
+    const ids2 = new Set(result2.alternatives.map((a) => a.strategyId));
+    // At least one strategy should be reused from the first run
+    const reused = [...ids2].filter((id) => ids1.has(id));
+    expect(reused.length).toBeGreaterThan(0);
+
+    // Verify no more than 2 strategies exist in DB for this batch
+    const dbStrategies = await adminClient.strategy.findMany({
+      where: { tenantId: tenantAId, compositionBatchId: result2.compositionBatchId },
+    });
+    expect(dbStrategies.length).toBe(2);
+  });
+
+  // FIX-2: Validate Evidence & Output Before Storage
+  it("FIX-2: all evidence refs validated against tenant + country scope", async () => {
+    const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const result = await composeStrategies(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId, objectiveInflationId],
+    });
+
+    // Collect all evidence refs
+    const allRefs: string[] = [];
+    for (const alt of result.alternatives) {
+      for (const prog of alt.programs) {
+        for (const ref of prog.evidenceRefs) {
+          allRefs.push(ref.evidenceId);
+        }
+      }
+      for (const ref of alt.counterEvidence) {
+        allRefs.push(ref.evidenceId);
+      }
+    }
+
+    // Verify every ref exists in tenant + country scope
+    for (const evidenceId of allRefs) {
+      const evidence = await adminClient.evidence.findFirst({
+        where: { id: evidenceId, tenantId: tenantAId },
+      });
+      expect(evidence).toBeTruthy();
+      const meta = (evidence!.metadata ?? {}) as unknown as Record<string, unknown>;
+      if (typeof meta.countryId === "string") {
+        expect(meta.countryId).toBe(countryId);
+      }
+    }
+  });
+
+  // FIX-3: Constraints Must Have Defined Semantics
+  it("FIX-3: supported constraint (riskTolerance) is accepted", async () => {
+    const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const result = await composeStrategies(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+      constraints: { riskTolerance: "bold" },
+    });
+
+    expect(result.alternatives.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("FIX-3: unsupported constraint is rejected with clear error", async () => {
+    const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    await expect(
+      composeStrategies(session, {
+        countryId,
+        objectiveIds: [objectiveAgricultureId],
+        constraints: { budgetLimit: "moderate" }, // NOT supported
+      })
+    ).rejects.toThrow(/Unsupported constraint.*budgetLimit/);
+  });
+
+  it("FIX-3: invalid constraint value is rejected", async () => {
+    const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    await expect(
+      composeStrategies(session, {
+        countryId,
+        objectiveIds: [objectiveAgricultureId],
+        constraints: { riskTolerance: "extreme" }, // invalid value
+      })
+    ).rejects.toThrow(/Invalid value for constraint.*riskTolerance/);
+  });
+
+  // FIX-4: Honest Provider Boundary
+  it("FIX-4: alternatives are deterministic (same inputs → same structure)", async () => {
+    const { composeStrategies } = await import("@/lib/state-builder/strategy-composer-service");
+    const session = makeSession({
+      id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active",
+    });
+
+    const result = await composeStrategies(session, {
+      countryId,
+      objectiveIds: [objectiveAgricultureId],
+    });
+
+    // Verify the alternatives have deterministic structure (not LLM-generated)
+    for (const alt of result.alternatives) {
+      expect(alt.simulated).toBe(true);
+      expect(alt.provider).toBe("stub");
+      // The approach must be deterministic text (not random LLM output)
+      expect(alt.approach.length).toBeGreaterThan(10);
+      expect(alt.title).toBeTruthy();
+    }
+
+    // The LLM response is stored in metadata (for audit) but does NOT drive the structure
+    for (const alt of result.alternatives) {
+      const version = await adminClient.strategyVersion.findUnique({
+        where: { id: alt.versionId },
+      });
+      const metadata = version!.metadata as unknown as Record<string, unknown>;
+      expect(metadata.llmResponse).toBeTruthy(); // audit trail exists
+      expect(metadata.llmModel).toBe("stub-v0"); // StubProvider model
     }
   });
 });

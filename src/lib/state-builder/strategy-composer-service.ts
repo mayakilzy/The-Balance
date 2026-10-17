@@ -110,6 +110,53 @@ export interface ComposeStrategiesInput {
   constraints?: Record<string, unknown>;
 }
 
+// ============================================================
+// FIX-3: SUPPORTED CONSTRAINTS
+// ============================================================
+// Only these constraints are recognized by the Composer. Any other
+// constraint key is rejected with a clear error — we do NOT silently
+// accept constraints we can't honor.
+
+const SUPPORTED_CONSTRAINTS: Record<string, {
+  description: string;
+  validate: (value: unknown) => boolean;
+  apply: (ctx: CompositionContext, value: unknown) => void;
+}> = {
+  prioritySector: {
+    description: "A sector to prioritize in the accelerated alternative (string, e.g., 'agriculture')",
+    validate: (v) => typeof v === "string" && v.length > 0,
+    apply: (ctx, v) => {
+      // The priority sector is noted in Alternative B's assumptions
+      // (deterministic — no fabricated commitment)
+      (ctx as CompositionContext & { _prioritySector?: string })._prioritySector = v as string;
+    },
+  },
+  riskTolerance: {
+    description: "Risk tolerance level: 'conservative' | 'moderate' | 'bold' (affects assumptions wording)",
+    validate: (v) => typeof v === "string" && ["conservative", "moderate", "bold"].includes(v),
+    apply: (ctx, v) => {
+      (ctx as CompositionContext & { _riskTolerance?: string })._riskTolerance = v as string;
+    },
+  },
+};
+
+function validateConstraints(constraints: Record<string, unknown>): void {
+  for (const key of Object.keys(constraints)) {
+    if (!SUPPORTED_CONSTRAINTS[key]) {
+      throw new Error(
+        `Unsupported constraint '${key}'. Supported constraints: ${Object.keys(SUPPORTED_CONSTRAINTS).join(", ")}. ` +
+        `We do not accept constraints we cannot honor.`
+      );
+    }
+    const spec = SUPPORTED_CONSTRAINTS[key];
+    if (!spec.validate(constraints[key])) {
+      throw new Error(
+        `Invalid value for constraint '${key}': ${JSON.stringify(constraints[key])}. ${spec.description}`
+      );
+    }
+  }
+}
+
 export interface ComposeResult {
   taskId: string;
   compositionBatchId: string;
@@ -137,6 +184,82 @@ function sanitizeEvidenceForPrompt(claim: string): string {
     .slice(0, 500); // truncate to prevent overflow
   return `"${sanitized}"`;
 }
+
+// ============================================================
+// FIX-2: EVIDENCE VALIDATION
+// ============================================================
+// Before storing alternatives, validate that ALL evidence refs point to
+// real evidence in the tenant + country scope. This is an independent
+// verification — not just trusting that baseline indicators are correct.
+
+async function validateEvidenceRefs(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  countryId: string,
+  alternatives: Array<Omit<StrategyAlternative, "strategyId" | "versionId">>
+): Promise<void> {
+  // Collect all evidence IDs from all alternatives
+  const allEvidenceIds = new Set<string>();
+  for (const alt of alternatives) {
+    for (const prog of alt.programs) {
+      for (const ref of prog.evidenceRefs) {
+        allEvidenceIds.add(ref.evidenceId);
+      }
+    }
+    for (const ref of alt.counterEvidence) {
+      allEvidenceIds.add(ref.evidenceId);
+    }
+  }
+
+  if (allEvidenceIds.size === 0) return; // no evidence to validate (exploratory programs)
+
+  // Verify each evidence ID exists in tenant scope
+  const evidenceRows = await tx.evidence.findMany({
+    where: { tenantId, id: { in: [...allEvidenceIds] } },
+    select: { id: true, metadata: true },
+  });
+
+  const foundIds = new Set(evidenceRows.map((e) => e.id));
+  const missingIds = [...allEvidenceIds].filter((id) => !foundIds.has(id));
+
+  if (missingIds.length > 0) {
+    throw new Error(
+      `Evidence validation failed: ${missingIds.length} evidence ID(s) not found in tenant scope. ` +
+      `Missing: ${missingIds.join(", ")}. ` +
+      `Strategy composition rejected — no fabricated evidence references.`
+    );
+  }
+
+  // FIX-2: Verify each evidence belongs to the requested country (via metadata.countryId)
+  for (const evidence of evidenceRows) {
+    const meta = (evidence.metadata ?? {}) as unknown as Record<string, unknown>;
+    const evidenceCountryId = typeof meta.countryId === "string" ? meta.countryId : null;
+    if (evidenceCountryId && evidenceCountryId !== countryId) {
+      throw new Error(
+        `Evidence validation failed: evidence ${evidence.id} belongs to country ${evidenceCountryId}, ` +
+        `not the requested country ${countryId}. Cross-country evidence rejected.`
+      );
+    }
+    // Evidence without metadata.countryId is allowed but noted as "unattributed"
+    // (the baseline already filtered these — this is defense-in-depth)
+  }
+}
+
+// ============================================================
+// FIX-4: HONEST PROVIDER BOUNDARY
+// ============================================================
+// The two alternatives are generated by DETERMINISTIC RULES derived from
+// the input data (baseline + gaps + objectives + evidence). The StubProvider
+// is called for AUDIT purposes only — its response is stored in metadata
+// but does NOT influence the structured output.
+//
+// This means:
+//   - No real LLM reasoning is claimed
+//   - No model-validated strategy is claimed
+//   - The alternatives are deterministic and reproducible
+//   - A real LLM provider can be swapped in later without changing the
+//     storage or API contracts (the structured output would then be
+//     derived from the LLM response instead of deterministic rules)
 
 // ============================================================
 // ALTERNATIVE GENERATION (deterministic, derived from evidence)
@@ -472,6 +595,10 @@ export async function composeStrategies(
   });
   const gaps = gapResult.report;
 
+  // FIX-3: Validate constraints BEFORE doing any work
+  const constraints = input.constraints ?? {};
+  validateConstraints(constraints);
+
   // 2. Fetch objectives (tenant-scoped, verified by gap analysis FIX-1)
   const objectives = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
     const objs = await tx.objective.findMany({
@@ -510,7 +637,7 @@ export async function composeStrategies(
     input: {
       countryId: input.countryId,
       objectiveIds: input.objectiveIds,
-      constraints: input.constraints ?? {},
+      constraints,
       fingerprint,
       compositionBatchId,
     } as unknown as Record<string, unknown>,
@@ -540,14 +667,20 @@ export async function composeStrategies(
       baseline,
       gaps,
       objectives,
-      constraints: input.constraints ?? {},
+      constraints,
       compositionBatchId,
       baselineTaskId: baseline.taskId,
       gapTaskId: gaps.taskId,
       objectiveIds: input.objectiveIds,
     };
 
-    // 6a. Call LLM provider (StubProvider — for audit, not for structured output)
+    // FIX-3: Apply constraints to the composition context
+    for (const [key, value] of Object.entries(constraints)) {
+      SUPPORTED_CONSTRAINTS[key]?.apply(ctx, value);
+    }
+
+    // 6a. Call LLM provider (StubProvider — AUDIT ONLY, not for structured output)
+    // FIX-4: The structured alternatives are derived from data, NOT from LLM text.
     const provider = getLLMProvider();
     const prompt = buildPromptForLLM(ctx);
     const llmResult = await provider.complete({
@@ -558,29 +691,55 @@ export async function composeStrategies(
       maxTokens: 500,
     });
 
-    // 6b. Generate alternatives (deterministic, derived from data)
+    // 6b. Generate alternatives (deterministic, derived from data — NOT from LLM)
     const altAData = generateAlternativeA(ctx);
     const altBData = generateAlternativeB(ctx);
+    const allAltData = [altAData, altBData];
 
-    // 6c. Store each alternative as Strategy + draft StrategyVersion
+    // FIX-2: Validate ALL evidence refs BEFORE storing anything
+    // This prevents partial storage if evidence is invalid
+    await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+      await validateEvidenceRefs(tx, tenantId, input.countryId, allAltData);
+    });
+
+    // FIX-1: Idempotent resume — check if strategies already exist for this batch
+    // If a previous run crashed after storing some (but not all) alternatives,
+    // we resume by reusing existing strategies and only creating missing ones.
     const alternatives: StrategyAlternative[] = [];
 
-    for (const altData of [altAData, altBData]) {
-      // Create Strategy with compositionBatchId
+    for (const altData of allAltData) {
+      // Check if a strategy with this title + compositionBatchId already exists
+      const existingStrategy = await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
+        return tx.strategy.findFirst({
+          where: { tenantId, compositionBatchId, title: altData.title },
+          include: { versions: { orderBy: { versionNumber: "desc" }, take: 1 } },
+        });
+      });
+
+      if (existingStrategy && existingStrategy.versions.length > 0) {
+        // Strategy already exists from a previous (crashed) run — reuse it
+        alternatives.push({
+          ...altData,
+          strategyId: existingStrategy.id,
+          versionId: existingStrategy.versions[0]!.id,
+        });
+        continue;
+      }
+
+      // Create new Strategy + StrategyVersion
       const { strategyId, versionId } = await createStrategy(session, {
         title: altData.title,
         description: altData.description,
         initialContent: JSON.stringify(altData, null, 2),
       });
 
-      // Update the strategy with compositionBatchId (via direct DB update)
+      // Update the strategy with compositionBatchId + version metadata
       await withAuthenticatedTenant(session, async ({ tx, tenantId }) => {
         await tx.strategy.update({
           where: { id: strategyId },
           data: { compositionBatchId },
         });
 
-        // Update the version metadata with full provenance
         await tx.strategyVersion.update({
           where: { id: versionId },
           data: {
@@ -588,7 +747,7 @@ export async function composeStrategies(
               simulated: true,
               provider: provider.name,
               compositionBatchId,
-              llmResponse: llmResult.content.slice(0, 1000), // audit trail (truncated)
+              llmResponse: llmResult.content.slice(0, 1000),
               llmModel: llmResult.model,
               inputSnapshot: altData.inputSnapshot,
               approach: altData.approach,
