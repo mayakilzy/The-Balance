@@ -4,7 +4,7 @@
 MISSION_ID = 02-05
 TARGET_GROUP = GROUP 02 (State Observatory) — FINAL MISSION
 BASE_COMMIT = 48b66789700086dcbdb74a8e5e46558c38886c10
-FINAL_COMMIT = <set after CI passes>
+FINAL_COMMIT = 985b1bb (on main — CI + Recovery PASS)
 ```
 
 ## DELIVERED
