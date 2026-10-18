@@ -284,52 +284,24 @@ describeIntegration("G02-L21 sentinel: FixtureTracker ownership semantics on rea
   // FINAL ACCEPTANCE ITEM 1 — Cleanup error propagation
   // ============================================================
   //
-  // Forces a REAL database error (foreign key constraint violation) by creating
-  // a StrategyVersion that is referenced by an Observation via the non-cascade
-  // FK `Observation.strategyVersion @relation(fields: [strategyVersionId], references: [id])`
-  // (no onDelete: Cascade — defaults to Restrict).
+  // Forces a REAL database error by passing a PrismaClient with an invalid
+  // connection URL (127.0.0.1:1 — closed port → ECONNREFUSED immediately).
   //
-  // The tracker tracks ONLY the StrategyVersion (not the Observation). When
-  // cleanup attempts to delete the StrategyVersion, PostgreSQL throws an FK
-  // constraint violation. The test proves:
+  // The tracker tracks a real ObservationPeriod (created with the working
+  // adminClient). When cleanup() is called with the broken client, the
+  // deleteMany call throws a connection error. The test proves:
   //   (a) the error IS surfaced (not swallowed by text-based suppression),
-  //   (b) tracking state is RETAINED after failure (caller can retry or inspect).
-  it("FINAL-1: cleanup surfaces real FK constraint errors and retains tracking state after failure", async () => {
-    // Skip if no indicator available (we need it to create an Observation).
-    if (!seededIndicatorId) {
-      console.warn("Skipping FINAL-1 test: no seeded IndicatorDefinition in tenant A");
-      return;
-    }
-
-    // Find a user in tenant A to satisfy Observation.createdBy.
-    const anyUser = await adminClient.user.findFirst({
-      where: { memberships: { some: { tenantId: tenantAId } } },
-    });
-    if (!anyUser) {
-      console.warn("Skipping FINAL-1 test: no user with membership in tenant A");
-      return;
-    }
-
-    // Create a Strategy + approved StrategyVersion (parent records).
-    const strategy = await adminClient.strategy.create({
-      data: { tenantId: tenantAId, title: "FINAL-1 Sentinel Strategy", createdBy: anyUser.id },
-    });
-    const sv = await adminClient.strategyVersion.create({
-      data: {
-        strategyId: strategy.id,
-        tenantId: tenantAId,
-        versionNumber: 1,
-        content: "{}",
-        status: "approved",
-        approvedBy: anyUser.id,
-        approvedAt: new Date(),
-        metadata: { simulated: true, source: "g02-l21-final1-sentinel" },
-        createdBy: anyUser.id,
-      },
-    });
-
-    // Create an ObservationPeriod + Observation that references the StrategyVersion.
-    // Observation.strategyVersion is a non-cascade FK → deleting the SV will fail.
+  //   (b) the error message identifies the model and the failing ID,
+  //   (c) tracking state is RETAINED after failure (caller can retry or inspect),
+  //   (d) the record still exists in the DB (verified with the working client).
+  //
+  // Rationale for broken-client approach: the Prisma schema's non-cascade FK
+  // relations between FixtureTracker-managed models are all OPTIONAL (defaulting
+  // to SetNull), so deleting a parent does not throw — it nullifies the child's
+  // FK. A broken connection is the most deterministic way to force a real DB
+  // error that exercises the cleanup error-handling path.
+  it("FINAL-1: cleanup surfaces real DB errors and retains tracking state after failure", async () => {
+    // === Create a real record using the working client. ===
     const period = await adminClient.observationPeriod.create({
       data: {
         tenantId: tenantAId,
@@ -339,58 +311,53 @@ describeIntegration("G02-L21 sentinel: FixtureTracker ownership semantics on rea
         endAt: new Date(Date.UTC(2097, 2, 31, 23, 59, 59)),
       },
     });
-    const observation = await adminClient.observation.create({
-      data: {
-        tenantId: tenantAId,
-        indicatorDefinitionId: seededIndicatorId,
-        observationPeriodId: period.id,
-        strategyVersionId: sv.id, // <-- non-cascade FK reference
-        observedValue: 1.0,
-        originType: "observed",
-        isSynthetic: true,
-        createdBy: anyUser.id,
-      },
-    });
 
     const tracker = new FixtureTracker();
-    // Track ONLY the StrategyVersion — NOT the Observation.
-    // Cleanup will try to delete the SV, but the Observation's FK blocks it.
-    tracker.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
+    tracker.trackOwned.observationPeriod({ id: period.id, createdByThisSuite: true });
     expect(tracker.trackedCount).toBe(1);
 
-    try {
-      // === Cleanup MUST throw — FK constraint violation is surfaced, not swallowed. ===
-      await expect(tracker.cleanup(adminClient)).rejects.toThrow(/FixtureTracker cleanup failed/);
+    // === Create a PrismaClient with an invalid URL — connection fails immediately. ===
+    // 127.0.0.1:1 is a privileged port with no server → ECONNREFUSED is instant on Linux.
+    // connect_timeout=1 is a safety net in case the connection attempt hangs.
+    const brokenClient = new PrismaClient({
+      datasources: { db: { url: "postgresql://nobody:nobody@127.0.0.1:1/nowhere?connect_timeout=1" } },
+    });
 
-      // The error message should mention the strategyVersion model and the failing ID.
-      // (We don't assert the exact PG error code — that varies by driver version.)
+    try {
+      // === Cleanup MUST throw — connection error is surfaced, not swallowed. ===
+      await expect(tracker.cleanup(brokenClient)).rejects.toThrow(/FixtureTracker cleanup failed/);
+
+      // === The error message MUST identify the model and the failing ID. ===
+      // Re-run to inspect the error message (cleanup is idempotent on failure —
+      // tracking state is retained, so the same ID will be retried).
+      let caughtMessage: string | null = null;
       try {
-        await tracker.cleanup(adminClient);
-        // Should not reach here.
-        expect.unreachable("cleanup should have thrown");
+        await tracker.cleanup(brokenClient);
       } catch (e) {
-        const msg = (e as Error).message;
-        expect(msg).toContain("strategyVersion");
-        expect(msg).toContain(sv.id);
+        caughtMessage = (e as Error).message;
       }
+      expect(caughtMessage).not.toBeNull();
+      expect(caughtMessage!).toContain("observationPeriod");
+      expect(caughtMessage!).toContain(period.id);
 
       // === Tracking state is RETAINED after failure. ===
       // Caller can inspect trackedCount to know there are pending records.
       expect(tracker.trackedCount).toBe(1);
 
-      // === The StrategyVersion still exists in the DB (deletion was blocked). ===
-      const svStillExists = await adminClient.strategyVersion.findUnique({ where: { id: sv.id } });
-      expect(svStillExists).not.toBeNull();
-
-      // === The Observation still exists (we never tracked it). ===
-      const obsStillExists = await adminClient.observation.findUnique({ where: { id: observation.id } });
-      expect(obsStillExists).not.toBeNull();
+      // === The record still exists in the DB (deletion was never attempted). ===
+      // We verify with the WORKING client (adminClient), not the broken one.
+      const stillExists = await adminClient.observationPeriod.findUnique({
+        where: { id: period.id },
+      });
+      expect(stillExists).not.toBeNull();
+      expect(stillExists?.id).toBe(period.id);
     } finally {
-      // Manual cleanup in the correct FK order.
-      await adminClient.observation.deleteMany({ where: { id: observation.id } });
+      // === Manual cleanup using the working client. ===
       await adminClient.observationPeriod.deleteMany({ where: { id: period.id } });
-      await adminClient.strategyVersion.deleteMany({ where: { id: sv.id } });
-      await adminClient.strategy.deleteMany({ where: { id: strategy.id } });
+      // brokenClient.$disconnect() is safe even if never connected.
+      await brokenClient.$disconnect().catch(() => {
+        /* ignore disconnect errors on a broken client */
+      });
     }
   });
 
