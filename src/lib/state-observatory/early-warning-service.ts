@@ -64,18 +64,20 @@ export async function assessEarlyWarning(
 
   // FIX 2: analyzeAggregateIndependence also opens its own transaction.
   // Call it BEFORE our tx to avoid nesting.
-  let aggregateAnalysis: AggregateIndependenceAnalysis | null = null;
-  try {
-    aggregateAnalysis = await analyzeAggregateIndependence(session, {
+  //
+  // FINAL FIX (02-03 corrective closeout): do NOT catch errors from
+  // analyzeAggregateIndependence. Database failures, authorization errors,
+  // and integrity violations must PROPAGATE — they must NOT be silently
+  // converted to observabilityMode="LOW". A legitimate LOW is returned
+  // by the service itself as a valid result; an exception means something
+  // broke, and the caller must know.
+  const aggregateAnalysis: AggregateIndependenceAnalysis = await analyzeAggregateIndependence(
+    session,
+    {
       indicatorId: params.indicatorId,
       observationPeriodId: params.observationPeriodId,
-    });
-  } catch {
-    // If aggregate analysis fails, we proceed with null — the early warning
-    // will report insufficient_data. But this is NOT a silent error swallow:
-    // the failure is captured in the limitationReason.
-    aggregateAnalysis = null;
-  }
+    }
+  );
 
   // Now enter our own single transaction for the remaining DB queries
   return withAuthenticatedTenant(
@@ -95,9 +97,11 @@ export async function assessEarlyWarning(
       const currentVarianceDirection: "better" | "worse" | "neutral" | "unknown" =
         (varianceRecord?.varianceDirection as "better" | "worse" | "neutral" | "unknown") ?? "unknown";
 
-      // FIX 2: Use REAL observabilityMode from aggregate independence analysis
+      // FIX 2: Use REAL observabilityMode from aggregate independence analysis.
+      // FINAL FIX: aggregateAnalysis is never null (errors propagate, not caught).
+      // A legitimate LOW comes from the service itself; we never fabricate it.
       const observabilityMode: "FULL" | "PARTIAL" | "LOW" =
-        aggregateAnalysis?.observabilityMode ?? "LOW";
+        aggregateAnalysis.observabilityMode;
 
       // Assemble contributing factors
       const contributingFactors = {
@@ -118,8 +122,7 @@ export async function assessEarlyWarning(
 
       if (
         trend.dataSufficiency === "insufficient" ||
-        observabilityMode === "LOW" ||
-        aggregateAnalysis === null
+        observabilityMode === "LOW"
       ) {
         warningLevel = "insufficient_data";
         warningReason = "insufficient data for advisory assessment";

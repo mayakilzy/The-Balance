@@ -135,3 +135,54 @@ describe("U-15: isAdvisoryOnly + noCausalClaims always true", () => {
     expect(result.isCalibrated).toBe(false); // CORRECTION 4: always uncalibrated
   });
 });
+
+describe("FINAL FIX: aggregate independence errors propagate (not converted to LOW)", () => {
+  it("throws when analyzeAggregateIndependence throws (does NOT return LOW)", async () => {
+    (analyzeTemporalTrend as any).mockResolvedValue({
+      trendDirection: "improving", dataSufficiency: "sufficient",
+      magnitudeOfChange: "unknown", consistencyIssues: [], temporalGaps: [],
+    });
+    // Simulate a database/authorization failure in aggregate independence
+    (analyzeAggregateIndependence as any).mockRejectedValue(
+      new Error("database connection failed")
+    );
+
+    await expect(
+      assessEarlyWarning(null, {
+        indicatorId: "ind_1",
+        observationPeriodId: "p1",
+        strategyVersionId: "sv_1",
+      })
+    ).rejects.toThrow("database connection failed");
+  });
+
+  it("preserves legitimate LOW from analyzeAggregateIndependence (does not throw)", async () => {
+    (analyzeTemporalTrend as any).mockResolvedValue({
+      trendDirection: "unknown", dataSufficiency: "insufficient",
+      magnitudeOfChange: "unknown", consistencyIssues: [], temporalGaps: [],
+    });
+    // Legitimate LOW — the service returned a valid result, not an error
+    (analyzeAggregateIndependence as any).mockResolvedValue({
+      observabilityMode: "LOW",
+      limitationReason: "no observations in scope",
+      sourceDiversity: { totalSources: 0, independentSourceCount: 0 },
+      evidenceStrength: { verifiedEvidenceCount: 0 },
+      nationalClaimSupport: { level: "none" },
+      coverage: { distinctGeoRefIds: 0 },
+      honesty: { geographicCoverageNotEqualsIndependence: true, simulatedData: true },
+      totalObservations: 0,
+    });
+    mockTx.varianceRecord.findFirst.mockResolvedValue(null);
+
+    const result = await assessEarlyWarning(null, {
+      indicatorId: "ind_1",
+      observationPeriodId: "p1",
+      strategyVersionId: "sv_1",
+    });
+
+    // Legitimate LOW → insufficient_data (NOT a thrown error)
+    expect(result.warningLevel).toBe("insufficient_data");
+    expect(result.contributingFactors.observabilityMode).toBe("LOW");
+    expect(result.limitationReason).toContain("LOW");
+  });
+});
