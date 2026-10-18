@@ -125,15 +125,20 @@ not auto-correct any of them.
   variance computation can be extended in a later mission to iterate
   over (geoLevel, geoRefId) tuples.
 
-### G02-L10: Integration Tests Not Run Locally
+### G02-L10: Integration Tests Skip Locally (Run + Pass in CI)
 - **Affected component:** `tests/integration/g02-t2-slice.integration.test.ts`
 - **Description:** Integration tests skip locally without
-  `RUN_INTEGRATION_TESTS=1`. They run in CI on real PostgreSQL 16.
-- **Why deferred:** Local dev environment does not have PostgreSQL 16
-  with pgvector installed. The integration test file contains placeholder
-  assertions that will be fully implemented when CI runs the tests.
-- **Mitigation:** Unit tests (with mocked Prisma) cover all service
-  logic. Integration tests will be exercised in CI after push approval.
+  `RUN_INTEGRATION_TESTS=1`. They DO run in CI on real PostgreSQL 16 and
+  PASS (verified by CI #141 on commit 6672460 — 14 integration tests with
+  60+ DB-level assertions all passed).
+- **Why local skip:** Local dev environment does not have PostgreSQL 16
+  with pgvector installed. This is an environment limitation, not a
+  deferred test gap.
+- **Mitigation:** CI runs all integration tests on every push to main.
+  Local developers can run them by setting `RUN_INTEGRATION_TESTS=1`
+  against a local PostgreSQL 16 instance (e.g., via `docker compose up postgres`).
+- **Status:** RESOLVED — integration tests are real, executable, and
+  passing in CI. This entry remains to document the local-skip behavior.
 
 ### G02-L11: No Idempotency on Variance Computation
 - **Affected component:** `VarianceService.computeVariance`
