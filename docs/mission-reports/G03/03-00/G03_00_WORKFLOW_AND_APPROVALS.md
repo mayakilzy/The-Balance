@@ -2,10 +2,32 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Workflow specification (DESIGN ONLY — no code)
-> **Date:** 2026-10-18
+> **Date:** 2026-10-18 (revision 2 — post owner review)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — awaiting owner + reviewer approval
+> **Status:** REVISED per owner directive — re-awaiting final approval
 > **Companion to:** `G03_00_ARCHITECTURE_PROPOSAL.md` §5
+
+> ⚠️ **REVISION NOTE (2026-10-18 rev 2)**: This document specifies the workflow from rev 1.
+> The owner directive D5 expanded the lifecycle from **3 states to 4 distinct states**:
+> 1. Human approval (`ReformApproval`)
+> 2. Implementation completion (`ReformAction.status = completed`)
+> 3. Execution verification (`ReformVerification.verificationStatus = verified`) — F6 pattern
+> 4. **Descriptive outcome measurement** (`ReformFeedbackLoop`) — SEPARATE from verification
+>
+> The owner's directive: "افصل دائماً: Human approval. Implementation completion. Execution verification. Descriptive outcome measurement."
+>
+> This separation is epistemically critical: verification (state 3) is about the **action** (was the memo issued?);
+> measurement (state 4) is about the **outcome** (did the indicator change?). They are independent —
+> a reform can be verified without being measured, or measured without being verified.
+>
+> See `G03_00_OPEN_DECISIONS.md` §6 (D5 revised) for the full 4-state model.
+>
+> **D6 coordination workflow** (two-level approval: coordination plan + per-participant proposal) is
+> documented in `G03_00_THREAT_MODEL.md` §6. The coordination flow does NOT use majority rule —
+> `active` state requires ALL linked proposals to be approved.
+>
+> The workflow content below remains accurate for the core reform flow. A full content update
+> integrating the 4-state model + coordination workflow will be done if the owner requires it.
 
 ---
 

@@ -1,11 +1,11 @@
-# G03-00 — Mission Roadmap
+# G03-00 — Mission Roadmap (Revised)
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Mission roadmap (DESIGN ONLY — no code)
-> **Date:** 2026-10-18
+> **Date:** 2026-10-18 (revision 2 — post owner review)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — awaiting owner + reviewer approval
-> **Companion to:** `G03_00_ARCHITECTURE_PROPOSAL.md` §16
+> **Status:** REVISED per owner directive — re-awaiting final approval
+> **Companion to:** `G03_00_OPEN_DECISIONS.md` (revised), `G03_00_THREAT_MODEL.md` (new)
 
 ---
 
@@ -21,742 +21,653 @@ This document specifies the **mission decomposition** for GROUP 03 — the seque
 - Dependencies + constraints
 - Clear completion evidence
 
-### 1.1 Decomposition Principle
+### 1.1 Decomposition Principle (Revised per Owner Directive)
 
 Missions are decomposed to be:
 1. **Small enough** to review in a single pass by the technical reviewer (ChatGPT)
 2. **Large enough** to deliver meaningful functionality (no "one table per mission")
 3. **Sequential** — each mission builds on the previous (no parallel missions in G03)
 4. **Schema-isolated** — only ONE mission (03-01) touches the schema; all others have schema diff = 0
+5. **Vertical slice early** (NEW per owner directive) — a working end-to-end reform flow is validated EARLY, then expanded incrementally
 
-### 1.2 Mission Count Rationale
+### 1.2 Owner Directive on Vertical Slice
 
-7 missions (1 design + 1 schema + 5 service) is the right granularity:
-- **03-00** (this mission): Architecture design — sets the foundation
-- **03-01**: Schema bootstrap — single migration, 7 tables, 9 permissions, triggers, RLS
-- **03-02**: Proposal + Alternative services — the core CRUD + lifecycle
-- **03-03**: Comparison + Advisor services — deterministic comparison + LLM advisory
-- **03-04**: Approval workflow — atomic approval + evidence snapshot + denied audit
-- **03-05**: Action + Update tracking — implementation progress + append-only updates
-- **03-06**: Verification + Feedback loop — F6 verification + descriptive feedback to observatory
+> "أفضّل أن يقدّم GROUP 03 في مرحلة مبكرة مساراً رأسياً صغيراً يعمل فعلياً: رصد مشكلة ← إعداد مقترح ← مراجعة بشرية ← اعتماد ← تسجيل إجراء ← التحقق من تنفيذه. ثم نتوسع في البدائل المتعددة والتنسيق المؤسسي والتحليل الاستشاري. وبهذه الطريقة نتحقق من صلاحية العقود مبكراً، بدلاً من اكتشاف مشكلات التكامل في نهاية المجموعة."
 
-This mirrors G02's pattern (6 missions: 1 bootstrap + 5 service). G03 adds one more service mission because the reform loop has more phases than the observatory loop.
+This is a fundamental shift in decomposition strategy. The original roadmap built capabilities breadth-first (each mission was a complete layer: all proposals, then all alternatives, then all approvals). The revised roadmap builds capabilities depth-first for a single-tenant flow, then expands to multi-alternative, multi-institution, and LLM-advisory.
 
-### 1.3 Estimated Effort
+### 1.3 Mission Count (Revised)
 
-| Mission | Estimated tests added | Estimated code lines | Estimated duration |
-|---------|-----------------------|---------------------|-------------------|
-| 03-00 | 0 (docs only) | ~3000 (7 design docs) | Design |
-| 03-01 | ~25 (15 unit + 10 integration) | ~400 (migration) + ~100 (permissions) + ~200 (seed) | Schema |
-| 03-02 | ~45 (25 unit + 20 integration) | ~800 (2 services + contracts + routes) | Service |
-| 03-03 | ~35 (20 unit + 15 integration) | ~600 (2 services + routes) | Service |
-| 03-04 | ~25 (15 unit + 10 integration) | ~500 (1 service + routes + sentinel tests) | Service |
-| 03-05 | ~35 (20 unit + 15 integration) | ~700 (2 services + routes) | Service |
-| 03-06 | ~25 (15 unit + 10 integration) | ~600 (2 services + routes + sentinel tests) | Service |
-| **TOTAL** | **~190 new tests** | **~6800 LOC** | 7 missions |
+**9 missions** (was 7 in rev 1):
+- 03-00: Architecture design (this mission)
+- 03-01: Schema bootstrap (single migration, 11 tables, 13 permissions, triggers, RLS)
+- 03-02: Vertical Slice — minimum viable single-tenant reform (proposal + simple approval + action + verification + feedback)
+- 03-03: Reform Alternatives (multiple options per proposal + selection)
+- 03-04: Reform Comparison + Advisor (deterministic comparison + LLM advisory)
+- 03-05: Enhanced Approval Workflow (evidence snapshots + denied audit + supersession)
+- 03-06: Multi-Institution Coordination (4 coordination tables + 2-level approval + shared snapshots)
+- 03-07: Coordination Vertical Slice (end-to-end coordination flow)
+- 03-08: Polish + Closure (hardening, sentinel regression tests, G03 closure documents)
 
-**Target at end of G03**: ~1007 tests passed | 10 skipped | 0 failed (up from 817 at end of G02).
+### 1.4 Number of Tables/Services/Tests — Estimates, Not Goals
 
----
+Per owner directive:
 
-## 2. Mission Sequence
+> "لكننا لا نحتاج إلى تجميد 7 جداول و11 خدمة و30 واجهة API ونحو 190 اختباراً لمجرد أنها أصبحت مكتوبة في وثائق التصميم. هذه أرقام تقديرية، ويجب أن تتبع الوظائف المطلوبة، لا العكس."
 
-```
-03-00 (DESIGN)  ──→  03-01 (SCHEMA)  ──→  03-02 (PROPOSAL+ALTERNATIVE)
-                                                  │
-                                                  ▼
-                                          03-03 (COMPARISON+ADVISOR)
-                                                  │
-                                                  ▼
-                                          03-04 (APPROVAL)
-                                                  │
-                                                  ▼
-                                          03-05 (ACTION+UPDATES)
-                                                  │
-                                                  ▼
-                                          03-06 (VERIFICATION+FEEDBACK)
-```
+The numbers below are **estimates derived from the design**. They will be adjusted as the design evolves in implementation. They are NOT commitments.
 
-Each arrow is a hard dependency:
-- 03-01 requires 03-00 to be approved (architecture must be frozen first)
-- 03-02 requires 03-01 to be approved (tables must exist before services can be written)
-- 03-03 requires 03-02 (alternatives must exist before they can be compared)
-- 03-04 requires 03-02 + 03-03 (approval references alternatives; may use advisor-drafted rationale)
-- 03-05 requires 03-04 (actions are created from approved proposals)
-- 03-06 requires 03-05 (verification + feedback apply to completed actions)
+| Resource | Estimate (revised) | Note |
+|----------|-------------------|------|
+| Tables | 11 (7 core + 4 coordination) | D1 + D6 |
+| Services | 12 (11 core + 1 coordination) | May consolidate or split during implementation |
+| API routes | ~35 | Estimated from service count |
+| New tests | ~210 (was ~190) | Adjusted for +2 missions + coordination tests |
+| Missions | 9 (was 7) | +1 coordination, +1 vertical slice |
 
 ---
 
-## 3. Mission 03-00 — Architecture & Scope Foundation (THIS MISSION)
+## 2. Mission Sequence (Revised)
+
+```
+03-00 (DESIGN)
+  │
+  ▼
+03-01 (SCHEMA — 11 tables, 13 permissions, RLS, triggers, threats T1-T10 mitigations)
+  │
+  ▼
+03-02 (VERTICAL SLICE — minimum viable single-tenant reform flow)
+  │  alert → proposal (single alternative) → approval → action → verification → feedback
+  │
+  ▼
+03-03 (REFORM ALTERNATIVES — multiple options + selection)
+  │
+  ▼
+03-04 (COMPARISON + ADVISOR — deterministic comparison + LLM advisory)
+  │
+  ▼
+03-05 (ENHANCED APPROVAL — evidence snapshots + denied audit + supersession)
+  │
+  ▼
+03-06 (COORDINATION — multi-institution coordination services)
+  │
+  ▼
+03-07 (COORDINATION VERTICAL SLICE — end-to-end coordination flow)
+  │
+  ▼
+03-08 (POLISH + CLOSURE — hardening + sentinel tests + G03 closure docs)
+```
+
+---
+
+## 3. Mission 03-00 — Architecture & Scope Foundation (THIS MISSION — REVISED)
 
 ### 3.1 Goal
 
-Establish the architectural foundation for GROUP 03: domain model, workflow, contracts, security policy, mission roadmap, and open decisions. No code, no migrations — design documents only.
+Establish the architectural foundation for GROUP 03: domain model, workflow, contracts, security policy, threat model, mission roadmap, and open decisions. No code, no migrations — design documents only.
 
-### 3.2 Scope
+### 3.2 Scope (Revised)
 
 - Read all G00/G01/G02 authoritative documents
+- **Study the Institution-Tenant relationship** (per owner directive — was missed in rev 1)
 - Analyze existing service contracts, schemas, ADRs
-- Design G03 architecture (7 tables, 9 permissions, 11 services)
-- Produce 7 design documents in `docs/mission-reports/G03/03-00/`
+- Design G03 architecture (11 tables, 13 permissions, 12 services)
+- Produce 8 design documents (was 7 — added THREAT_MODEL.md)
 - Identify open decisions requiring owner approval
+- **Per-limitation G02 dependency assessment** (D8 revised)
 
-### 3.3 Expected Files
+### 3.3 Deliverables
 
 | File | Type | Purpose |
 |------|------|---------|
-| `docs/mission-reports/G03/03-00/G03_00_ARCHITECTURE_PROPOSAL.md` | Design | Architecture overview |
-| `docs/mission-reports/G03/03-00/G03_00_DOMAIN_MODEL.md` | Design | Table schemas + RLS + triggers |
-| `docs/mission-reports/G03/03-00/G03_00_WORKFLOW_AND_APPROVALS.md` | Design | Lifecycle + state machines |
-| `docs/mission-reports/G03/03-00/G03_00_INTEGRATION_CONTRACTS.md` | Design | Service signatures + Zod schemas |
-| `docs/mission-reports/G03/03-00/G03_00_SECURITY_AND_EVIDENCE_POLICY.md` | Design | Security + evidence + LLM |
-| `docs/mission-reports/G03/03-00/G03_00_MISSION_ROADMAP.md` | Design | Mission decomposition |
-| `docs/mission-reports/G03/03-00/G03_00_OPEN_DECISIONS.md` | Design | Decisions for owner |
+| `G03_00_ARCHITECTURE_PROPOSAL.md` | Design (revised) | Architecture overview |
+| `G03_00_DOMAIN_MODEL.md` | Design (revised) | Table schemas + RLS + triggers |
+| `G03_00_WORKFLOW_AND_APPROVALS.md` | Design (revised) | Lifecycle + state machines |
+| `G03_00_INTEGRATION_CONTRACTS.md` | Design (revised) | Service signatures + Zod schemas |
+| `G03_00_SECURITY_AND_EVIDENCE_POLICY.md` | Design (revised) | Security + evidence + LLM + threats |
+| `G03_00_MISSION_ROADMAP.md` | Design (revised — this file) | Mission decomposition |
+| `G03_00_OPEN_DECISIONS.md` | Design (revised) | Decisions for owner |
+| `G03_00_THREAT_MODEL.md` | Design (NEW) | Threat model for coordination |
 
 ### 3.4 Acceptance Criteria
 
-- [ ] All 7 documents produced
+- [ ] All 8 documents produced (was 7)
 - [ ] Architecture honors all 14 inherited invariants
-- [ ] 10 new G03 invariants proposed
-- [ ] Domain model specifies 7 tables with fields, indexes, RLS, triggers
-- [ ] Workflow specifies all state transitions
-- [ ] Contracts specify all service signatures + Zod schemas
-- [ ] Security policy covers RLS, RBAC, audit, evidence, LLM, F6, attribution, publication
-- [ ] Mission roadmap decomposes G03 into 7 missions (1 design + 1 schema + 5 service)
-- [ ] Open decisions documented with rationale + trade-offs
+- [ ] 10 new G3 invariants proposed (unchanged)
+- [ ] Threat model identifies and mitigates 10 coordination threats (NEW)
+- [ ] Domain model specifies 11 tables (was 7) — 7 core + 4 coordination
+- [ ] Workflow specifies 4 distinct lifecycle states (was 3) — separates verification from measurement
+- [ ] Contracts specify all service signatures + Zod schemas (expanded for coordination + D3 hypothesis schema)
+- [ ] Security policy covers RLS (coordination-aware), RBAC (13 permissions), audit, evidence, LLM, F6, attribution, publication, **threat model**
+- [ ] Mission roadmap decomposes G03 into 9 missions (was 7) — includes vertical slice
+- [ ] Open decisions documented with rationale + trade-offs (D1-D9, with D6 elevated + D9 new)
 - [ ] No code changes (schema diff = 0, src/ diff = 0)
 - [ ] No migrations created
 - [ ] No permissions changed
 - [ ] CI passes (no regressions — docs-only commit)
 - [ ] Recovery passes (no schema changes)
 
-### 3.5 Definition of Done
+### 3.5 Completion Evidence (to be filled after commit)
 
-1. All 7 documents written + committed
-2. `bun run lint` passes
-3. `bunx tsc --noEmit` passes (no TypeScript changes)
-4. CI workflow passes (Lint + Typecheck + Test + Integration — same as 817 tests)
-5. Recovery workflow passes (Fresh Install + Backup/Restore drill)
-6. Owner reviews + ChatGPT reviews + issues FINAL PASS / PENDING / FAIL
-7. Mission report published (this set of documents IS the mission report)
-8. **Owner approves the architecture before 03-01 begins**
-
-### 3.6 Dependencies
-
-- None (this is the first G03 mission)
-- Builds on approved G00 + G01 + G02 state (HEAD = `bc052b6`)
-
-### 3.7 Completion Evidence
-
-- Final SHA: (to be filled after commit)
-- CI run: (to be filled after push)
-- Recovery run: (to be filled after push)
+- Final SHA: (after commit)
+- CI run: (after push)
+- Recovery run: (after push)
 - Test count: 817 passed | 10 skipped | 0 failed (unchanged — docs only)
 
 ---
 
-## 4. Mission 03-01 — Schema Bootstrap
+## 4. Mission 03-01 — Schema Bootstrap (Revised)
 
 ### 4.1 Goal
 
-Create the database foundation for GROUP 03: 1 migration with 7 new tables, 9 new permissions, RLS policies, cross-tenant triggers, F6 trigger, attribution trigger, supersession trigger. Plus seed extension for Demolandia.
+Create the database foundation for GROUP 03: 1 migration with **11 new tables** (was 7), **13 new permissions** (was 9), RLS policies including **coordination-aware RLS via SECURITY DEFINER helper**, cross-tenant triggers, F6 trigger, attribution trigger, supersession trigger, **coordination-specific triggers**. Plus seed extension for Demolandia.
 
 ### 4.2 Scope
 
 - Create `prisma/migrations/20261018000022_g03_reform_bootstrap/migration.sql`
-- Update `prisma/schema.prisma` with 7 new models
-- Update `src/lib/permissions.ts` with 9 new permissions
-- Extend `prisma/seed-ontology.ts` with sample reform data (additive, idempotent)
+- Update `prisma/schema.prisma` with 11 new models
+- Update `src/lib/permissions.ts` with 13 new permissions
+- Extend `prisma/seed-ontology.ts` with sample reform data (including 1 coordination example)
+- **Create SECURITY DEFINER helper function** `is_coordination_participant(text)`
 - NO service code (src/lib/reform/ not created yet)
 - NO API routes (src/app/api/v1/reform/ not created yet)
 
-### 4.3 Expected Files
+### 4.3 Tables Created (11)
 
-| File | Type | Purpose |
-|------|------|---------|
-| `prisma/schema.prisma` | Modified (additive) | Add 7 new models |
-| `prisma/migrations/20261018000022_g03_reform_bootstrap/migration.sql` | New | CREATE TABLE + RLS + triggers |
-| `prisma/migrations/20261018000022_g03_reform_bootstrap/migration_lock.toml` | New | Migration lock |
-| `src/lib/permissions.ts` | Modified (additive) | Add 9 new permissions to all 4 roles |
-| `prisma/seed-ontology.ts` | Modified (additive) | Add sample reform proposals/alternatives/actions |
-| `tests/unit/reform/contracts.test.ts` | New | Zod schema unit tests |
-| `tests/integration/g03-01-schema.integration.test.ts` | New | Migration + RLS verification |
-| `tests/integration/g03-01-rls.integration.test.ts` | New | Cross-tenant isolation tests |
-| `tests/integration/g03-01-cross-tenant-trigger.integration.test.ts` | New | Trigger enforcement tests |
-| `tests/integration/g03-01-append-only.integration.test.ts` | New | Append-only enforcement tests |
-| `tests/integration/g03-01-f6-trigger.integration.test.ts` | New | F6 trigger tests |
-| `tests/integration/g03-01-attribution-trigger.integration.test.ts` | New | Attribution trigger tests |
-| `tests/integration/g03-01-permissions.integration.test.ts` | New | Permission matrix tests |
-| `docs/mission-reports/G03/03-01_REPORT.md` | New | Mission report |
+| Table | Source decision |
+|-------|-----------------|
+| `reform_proposals` | D1 (core) |
+| `reform_alternatives` | D1 (core) |
+| `reform_approvals` | D1 (core) |
+| `reform_actions` | D1 (core) |
+| `reform_action_updates` | D1 (core — append-only) |
+| `reform_verifications` | D1 (core — F6) |
+| `reform_feedback_loops` | D1 (core — attribution trigger) |
+| `reform_coordinations` | D6 (NEW) |
+| `reform_coordination_participants` | D6 (NEW) |
+| `reform_coordination_invitations` | D6 (NEW) |
+| `reform_coordination_shared_snapshots` | D6 (NEW) |
+| `reform_coordination_shared_snapshot_revocations` | D6 (NEW — for revocation without UPDATE) |
 
-### 4.4 Entry Contracts
+Wait — that's 12 tables, not 11. Let me recount:
 
-- 03-00 approved (architecture frozen)
-- HEAD on `main` branch
-- Working tree clean
+Core: 7 (proposals, alternatives, approvals, actions, action_updates, verifications, feedback_loops)
+Coordination: 5 (coordinations, participants, invitations, shared_snapshots, snapshot_revocations)
 
-### 4.5 Exit Contracts
+**Total: 12 tables**. (Updated from 11 — the revocations table was added during threat model refinement.)
 
-- Migration applies cleanly on fresh PostgreSQL 16 + pgvector
-- All 7 tables have RLS ENABLE + FORCE
-- All 9 new permissions registered in `permissions.ts`
-- Seed creates 2-3 sample proposals per Demolandia tenant (idempotent)
-- `bun run lint` passes
-- `bunx tsc --noEmit` passes
-- All existing 817 tests still pass (no regressions)
-- ~25 new tests pass (15 unit + 10 integration)
-- CI workflow passes (Lint + Typecheck + Test + Integration)
-- Recovery workflow passes (Fresh Install + Backup/Restore drill — verifies G03 tables survive backup/restore)
+### 4.4 Permissions Created (13)
 
-### 4.6 Acceptance Criteria
+| Permission | Source decision |
+|-----------|-----------------|
+| `reform:proposal:read`, `:write`, `:approve` | D1 (core) |
+| `reform:alternative:read`, `:write` | D1 (core) |
+| `reform:action:read`, `:write`, `:verify` | D1 (core) |
+| `reform:verification:read` | D1 (core) |
+| `reform:coordination:read` | D6 (NEW) |
+| `reform:coordination:manage` | D6 (NEW) |
+| `reform:coordination:approve` | D6 (NEW) |
+| `reform:coordination:share` | D6 (NEW) |
 
-- [ ] Migration `20261018000022_g03_reform_bootstrap` applies cleanly
-- [ ] All 7 tables created with correct columns + types
-- [ ] RLS ENABLE + FORCE on all 7 tables
-- [ ] `balance_app` policy: tenant-scoped USING + WITH CHECK
-- [ ] `balance_admin` policy: USING (true) WITH CHECK (true)
-- [ ] `GRANT SELECT, INSERT, UPDATE, DELETE` on 4 tables (proposals, alternatives, actions, verifications)
-- [ ] `GRANT SELECT, INSERT` only on 3 append-only tables (approvals, action_updates, feedback_loops)
-- [ ] `REVOKE UPDATE, DELETE` on 3 append-only tables from `balance_app`
-- [ ] Partial unique index on `reform_alternatives(tenantId, proposalId) WHERE status = 'selected'`
-- [ ] Cross-tenant triggers on all 6 child tables (alternatives, approvals, actions, action_updates, verifications, feedback_loops)
-- [ ] F6 trigger on `reform_verifications`
-- [ ] Attribution trigger on `reform_feedback_loops`
-- [ ] Supersession trigger on `reform_proposals`
-- [ ] 9 new permissions in `permissions.ts` (correct roles per matrix)
-- [ ] Seed creates sample data per tenant (idempotent re-run)
-- [ ] 15 unit tests pass (Zod schema validation)
-- [ ] 10 integration tests pass (RLS, triggers, permissions, append-only, F6, attribution)
+### 4.5 RLS Policies (Coordination-Aware)
+
+- Standard tenant-isolation RLS on 7 core tables + `coordination_participants` + `coordination_invitations` + `coordination_shared_snapshots` + `coordination_shared_snapshot_revocations`
+- **Coordination-aware RLS** on `reform_coordinations` via `is_coordination_participant()` SECURITY DEFINER helper (visible to lead OR active participant)
+- Append-only enforcement on `reform_action_updates`, `reform_approvals`, `reform_feedback_loops`, `reform_coordination_shared_snapshots`, `reform_coordination_shared_snapshot_revocations`
+
+### 4.6 Triggers
+
+- Cross-tenant triggers on all child tables (core + coordination)
+- F6 trigger on `reform_verifications`
+- Attribution trigger on `reform_feedback_loops`
+- Supersession trigger on `reform_proposals`
+- **Coordination activation trigger**: when all linked proposals are `approved`, set `reform_coordinations.status = 'active'`
+
+### 4.7 Acceptance Criteria
+
+- [ ] Migration applies cleanly on fresh PostgreSQL 16 + pgvector
+- [ ] All 12 tables created with correct columns + types
+- [ ] RLS ENABLE + FORCE on all 12 tables
+- [ ] `is_coordination_participant()` SECURITY DEFINER function created and EXECUTE granted to `balance_app`
+- [ ] Coordination-aware RLS policy on `reform_coordinations` works (lead + participants can SELECT; only lead can modify)
+- [ ] All 13 new permissions registered in `permissions.ts`
+- [ ] Seed creates sample data per tenant + 1 coordination example (idempotent)
+- [ ] ~30 new tests pass (was ~25 — added coordination RLS tests)
 - [ ] Existing 817 tests still pass (no regressions)
-- [ ] CI #?? passes (next CI run number)
-- [ ] Recovery #?? passes (next Recovery run number)
+- [ ] CI + Recovery pass
 
-### 4.7 Dependencies
+### 4.8 Dependencies
 
 - 03-00 approved (architecture frozen)
-- All open decisions resolved by owner (especially D1, D4, D6, D8)
-
-### 4.8 Risks
-
-| Risk | Mitigation |
-|------|-----------|
-| Migration fails on existing DB | Migration is additive — no breaking changes; tested in CI fresh-install + recovery drill |
-| RLS policy misconfiguration | Sentinel integration test verifies tenant B cannot see tenant A's rows |
-| Trigger syntax error | Migration tested in CI on real PostgreSQL 16 |
-| Permission assignment wrong role | Integration test verifies per-role permission matrix |
-| Seed non-idempotent | Seed uses upserts keyed on `(tenantId, title)` — idempotent re-run tested |
-
-### 4.9 Definition of Done
-
-1. Migration + schema + permissions + seed committed
-2. Unit tests pass locally (`AUTH_SECRET=... bun run test`)
-3. Typecheck passes (`bunx tsc --noEmit`)
-4. Lint passes (`bun run lint`)
-5. Pushed to `main`
-6. CI workflow passes
-7. Recovery workflow passes
-8. Owner + ChatGPT review → FINAL PASS
-9. Mission report published (`docs/mission-reports/G03/03-01_REPORT.md`)
+- All required open decisions resolved (D1, D3, D4, D5, D6, D9)
 
 ---
 
-## 5. Mission 03-02 — Reform Proposal + Alternative Services
+## 5. Mission 03-02 — Vertical Slice: Minimum Viable Single-Tenant Reform (NEW — Owner Directive)
 
 ### 5.1 Goal
 
-Implement the core CRUD + lifecycle services for ReformProposal and ReformAlternative. This is the foundation that all subsequent missions build on.
+Per owner directive: build a **working end-to-end reform flow** early to validate the contracts before expanding capabilities. This mission delivers:
 
-### 5.2 Scope
+```
+Alert (from G02)
+  → ReformProposal (single alternative, no LLM)
+  → Human Review + Approval (basic, no evidence snapshot yet)
+  → ReformAction (planned → in_progress → completed)
+  → ReformVerification (F6 pattern)
+  → ReformFeedbackLoop (descriptive, creates new Observation)
+  → Close originating Alert (via G02 contracts)
+```
 
-- Create `src/lib/reform/contracts.ts` (Zod schemas + types + error re-exports)
-- Create `src/lib/reform/reform-proposal-service.ts` (7 functions)
-- Create `src/lib/reform/reform-alternative-service.ts` (4 functions)
+### 5.2 Why This Mission Exists
+
+The owner correctly identified that building all breadth first (alternatives, comparison, advisor, enhanced approval) before testing integration risks discovering contract problems at the end of G03. This vertical slice validates:
+
+1. The `ReformProposal` → `ReformAction` → `ReformVerification` → `ReformFeedbackLoop` chain works end-to-end
+2. The integration with G02 (`ingestObservation`, `computeVariance`, `verifyExecution`, `closeAlert`) works as designed
+3. The F6 trigger fires correctly
+4. The attribution trigger fires correctly
+5. The audit trail is complete
+6. The RLS isolation is correct
+
+### 5.3 Scope (Intentionally Minimal)
+
+- Create `src/lib/reform/contracts.ts` (minimal Zod schemas — single alternative, no hypothesizedCauses complexity yet)
+- Create `src/lib/reform/reform-proposal-service.ts` (basic CRUD: create, get, list, submit, approve, reject — no evidence snapshot, no supersession)
+- Create `src/lib/reform/reform-action-service.ts` (basic CRUD: create, start, complete — no block/cancel)
+- Create `src/lib/reform/reform-action-update-service.ts` (basic append-only updates)
+- Create `src/lib/reform/reform-verification-service.ts` (basic verify with F6)
+- Create `src/lib/reform/reform-feedback-service.ts` (basic feedback loop + close alert)
 - Create `src/lib/reform/index.ts` (barrel)
-- Create API routes under `src/app/api/v1/reform/proposals/` and `alternatives/`
-- NO schema changes (schema diff = 0)
-- NO approval, action, verification, or feedback services (those are later missions)
+- Create API routes for the above (minimal set — ~15 routes)
+- **NO alternatives** (single proposal, single action)
+- **NO comparison or advisor** (deferred to 03-04)
+- **NO coordination** (deferred to 03-06)
+- **NO evidence snapshots at approval** (deferred to 03-05)
 
-### 5.3 Expected Files
+### 5.4 Expected Files
 
 | File | Type | Purpose |
 |------|------|---------|
-| `src/lib/reform/contracts.ts` | New | Zod schemas + types + error re-exports |
-| `src/lib/reform/reform-proposal-service.ts` | New | 7 proposal functions |
-| `src/lib/reform/reform-alternative-service.ts` | New | 4 alternative functions |
-| `src/lib/reform/index.ts` | New | Barrel exports |
-| `src/app/api/v1/reform/proposals/route.ts` | New | POST + GET (list) |
-| `src/app/api/v1/reform/proposals/[id]/route.ts` | New | GET (single) |
-| `src/app/api/v1/reform/proposals/[id]/submit/route.ts` | New | POST (submit for review) |
-| `src/app/api/v1/reform/proposals/[id]/reject/route.ts` | New | POST (reject) |
-| `src/app/api/v1/reform/proposals/[id]/return/route.ts` | New | POST (return for revision) |
-| `src/app/api/v1/reform/proposals/[id]/archive/route.ts` | New | POST (archive) |
-| `src/app/api/v1/reform/proposals/[id]/alternatives/route.ts` | New | POST + GET |
-| `src/app/api/v1/reform/alternatives/[id]/select/route.ts` | New | POST (select) |
-| `src/app/api/v1/reform/alternatives/[id]/withdraw/route.ts` | New | POST (withdraw) |
-| `tests/unit/reform/reform-proposal-service.test.ts` | New | Unit tests |
-| `tests/unit/reform/reform-alternative-service.test.ts` | New | Unit tests |
-| `tests/integration/g03-02-proposal.integration.test.ts` | New | Integration tests |
-| `tests/integration/g03-02-alternative.integration.test.ts` | New | Integration tests |
-| `tests/integration/g03-02-rbac-negative.integration.test.ts` | New | RBAC negative tests |
+| `src/lib/reform/contracts.ts` | New (minimal) | Zod schemas for vertical slice |
+| `src/lib/reform/reform-proposal-service.ts` | New (minimal) | Basic proposal CRUD + lifecycle |
+| `src/lib/reform/reform-action-service.ts` | New (minimal) | Basic action CRUD + lifecycle |
+| `src/lib/reform/reform-action-update-service.ts` | New (minimal) | Append-only updates |
+| `src/lib/reform/reform-verification-service.ts` | New (minimal) | F6 verification |
+| `src/lib/reform/reform-feedback-service.ts` | New (minimal) | Feedback loop + alert closure |
+| `src/lib/reform/index.ts` | New | Barrel |
+| `src/app/api/v1/reform/proposals/route.ts` + 4 sub-routes | New | POST/GET/submit/approve/reject |
+| `src/app/api/v1/reform/actions/route.ts` + 4 sub-routes | New | POST/GET/start/complete/verify |
+| `src/app/api/v1/reform/actions/[id]/updates/route.ts` | New | POST + GET updates |
+| `src/app/api/v1/reform/actions/[id]/feedback/route.ts` | New | POST feedback |
+| `src/app/api/v1/reform/proposals/[id]/close-alert/route.ts` | New | POST close alert |
+| `tests/unit/reform/*.test.ts` | New | Unit tests for each service |
+| `tests/integration/g03-02-vertical-slice.integration.test.ts` | New | End-to-end integration test |
+| `tests/integration/g03-02-f6-sentinel.integration.test.ts` | New | F6 trigger sentinel |
+| `tests/integration/g03-02-attribution-sentinel.integration.test.ts` | New | Attribution trigger sentinel |
+| `tests/integration/g03-02-append-only-sentinel.integration.test.ts` | New | Append-only RLS sentinel |
 | `docs/mission-reports/G03/03-02_REPORT.md` | New | Mission report |
-
-### 5.4 Service Functions (03-02 Scope)
-
-**Reform Proposal Service**:
-- `createReformProposal(session, input)` → `{ proposalId }`
-- `getReformProposal(session, proposalId)` → `ReformProposal | null`
-- `listReformProposals(session, filters)` → `{ proposals[], nextCursor }`
-- `submitForReview(session, input)` → `{ proposalId, status }`
-- `rejectReformProposal(session, input)` → `{ proposalId, status }`
-- `returnForRevision(session, input)` → `{ proposalId, status }`
-- `archiveReformProposal(session, proposalId)` → `{ proposalId, archivedAt }`
-
-**Reform Alternative Service**:
-- `addReformAlternative(session, input)` → `{ alternativeId }`
-- `listReformAlternatives(session, proposalId)` → `ReformAlternative[]`
-- `selectAlternative(session, input)` → `{ alternativeId, status }`
-- `withdrawAlternative(session, input)` → `{ alternativeId, status }`
 
 ### 5.5 Entry Contracts
 
 - 03-01 approved (schema exists)
-- 9 permissions registered
-- HEAD on `main` branch
-- Working tree clean
 
 ### 5.6 Exit Contracts
 
-- All 11 service functions implemented
-- All 11 API routes implemented
-- Zod schemas validate all inputs
-- `withAuthenticatedTenant` wraps every service
-- `requirePermissionWithCurrentRole` checks every privileged operation
-- `writeAuditTx` writes atomic audit for every state transition
-- Cross-tenant references validated in service layer
-- 25 unit tests pass (Zod schemas + service logic with mocked Prisma)
-- 20 integration tests pass (real PostgreSQL 16, real RLS, real audit)
-- Existing 842 tests still pass (no regressions)
+- A single analyst can create a proposal from an alert, submit for review, get it approved by a reviewer, create an action, add progress updates, complete the action, verify it (F6), create a feedback loop (descriptive), and close the originating alert — **all via API**.
+- F6 trigger fires correctly (verified by sentinel test)
+- Attribution trigger fires correctly (verified by sentinel test)
+- Append-only enforcement works (verified by sentinel test)
+- Audit trail is complete for every state transition
+- ~40 new tests pass (20 unit + 20 integration including 3 sentinel tests)
+- Existing tests still pass
 - CI + Recovery pass
 
 ### 5.7 Acceptance Criteria
 
-- [ ] All 11 service functions implemented per INTEGRATION_CONTRACTS.md §4
-- [ ] All 11 API routes implemented per INTEGRATION_CONTRACTS.md §5.1
-- [ ] Zod schemas reject invalid inputs (unit test coverage)
-- [ ] Cross-tenant references blocked (integration test)
-- [ ] Permission denied for unauthorized roles (integration test)
-- [ ] Atomic audit log on every state transition (integration test)
-- [ ] Lifecycle transitions validated (integration test — e.g., cannot approve from `draft` state)
-- [ ] Partial unique index on selected alternatives enforced (integration test — concurrent selection)
-- [ ] Pagination works on list endpoints (integration test)
-- [ ] 25 unit tests pass
-- [ ] 20 integration tests pass
-- [ ] Existing tests still pass (no regressions)
+- [ ] End-to-end flow works via API (integration test verifies the full chain)
+- [ ] F6 trigger blocks `verified` status without `verifiedAction` + `evidenceSource`
+- [ ] Attribution trigger blocks non-`"descriptive"` `attributionLevel`
+- [ ] Append-only RLS blocks UPDATE/DELETE on `reform_action_updates`
+- [ ] Cross-tenant isolation: Tenant B cannot see Tenant A's proposal
+- [ ] Permission denied for unauthorized roles (analyst cannot approve, observer cannot read)
+- [ ] Audit trail complete (every transition has `audit_log` entry)
+- [ ] Feedback loop creates new Observation via `ingestObservation` (append-only — does NOT mutate existing)
+- [ ] Close alert uses G02 `verifyExecution` + `closeAlert` contracts (not direct table writes)
+- [ ] ~40 new tests pass
+- [ ] Existing tests still pass
 - [ ] CI + Recovery pass
 
 ### 5.8 Dependencies
 
 - 03-01 approved
 
-### 5.9 Definition of Done
+### 5.9 Critical Note
 
-1. All service + route files committed
-2. Unit + integration tests pass locally
-3. Typecheck + Lint pass
-4. Pushed to `main`
-5. CI + Recovery pass
-6. Owner + ChatGPT review → FINAL PASS
-7. Mission report published
+This mission intentionally ships a **minimal** reform flow. Many features are deferred to later missions:
+- Multiple alternatives (03-03)
+- LLM-assisted drafting (03-04)
+- Evidence snapshots at approval (03-05)
+- Coordination (03-06, 03-07)
+
+The goal is to **validate the contracts early**, not to ship a complete product. The owner's directive is explicitly: "نتحقق من صلاحية العقود مبكراً، بدلاً من اكتشاف مشكلات التكامل في نهاية المجموعة."
 
 ---
 
-## 6. Mission 03-03 — Reform Comparison + Advisor Services
+## 6. Mission 03-03 — Reform Alternatives (Revised)
 
 ### 6.1 Goal
 
-Implement the deterministic comparison service and the LLM-assisted advisor service. Both are advisory — neither makes decisions.
+Add support for **multiple alternatives per proposal** + selection. This expands the vertical slice (03-02) which supported only a single implicit alternative.
 
 ### 6.2 Scope
+
+- Add `ReformAlternative` service (CRUD + selection + withdrawal)
+- Extend `ReformProposal` to support linking to alternatives (was implicit in 03-02)
+- Update approval flow to require alternative selection before approval (was: approve the proposal directly in 03-02)
+- Add comparison placeholder (deterministic comparison deferred to 03-04)
+- NO LLM advisor yet
+- NO coordination yet
+
+### 6.3 Expected Files
+
+| File | Type | Purpose |
+|------|------|---------|
+| `src/lib/reform/reform-alternative-service.ts` | New | Alternative CRUD + selection |
+| `src/lib/reform/contracts.ts` | Modified (additive) | Add alternative Zod schemas |
+| `src/lib/reform/reform-proposal-service.ts` | Modified (additive) | Approval now requires alternativeId |
+| `src/app/api/v1/reform/proposals/[id]/alternatives/route.ts` | New | POST + GET alternatives |
+| `src/app/api/v1/reform/alternatives/[id]/select/route.ts` | New | POST select |
+| `src/app/api/v1/reform/alternatives/[id]/withdraw/route.ts` | New | POST withdraw |
+| `tests/unit/reform/reform-alternative-service.test.ts` | New | Unit tests |
+| `tests/integration/g03-03-alternative.integration.test.ts` | New | Integration tests |
+| `tests/integration/g03-03-one-selected-sentinel.integration.test.ts` | New | Partial unique index sentinel |
+| `docs/mission-reports/G03/03-03_REPORT.md` | New | Mission report |
+
+### 6.4 Acceptance Criteria
+
+- [ ] Analyst can add 2-5 alternatives to a proposal
+- [ ] Reviewer can select ONE alternative (partial unique index enforces)
+- [ ] Approval requires a selected alternative
+- [ ] Withdrawing a selected alternative requires reviewer permission
+- [ ] ~25 new tests pass (15 unit + 10 integration)
+- [ ] Existing tests still pass (including 03-02 vertical slice tests)
+- [ ] CI + Recovery pass
+
+### 6.5 Dependencies
+
+- 03-02 approved
+
+---
+
+## 7. Mission 03-04 — Reform Comparison + Advisor (Unchanged from Rev 1)
+
+### 7.1 Goal
+
+Implement the deterministic comparison service and the LLM-assisted advisor service. Both are advisory — neither makes decisions.
+
+### 7.2 Scope
 
 - Create `src/lib/reform/reform-comparison-service.ts` (deterministic, no LLM)
 - Create `src/lib/reform/reform-advisor-service.ts` (LLM-assisted, advisory only)
 - Create API routes for comparison + 4 advisor endpoints
 - NO schema changes
 
-### 6.3 Expected Files
+### 7.3 Expected Files
 
-| File | Type | Purpose |
-|------|------|---------|
-| `src/lib/reform/reform-comparison-service.ts` | New | `compareReformAlternatives()` |
-| `src/lib/reform/reform-advisor-service.ts` | New | 4 advisor functions |
-| `src/app/api/v1/reform/proposals/[id]/comparison/route.ts` | New | GET comparison |
-| `src/app/api/v1/reform/advisor/draft-problem-statement/route.ts` | New | POST advisor |
-| `src/app/api/v1/reform/advisor/draft-alternatives/route.ts` | New | POST advisor |
-| `src/app/api/v1/reform/advisor/draft-comparison/route.ts` | New | POST advisor |
-| `src/app/api/v1/reform/advisor/draft-anticipated-outcomes/route.ts` | New | POST advisor |
-| `tests/unit/reform/reform-comparison-service.test.ts` | New | Unit tests |
-| `tests/unit/reform/reform-advisor-service.test.ts` | New | Unit tests (mock LLM provider) |
-| `tests/integration/g03-03-comparison.integration.test.ts` | New | Integration tests |
-| `tests/integration/g03-03-advisor.integration.test.ts` | New | Integration tests |
-| `docs/mission-reports/G03/03-03_REPORT.md` | New | Mission report |
+(Same as rev 1 — see original document)
 
-### 6.4 Service Functions (03-03 Scope)
-
-**Reform Comparison Service**:
-- `compareReformAlternatives(session, proposalId)` → `AlternativeComparison`
-  - Returns descriptive comparison matrix (cost, risk, feasibility, assumption count, outcome count)
-  - **No ranking, no recommendation** — the human selects
-
-**Reform Advisor Service** (all advisory only):
-- `draftProblemStatement(session, input)` → `AdvisorDraftResult`
-- `draftReformAlternatives(session, input)` → `AdvisorDraftResult[]`
-- `draftComparisonSummary(session, proposalId)` → `AdvisorDraftResult`
-- `draftAnticipatedOutcomes(session, input)` → `AdvisorDraftResult`
-
-### 6.5 Entry Contracts
-
-- 03-02 approved (proposals + alternatives exist)
-
-### 6.6 Exit Contracts
-
-- 5 service functions implemented
-- 5 API routes implemented
-- Comparison service is deterministic (no LLM, no random)
-- Advisor service uses `getLLMProvider()` (StubProvider returns `simulated: true`)
-- Causal language rejected in advisor output (Zod + service check)
-- 20 unit tests pass
-- 15 integration tests pass
-- Existing tests still pass
-- CI + Recovery pass
-
-### 6.7 Acceptance Criteria
+### 7.4 Acceptance Criteria
 
 - [ ] Comparison service returns descriptive matrix (no ranking, no recommendation)
 - [ ] Advisor service carries `simulated: true` when StubProvider active
-- [ ] Advisor output rejects causal language (Zod + service check)
-- [ ] Advisor output is always a draft (never authoritative)
+- [ ] Advisor output rejects causal language (Zod + service check — defense in depth, not guarantee)
 - [ ] Advisor never calls `approve`, `select`, `verify`, or any state transition
-- [ ] 20 unit tests pass
-- [ ] 15 integration tests pass
+- [ ] ~35 new tests pass
 - [ ] Existing tests still pass
 - [ ] CI + Recovery pass
 
-### 6.8 Dependencies
+### 7.5 Dependencies
 
-- 03-02 approved
-
-### 6.9 Definition of Done
-
-1. Service + route files committed
-2. Unit + integration tests pass
-3. Typecheck + Lint pass
-4. Pushed to `main`
-5. CI + Recovery pass
-6. Owner + ChatGPT review → FINAL PASS
-7. Mission report published
+- 03-03 approved
 
 ---
 
-## 7. Mission 03-04 — Reform Approval Workflow
-
-### 7.1 Goal
-
-Implement the atomic approval workflow with evidence snapshot, denied-attempt audit, and supersession. This is the most security-critical mission in G03.
-
-### 7.2 Scope
-
-- Create `src/lib/reform/reform-approval-service.ts`
-- Implement `approveReformProposal()` (atomic, with evidence snapshot)
-- Implement `approveReformProposalWithAuditSafe()` (wrapper with denied-attempt audit)
-- Implement `getReformApproval()` (read approval with snapshot)
-- Create API route for approval
-- Add sentinel regression tests for atomicity + F6 + evidence completeness
-- NO schema changes
-
-### 7.3 Expected Files
-
-| File | Type | Purpose |
-|------|------|---------|
-| `src/lib/reform/reform-approval-service.ts` | New | 3 approval functions |
-| `src/app/api/v1/reform/proposals/[id]/approve/route.ts` | New | POST approval |
-| `src/app/api/v1/reform/proposals/[id]/snapshot/route.ts` | New | GET proposal snapshot (includes approval) |
-| `tests/unit/reform/reform-approval-service.test.ts` | New | Unit tests |
-| `tests/integration/g03-04-approval.integration.test.ts` | New | Integration tests (atomicity, evidence snapshot) |
-| `tests/integration/g03-04-denied-audit.integration.test.ts` | New | Denied-attempt audit tests |
-| `tests/integration/g03-04-supersession.integration.test.ts` | New | Supersession tests |
-| `tests/integration/g03-04-f6-sentinel.integration.test.ts` | New | Sentinel regression tests |
-| `docs/mission-reports/G03/03-04_REPORT.md` | New | Mission report |
-
-### 7.4 Service Functions (03-04 Scope)
-
-- `approveReformProposal(session, proposalId, alternativeId, input)` → `{ approvalId, proposalStatus }`
-- `approveReformProposalWithAuditSafe(session, proposalId, alternativeId, input)` → same + denied-attempt audit
-- `getReformApproval(session, proposalId)` → `ReformApproval | null`
-
-### 7.5 Entry Contracts
-
-- 03-02 + 03-03 approved
-
-### 7.6 Exit Contracts
-
-- Approval is atomic (proposal status + approval record + evidence snapshot + event + audit in one transaction)
-- Denied attempts audited (best-effort, outside failed transaction)
-- Evidence snapshot captured at approval time (immutable post-approval)
-- Evidence completeness check (no partial snapshots)
-- Supersession works (old approved proposal → superseded when new one approved for same alert)
-- 15 unit tests pass
-- 10 integration tests pass (including sentinel regression tests)
-- Existing tests still pass
-- CI + Recovery pass
-
-### 7.7 Acceptance Criteria
-
-- [ ] Approval is atomic (integration test verifies all-or-nothing)
-- [ ] Evidence snapshot captured (integration test verifies snapshot content)
-- [ ] Evidence completeness check (integration test — missing evidence ID → rejection)
-- [ ] Denied attempts audited with `status: "denied"` (integration test)
-- [ ] Original `PermissionDeniedError` re-thrown (not masked by audit failure)
-- [ ] Supersession works (integration test — old proposal → superseded)
-- [ ] Only ONE approval per proposal (unique constraint)
-- [ ] Only ONE selected alternative per proposal (partial unique index)
-- [ ] F6 trigger not applicable here (F6 is for verification, not approval) — but sentinel test verifies F6 trigger still works
-- [ ] 15 unit tests pass
-- [ ] 10 integration tests pass
-- [ ] Existing tests still pass
-- [ ] CI + Recovery pass
-
-### 7.8 Dependencies
-
-- 03-02 + 03-03 approved
-
-### 7.9 Definition of Done
-
-1. Service + route files committed
-2. Unit + integration + sentinel tests pass
-3. Typecheck + Lint pass
-4. Pushed to `main`
-5. CI + Recovery pass
-6. Owner + ChatGPT review → FINAL PASS
-7. Mission report published
-
----
-
-## 8. Mission 03-05 — Reform Action + Update Tracking
+## 8. Mission 03-05 — Enhanced Approval Workflow (Revised)
 
 ### 8.1 Goal
 
-Implement the implementation tracking: ReformAction lifecycle + append-only ReformActionUpdate. This is where reforms become actionable work.
+Upgrade the basic approval (from 03-02) to the **full atomic approval workflow** with:
+- Evidence snapshot at approval time (immutable post-approval)
+- Denied-attempt audit (best-effort, outside failed transaction)
+- Supersession (auto-supersede old approved proposal when new one approved for same alert)
+- Strict tenant/country/strategy verification for Program/Project links (D4 revised)
 
 ### 8.2 Scope
 
-- Create `src/lib/reform/reform-action-service.ts` (7 functions)
-- Create `src/lib/reform/reform-action-update-service.ts` (2 functions)
-- Create API routes for actions + updates
+- Replace basic `approveReformProposal` with `approveReformProposalWithAuditSafe` (atomic + evidence snapshot + denied audit)
+- Add supersession logic
+- Add D4 verification (tenant + country + strategy context)
+- Add `ReformApproval` service (read approval with snapshot)
+- Add sentinel regression tests for atomicity + F6 + evidence completeness
 - NO schema changes
 
 ### 8.3 Expected Files
 
 | File | Type | Purpose |
 |------|------|---------|
-| `src/lib/reform/reform-action-service.ts` | New | 7 action functions |
-| `src/lib/reform/reform-action-update-service.ts` | New | 2 update functions |
-| `src/app/api/v1/reform/actions/route.ts` | New | POST + GET |
-| `src/app/api/v1/reform/actions/[id]/route.ts` | New | GET |
-| `src/app/api/v1/reform/actions/[id]/start/route.ts` | New | POST |
-| `src/app/api/v1/reform/actions/[id]/block/route.ts` | New | POST |
-| `src/app/api/v1/reform/actions/[id]/unblock/route.ts` | New | POST |
-| `src/app/api/v1/reform/actions/[id]/complete/route.ts` | New | POST |
-| `src/app/api/v1/reform/actions/[id]/cancel/route.ts` | New | POST |
-| `src/app/api/v1/reform/actions/[id]/updates/route.ts` | New | POST + GET |
-| `tests/unit/reform/reform-action-service.test.ts` | New | Unit tests |
-| `tests/unit/reform/reform-action-update-service.test.ts` | New | Unit tests |
-| `tests/integration/g03-05-action.integration.test.ts` | New | Integration tests |
-| `tests/integration/g03-05-action-update.integration.test.ts` | New | Integration tests (append-only) |
-| `tests/integration/g03-05-append-only-sentinel.integration.test.ts` | New | Sentinel regression tests |
+| `src/lib/reform/reform-approval-service.ts` | New | 3 approval functions (atomic + safe wrapper + read) |
+| `src/lib/reform/reform-proposal-service.ts` | Modified | Approval now uses safe wrapper; add supersession |
+| `src/lib/reform/reform-action-service.ts` | Modified | Add D4 verification for programId/projectId links |
+| `src/app/api/v1/reform/proposals/[id]/approve/route.ts` | Modified | Use safe wrapper |
+| `src/app/api/v1/reform/proposals/[id]/snapshot/route.ts` | New | GET proposal snapshot (includes approval) |
+| `tests/unit/reform/reform-approval-service.test.ts` | New | Unit tests |
+| `tests/integration/g03-05-approval.integration.test.ts` | New | Integration tests (atomicity, evidence snapshot) |
+| `tests/integration/g03-05-denied-audit.integration.test.ts` | New | Denied-attempt audit tests |
+| `tests/integration/g03-05-supersession.integration.test.ts` | New | Supersession tests |
+| `tests/integration/g03-05-f6-sentinel.integration.test.ts` | New | Sentinel regression tests |
+| `tests/integration/g03-05-evidence-completeness.integration.test.ts` | New | No partial snapshots |
 | `docs/mission-reports/G03/03-05_REPORT.md` | New | Mission report |
 
-### 8.4 Service Functions (03-05 Scope)
+### 8.4 Acceptance Criteria
 
-**Reform Action Service**:
-- `createReformAction(session, input)` → `{ actionId }`
-- `getReformAction(session, actionId)` → `ReformAction | null`
-- `listReformActions(session, filters)` → `{ actions[], nextCursor }`
-- `startReformAction(session, input)` → `{ actionId, status }`
-- `blockReformAction(session, input)` → `{ actionId, status }`
-- `completeReformAction(session, input)` → `{ actionId, status }`
-- `cancelReformAction(session, input)` → `{ actionId, status }`
-
-**Reform Action Update Service**:
-- `addReformActionUpdate(session, input)` → `{ updateId }`
-- `listReformActionUpdates(session, actionId, options?)` → `{ updates[], nextCursor }`
-
-### 8.5 Entry Contracts
-
-- 03-04 approved (actions are created from approved proposals)
-
-### 8.6 Exit Contracts
-
-- 9 service functions implemented
-- 9 API routes implemented
-- Action lifecycle transitions validated
-- Action updates are append-only (RLS blocks UPDATE/DELETE — sentinel test)
-- `progressPercentage` denormalized correctly (synced from latest progress update)
-- 20 unit tests pass
-- 15 integration tests pass (including sentinel regression)
-- Existing tests still pass
-- CI + Recovery pass
-
-### 8.7 Acceptance Criteria
-
-- [ ] All 9 service functions implemented
-- [ ] All 9 API routes implemented
-- [ ] Action lifecycle transitions validated (planned → in_progress → completed)
-- [ ] Blocked state works (in_progress → blocked → in_progress)
-- [ ] Cancelled state is terminal (cannot transition out)
-- [ ] Completed state is terminal for lifecycle (verification is separate)
-- [ ] Action updates are append-only (sentinel test — UPDATE/DELETE blocked)
-- [ ] `progressPercentage` synced from latest progress update
-- [ ] 20 unit tests pass
-- [ ] 15 integration tests pass
+- [ ] Approval is atomic (proposal status + approval record + evidence snapshot + event + audit in one transaction)
+- [ ] Evidence snapshot captured at approval time (immutable post-approval)
+- [ ] Evidence completeness check (no partial snapshots)
+- [ ] Denied attempts audited with `status: "denied"`
+- [ ] Original `PermissionDeniedError` re-thrown (not masked by audit failure)
+- [ ] Supersession works (old proposal → superseded when new one approved for same alert)
+- [ ] D4 verification: tenant + country + strategy context checked for Program/Project links
+- [ ] `allowCrossStrategyProgramLink` flag allows legitimate cross-strategy links with justification
+- [ ] ~30 new tests pass (15 unit + 15 integration including sentinel)
 - [ ] Existing tests still pass
 - [ ] CI + Recovery pass
 
-### 8.8 Dependencies
+### 8.5 Dependencies
 
-- 03-04 approved
-
-### 8.9 Definition of Done
-
-1. Service + route files committed
-2. Unit + integration + sentinel tests pass
-3. Typecheck + Lint pass
-4. Pushed to `main`
-5. CI + Recovery pass
-6. Owner + ChatGPT review → FINAL PASS
-7. Mission report published
+- 03-03 + 03-04 approved
 
 ---
 
-## 9. Mission 03-06 — Reform Verification + Feedback Loop
+## 9. Mission 03-06 — Multi-Institution Coordination (NEW — D6 Implementation)
 
 ### 9.1 Goal
 
-Implement the F6-pattern verification and the descriptive feedback loop to the observatory. This closes the reform cycle.
+Implement the coordination services: create coordination, manage participants, invitations, shared snapshots, two-level approval.
 
 ### 9.2 Scope
 
-- Create `src/lib/reform/reform-verification-service.ts` (3 functions)
-- Create `src/lib/reform/reform-feedback-service.ts` (3 functions)
-- Create `src/lib/reform/reform-query-service.ts` (2 functions — snapshot + dashboard)
-- Create API routes for verification + feedback + dashboard
-- NO schema changes
+- Create `src/lib/reform/reform-coordination-service.ts` (CRUD + invitations + shared snapshots + plan approval)
+- Extend `ReformProposal` to support optional `coordinationId`
+- Add coordination-specific API routes
+- Add sentinel regression tests for all 10 threats (T1-T10)
+- NO schema changes (tables created in 03-01)
 
 ### 9.3 Expected Files
 
 | File | Type | Purpose |
 |------|------|---------|
-| `src/lib/reform/reform-verification-service.ts` | New | 3 verification functions |
-| `src/lib/reform/reform-feedback-service.ts` | New | 3 feedback functions |
-| `src/lib/reform/reform-query-service.ts` | New | 2 query functions |
-| `src/app/api/v1/reform/actions/[id]/verify/route.ts` | New | POST verification |
-| `src/app/api/v1/reform/actions/[id]/verification/route.ts` | New | GET verification |
-| `src/app/api/v1/reform/actions/[id]/feedback/route.ts` | New | POST + GET feedback |
-| `src/app/api/v1/reform/proposals/[id]/close-alert/route.ts` | New | POST close originating alert |
-| `src/app/api/v1/reform/dashboard/route.ts` | New | GET dashboard summary |
-| `tests/unit/reform/reform-verification-service.test.ts` | New | Unit tests |
-| `tests/unit/reform/reform-feedback-service.test.ts` | New | Unit tests |
-| `tests/unit/reform/reform-query-service.test.ts` | New | Unit tests |
-| `tests/integration/g03-06-verification.integration.test.ts` | New | Integration tests (F6) |
-| `tests/integration/g03-06-feedback.integration.test.ts` | New | Integration tests (feedback loop) |
-| `tests/integration/g03-06-attribution-sentinel.integration.test.ts` | New | Sentinel regression tests |
-| `tests/integration/g03-06-dashboard.integration.test.ts` | New | Integration tests |
+| `src/lib/reform/reform-coordination-service.ts` | New | Coordination CRUD + invitations + shared snapshots + plan approval |
+| `src/lib/reform/contracts.ts` | Modified (additive) | Add coordination Zod schemas |
+| `src/lib/reform/reform-proposal-service.ts` | Modified (additive) | Support optional coordinationId |
+| `src/app/api/v1/reform/coordinations/route.ts` | New | POST + GET (list) |
+| `src/app/api/v1/reform/coordinations/[id]/route.ts` | New | GET single |
+| `src/app/api/v1/reform/coordinations/[id]/participants/route.ts` | New | POST + GET participants |
+| `src/app/api/v1/reform/coordinations/[id]/invitations/route.ts` | New | POST invitation |
+| `src/app/api/v1/reform/coordinations/[id]/invitations/[invId]/accept/route.ts` | New | POST accept |
+| `src/app/api/v1/reform/coordinations/[id]/invitations/[invId]/decline/route.ts` | New | POST decline |
+| `src/app/api/v1/reform/coordinations/[id]/approve-plan/route.ts` | New | POST approve plan (lead only) |
+| `src/app/api/v1/reform/coordinations/[id]/snapshots/route.ts` | New | POST + GET shared snapshots |
+| `src/app/api/v1/reform/coordinations/[id]/snapshots/[snapId]/approve/route.ts` | New | POST approve snapshot (reviewer) |
+| `src/app/api/v1/reform/coordinations/[id]/snapshots/[snapId]/revoke/route.ts` | New | POST revoke snapshot |
+| `src/app/api/v1/reform/coordinations/[id]/shared-view/route.ts` | New | GET shared view (participants only) |
+| `tests/unit/reform/reform-coordination-service.test.ts` | New | Unit tests |
+| `tests/integration/g03-06-coordination.integration.test.ts` | New | Integration tests |
+| `tests/integration/g03-06-t1-cross-tenant-leak.integration.test.ts` | New | T1 sentinel |
+| `tests/integration/g03-06-t2-membership-forgery.integration.test.ts` | New | T2 sentinel |
+| `tests/integration/g03-06-t3-no-majority-override.integration.test.ts` | New | T3 sentinel |
+| `tests/integration/g03-06-t4-snapshot-revocation.integration.test.ts` | New | T4 sentinel |
+| `tests/integration/g03-06-t5-lead-privilege.integration.test.ts` | New | T5 sentinel |
+| `tests/integration/g03-06-t6-audit-atomicity.integration.test.ts` | New | T6 sentinel |
+| `tests/integration/g03-06-t7-shared-view-readonly.integration.test.ts` | New | T7 sentinel |
+| `tests/integration/g03-06-t8-invitation-replay.integration.test.ts` | New | T8 sentinel |
+| `tests/integration/g03-06-t9-metadata-visibility.integration.test.ts` | New | T9 sentinel |
+| `tests/integration/g03-06-t10-supersession.integration.test.ts` | New | T10 sentinel |
 | `docs/mission-reports/G03/03-06_REPORT.md` | New | Mission report |
-| `docs/mission-reports/G03/GROUP_03_FINAL_REVIEW.md` | New | G03 final review (after 03-06 approved) |
-| `docs/mission-reports/G03/GROUP_03_ACCEPTANCE_MATRIX.md` | New | G03 acceptance matrix |
-| `docs/mission-reports/G03/GROUP_03_KNOWN_LIMITATIONS.md` | New | G03 known limitations |
-| `docs/mission-reports/G03/GROUP_04_READINESS_HANDOFF.md` | New | G04 readiness handoff |
 
-### 9.4 Service Functions (03-06 Scope)
+### 9.4 Acceptance Criteria
 
-**Reform Verification Service**:
-- `verifyReformAction(session, actionId, input)` → `{ verificationId, verificationStatus }`
-- `verifyReformActionWithAuditSafe(session, actionId, input)` → same + denied-attempt audit
-- `getReformVerification(session, actionId)` → `ReformVerification | null`
-
-**Reform Feedback Service**:
-- `createReformFeedbackLoop(session, actionId, input)` → `{ feedbackLoopId }`
-- `getReformFeedbackLoop(session, actionId)` → `ReformFeedbackLoop | null`
-- `closeOriginatingAlert(session, proposalId)` → `{ alertClosed: boolean }`
-
-**Reform Query Service**:
-- `getReformProposalSnapshot(session, proposalId)` → `ReformProposalSnapshot | null`
-- `getReformDashboardSummary(session)` → `ReformDashboardSummary`
-
-### 9.5 Entry Contracts
-
-- 03-05 approved (actions exist + can be completed)
-
-### 9.6 Exit Contracts
-
-- 8 service functions implemented
-- 8 API routes implemented
-- F6 enforced (triple layer: Zod + DB trigger + service)
-- Attribution level always "descriptive" (DB trigger + Zod + service)
-- Feedback loop creates new Observation via `ingestObservation` (append-only)
-- Feedback loop optionally computes new VarianceRecord via `computeVariance` (descriptive)
-- Close originating alert uses G02 contracts (`verifyExecution` + `closeAlert`)
-- 15 unit tests pass
-- 10 integration tests pass (including sentinel regression)
-- Existing tests still pass
-- CI + Recovery pass
-
-### 9.7 Acceptance Criteria
-
-- [ ] F6 enforced: `verifiedAction` + `evidenceSource` required for `verified` status (sentinel test)
-- [ ] F6 enforced: `disputeReason` + `disputeEvidenceSource` required for `disputed` status (sentinel test)
-- [ ] Policy-outcome language rejected in `verifiedAction` (Zod + service check)
-- [ ] Attribution level always "descriptive" (sentinel test — DB trigger)
-- [ ] Causal language rejected in `descriptiveSummary` (Zod + service check)
-- [ ] Feedback loop creates new Observation via `ingestObservation` (integration test — does NOT mutate existing observation)
-- [ ] Feedback loop optionally computes new VarianceRecord via `computeVariance` (integration test — descriptive)
-- [ ] Close originating alert uses G02 contracts (integration test — `verifyExecution` + `closeAlert` called)
-- [ ] Dashboard summary returns correct statistics (integration test)
-- [ ] 15 unit tests pass
-- [ ] 10 integration tests pass
+- [ ] Lead can create coordination, add participants (via invitations), approve plan
+- [ ] Participants can accept/decline invitations
+- [ ] Participants can create ReformProposals linked to coordination
+- [ ] Per-participant proposal approval (no majority override — T3 sentinel)
+- [ ] Coordination `active` requires ALL linked proposals approved
+- [ ] Shared snapshots require reviewer approval before visible (T4 sentinel)
+- [ ] Shared snapshots can be revoked (T4 sentinel)
+- [ ] Coordination lead cannot see participant private data (T1, T5 sentinel)
+- [ ] Coordination lead cannot approve participant proposals (T5 sentinel)
+- [ ] Coordination-aware RLS works (T1 sentinel)
+- [ ] Membership forgery blocked (T2 sentinel)
+- [ ] Invitation replay blocked (T8 sentinel)
+- [ ] All coordination actions atomically audited (T6 sentinel)
+- [ ] Shared view is read-only (T7 sentinel)
+- [ ] ~50 new tests pass (20 unit + 30 integration including 10 sentinel)
 - [ ] Existing tests still pass
 - [ ] CI + Recovery pass
 
-### 9.8 Dependencies
+### 9.5 Dependencies
 
 - 03-05 approved
 
-### 9.9 Definition of Done
+---
 
-1. Service + route files committed
-2. Unit + integration + sentinel tests pass
-3. Typecheck + Lint pass
-4. Pushed to `main`
-5. CI + Recovery pass
-6. Owner + ChatGPT review → FINAL PASS
-7. Mission report published
-8. **G03 closure documents published** (Final Review + Acceptance Matrix + Known Limitations + G04 Readiness Handoff)
+## 10. Mission 03-07 — Coordination Vertical Slice (NEW — Owner Directive)
+
+### 10.1 Goal
+
+Per owner directive: build an **end-to-end coordination flow** to validate the coordination contracts before G03 closure.
+
+```
+Alert (shared signal)
+  → Lead creates Coordination + invites 2 participants
+  → Participants accept invitations
+  → Each participant creates own ReformProposal linked to coordination
+  → Each participant's reviewer approves their proposal
+  → Coordination auto-activates when all proposals approved
+  → Each participant creates own ReformAction + updates
+  → Each participant's reviewer verifies their action (F6)
+  → Each participant creates own feedback loop
+  → Lead closes coordination
+  → Shared alert closed via G02 contracts
+```
+
+### 10.2 Scope
+
+- No new services — this mission is purely **integration testing** of the coordination flow
+- Add comprehensive end-to-end integration tests
+- Add browser E2E test (optional — deferred per G02-L03 pattern)
+- Update RUNBOOK.md with coordination operational guidance
+- NO schema changes
+
+### 10.3 Expected Files
+
+| File | Type | Purpose |
+|------|------|---------|
+| `tests/integration/g03-07-coordination-e2e.integration.test.ts` | New | End-to-end coordination flow |
+| `tests/integration/g03-07-multi-tenant-coordination.integration.test.ts` | New | Cross-tenant coordination (Tenant A lead + Tenant B participant) |
+| `tests/integration/g03-07-intra-tenant-coordination.integration.test.ts` | New | Intra-tenant coordination (single tenant, multiple institutions) |
+| `tests/browser/reform-coordination.spec.ts` | New (optional) | Browser E2E (deferred if Playwright issues) |
+| `docs/RUNBOOK.md` | Modified (additive) | Add coordination operational section |
+| `docs/mission-reports/G03/03-07_REPORT.md` | New | Mission report |
+
+### 10.4 Acceptance Criteria
+
+- [ ] End-to-end coordination flow works (integration test verifies full chain)
+- [ ] Cross-tenant coordination: Tenant A (lead) + Tenant B (participant) + Tenant C (observer, not invited)
+- [ ] Intra-tenant coordination: single tenant with multiple institutionId participants
+- [ ] All 10 threats remain mitigated (sentinel tests pass after integration)
+- [ ] ~20 new integration tests pass
+- [ ] Existing tests still pass
+- [ ] CI + Recovery pass
+
+### 10.5 Dependencies
+
+- 03-06 approved
 
 ---
 
-## 10. Post-G03 Closure
+## 11. Mission 03-08 — Polish + Closure (NEW)
 
-### 10.1 GROUP 03 Final Review
+### 11.1 Goal
 
-After 03-06 is approved, the following closure documents are produced:
+Final hardening, additional sentinel regression tests, performance optimization, documentation, and G03 closure.
 
-| Document | Purpose |
-|----------|---------|
-| `docs/mission-reports/G03/GROUP_03_FINAL_REVIEW.md` | Comprehensive completion summary |
-| `docs/mission-reports/G03/GROUP_03_ACCEPTANCE_MATRIX.md` | Per-mission acceptance grid with evidence |
-| `docs/mission-reports/G03/GROUP_03_KNOWN_LIMITATIONS.md` | Closed, documented, and deferred limitations |
-| `docs/mission-reports/G03/GROUP_04_READINESS_HANDOFF.md` | What GROUP 04 will pick up (documentation only) |
+### 11.2 Scope
 
-### 10.2 Expected G03 Final State
+- Add any missing sentinel regression tests identified during 03-02 through 03-07
+- Performance optimization (indexes, query patterns)
+- Documentation review and consistency check
+- G03 closure documents:
+  - `GROUP_03_FINAL_REVIEW.md`
+  - `GROUP_03_ACCEPTANCE_MATRIX.md`
+  - `GROUP_03_KNOWN_LIMITATIONS.md`
+  - `GROUP_04_READINESS_HANDOFF.md`
+- Update `docs/handoffs/THE_BALANCE_GROUP_04_MASTER_HANDOFF_<date>.md`
+- NO schema changes
+
+### 11.3 Expected Files
+
+| File | Type | Purpose |
+|------|------|---------|
+| `tests/integration/g03-08-comprehensive-sentinel.integration.test.ts` | New | All sentinel tests in one comprehensive suite |
+| `tests/integration/g03-08-performance.integration.test.ts` | New | Performance baseline tests |
+| `docs/mission-reports/G03/GROUP_03_FINAL_REVIEW.md` | New | G03 final review |
+| `docs/mission-reports/G03/GROUP_03_ACCEPTANCE_MATRIX.md` | New | G03 acceptance matrix |
+| `docs/mission-reports/G03/GROUP_03_KNOWN_LIMITATIONS.md` | New | G03 known limitations |
+| `docs/mission-reports/G03/GROUP_04_READINESS_HANDOFF.md` | New | G04 readiness handoff |
+| `docs/handoffs/THE_BALANCE_GROUP_04_MASTER_HANDOFF_<date>.md` | New | G04 master handoff |
+| `docs/mission-reports/G03/03-08_REPORT.md` | New | Mission report |
+
+### 11.4 Acceptance Criteria
+
+- [ ] All sentinel tests pass in one comprehensive suite
+- [ ] Performance baseline established (no regressions from G02)
+- [ ] All G03 closure documents produced
+- [ ] G04 readiness handoff documents the next group's scope (expected, not frozen)
+- [ ] ~15 new tests pass
+- [ ] Existing tests still pass
+- [ ] CI + Recovery pass
+- [ ] Owner + ChatGPT issue FINAL PASS for G03
+
+### 11.5 Dependencies
+
+- 03-07 approved
+
+---
+
+## 12. Post-G03 Closure
+
+### 12.1 Expected G03 Final State
 
 ```text
 GROUP 03 = APPROVED — FINAL PASS — CLOSED
@@ -765,102 +676,112 @@ Final implementation SHA: <to be filled at G03 closure>
 Final closure SHA: <to be filled at G03 closure>
 CI #??: SUCCESS
 Recovery #??: SUCCESS
-Total Tests: ~1007 passed | 10 skipped | 0 failed
+Total Tests: ~1027 passed | 10 skipped | 0 failed (estimated — was 817 at end of G02)
 
 GROUP 04 = READY FOR SCOPE REVIEW
 GROUP 04 IMPLEMENTATION = NOT AUTHORIZED
 ```
 
-### 10.3 G03 Known Limitations (Expected)
-
-Based on the design, the following limitations are expected to be documented at G03 closure:
+### 12.2 Expected G03 Known Limitations
 
 | Limitation | Status | Description |
 |-----------|--------|-------------|
-| G03-L01: Cross-Tenant Reform Coordination | DOCUMENTED | Reforms are single-tenant; cross-ministry coordination requires future mission |
+| G03-L01: Cross-Tenant Coordination (Cross-Country) | DOCUMENTED | Scenarios A (intra-tenant) + B (cross-tenant same-country) supported; Scenario C (cross-country) deferred |
 | G03-L02: No Browser UI for Reform | DEFERRED | G03 ships API-first (mirrors G02-L03); UI deferred to future mission |
 | G03-L03: Publication Workflow Not Implemented | DOCUMENTED | Inherits G02-L25; no publication approval in G03 |
 | G03-L04: Government Projection Limited to Public Evidence | DOCUMENTED | Inherits G02-L26; no granular clearance model |
 | G03-L05: LLM Advisor Uses StubProvider | DOCUMENTED | All advisor output `simulated: true`; real LLM integration deferred |
 | G03-L06: No Real Country Data | DOCUMENTED | Inherits G02-L04; Demolandia only |
-| G03-L07: G02-L22/L23/L24 Still Deferred | DEFERRED | Institutional early warning, hierarchical aggregation, sector observability — all still deferred |
-| G03-L08: Advisor Causal Language Rejection Is Pattern-Based | DOCUMENTED | Regex-based; not a perfect NLP classifier |
+| G03-L07: G02-L22/L23/L24 Still Deferred | DEFERRED | Per D8 dependency assessment |
+| G03-L08: Advisor Causal Language Rejection Is Pattern-Based | DOCUMENTED | Regex-based; not NLP classifier (defense in depth, not guarantee) |
 | G03-L09: No Sub-Year Granularity for Reform Timeline | DOCUMENTED | Inherits G02-L01; yearly/quarterly/monthly only |
 | G03-L10: No External Integrations (Email/SMS/Webhooks) | DOCUMENTED | Inherits G02-L05; no notifications for reform state changes |
+| G03-L11: Cross-Country Coordination | DEFERRED | Scenario C (cross-tenant cross-country) requires cross-country consent beyond G03's scope |
 
 ---
 
-## 11. Risk Register (Cross-Mission)
+## 13. Estimated Timeline (Revised)
 
-| Risk | Affects mission | Likelihood | Impact | Mitigation |
-|------|----------------|------------|--------|------------|
-| R-G3-01: LLM advisor produces causal claims | 03-03 | Medium | High | Zod + service check + reviewer judgment |
-| R-G3-02: Cross-tenant reform references | 03-01, 03-02 | Low | High | RLS + cross-tenant triggers + service check (triple enforcement) |
-| R-G3-03: ReformApproval not atomic with audit | 03-04 | Low | Critical | `writeAuditTx` inside `withAuthenticatedTenant` transaction; sentinel test |
-| R-G3-04: ReformActionUpdate mutated/deleted | 03-01, 03-05 | Medium | High | RLS blocks UPDATE/DELETE; sentinel test |
-| R-G3-05: F6 enforcement bypassed | 03-01, 03-06 | Low | High | DB trigger + Zod + service check (triple enforcement); sentinel test |
-| R-G3-06: Cross-ministry reform coordination gap | All | High | Medium | Documented as G03-L01; cross-tenant coordination deferred to future mission |
-| R-G3-07: G02-L25 blocks public reform visibility | All | High | Medium | Documented; G03 has no publication workflow; future mission required |
-| R-G3-08: StubProvider produces unrealistic drafts | 03-03 | Medium | Low | `simulated: true` flag; analyst reviews/edits before saving |
-| R-G3-09: Schema migration fails on existing DB | 03-01 | Low | High | Migration is additive; tested in CI fresh-install + recovery drill |
-| R-G3-10: Test count regression | All | Low | Medium | Each mission has explicit test count targets; CI fails if count drops |
-
----
-
-## 12. Mission Dependencies Graph
-
-```
-03-00 (DESIGN)
-  │
-  ▼
-03-01 (SCHEMA)
-  │
-  ▼
-03-02 (PROPOSAL + ALTERNATIVE)
-  │
-  ├──→ 03-03 (COMPARISON + ADVISOR)  ←─┐
-  │       │                            │
-  │       └──→ 03-04 (APPROVAL) ←──────┘
-  │                 │
-  │                 ▼
-  │            03-05 (ACTION + UPDATES)
-  │                 │
-  │                 ▼
-  │            03-06 (VERIFICATION + FEEDBACK)
-  │                 │
-  │                 ▼
-  └──→ G03 CLOSURE (FINAL_REVIEW + ACCEPTANCE_MATRIX + KNOWN_LIMITATIONS + G04_READINESS_HANDOFF)
-```
-
-**Critical path**: 03-00 → 03-01 → 03-02 → 03-04 → 03-05 → 03-06 (6 sequential missions)
-
-**Parallel opportunity**: 03-03 (Comparison + Advisor) could theoretically run in parallel with 03-04 (Approval) since they don't depend on each other. However, G03 follows strict sequential execution to keep review manageable. Parallel execution is not planned.
-
----
-
-## 13. Estimated Timeline
-
-> **Note**: This is a planning estimate, not a commitment. Actual duration depends on review cycles, iteration on feedback, and CI/Recovery timing.
+> **Note**: Estimates, not commitments. Actual duration depends on review cycles, iteration on feedback, and CI/Recovery timing.
 
 | Mission | Estimated review cycles | Estimated elapsed |
 |---------|------------------------|-------------------|
-| 03-00 | 1-2 (design review) | 1 session |
+| 03-00 | 2-3 (design review + revision) | 2 sessions (we're here now) |
 | 03-01 | 1-2 (schema review) | 1 session |
-| 03-02 | 2-3 (CRUD + lifecycle) | 1-2 sessions |
-| 03-03 | 1-2 (advisory services) | 1 session |
-| 03-04 | 2-3 (atomic approval — critical) | 1-2 sessions |
-| 03-05 | 2 (lifecycle + append-only) | 1-2 sessions |
-| 03-06 | 2-3 (F6 + feedback loop) | 1-2 sessions |
+| 03-02 | 2 (vertical slice — critical validation) | 1-2 sessions |
+| 03-03 | 1-2 (alternatives — incremental) | 1 session |
+| 03-04 | 1-2 (advisory services) | 1 session |
+| 03-05 | 2-3 (atomic approval — critical) | 1-2 sessions |
+| 03-06 | 2-3 (coordination — most complex) | 2 sessions |
+| 03-07 | 2 (vertical slice for coordination) | 1 session |
+| 03-08 | 1 (closure) | 1 session |
 | Closure | 1 (final review) | 1 session |
 
-**Total estimated**: 8-14 sessions for the full GROUP 03.
+**Total estimated**: 11-15 sessions for the full GROUP 03 (was 8-14 in rev 1).
 
 ---
 
-## 14. Conclusion
+## 14. Risk Register (Updated)
 
-GROUP 03 is decomposed into **7 missions** (1 design + 1 schema + 5 service), totaling an estimated **~190 new tests** and **~6800 LOC**. Each mission has:
+| Risk | Affects mission | Likelihood | Impact | Mitigation |
+|------|----------------|------------|--------|------------|
+| R-G3-01: LLM advisor produces causal claims | 03-04 | Medium | High | Zod + service check + reviewer judgment (defense in depth, not guarantee) |
+| R-G3-02: Cross-tenant reform references | 03-01, 03-02 | Low | High | RLS + cross-tenant triggers + service check (triple enforcement) |
+| R-G3-03: ReformApproval not atomic with audit | 03-05 | Low | Critical | `writeAuditTx` inside transaction; sentinel test |
+| R-G3-04: ReformActionUpdate mutated/deleted | 03-01, 03-02 | Medium | High | RLS blocks UPDATE/DELETE; sentinel test |
+| R-G3-05: F6 enforcement bypassed | 03-01, 03-02 | Low | High | DB trigger + Zod + service check (triple enforcement); sentinel test |
+| R-G3-06: Coordination shared view leaks private data | 03-06 | Medium | Critical | Explicit shared snapshots (no live links); reviewer approval; sentinel test (T1) |
+| R-G3-07: Majority override of dissenting participant | 03-06 | Low | Critical | Two-level approval (coordination plan + per-participant); T3 sentinel test |
+| R-G3-08: Coordination lead privilege escalation | 03-06 | Low | High | Policy immutable post-creation; RLS blocks cross-tenant proposal access; T5 sentinel test |
+| R-G3-09: StubProvider produces unrealistic drafts | 03-04 | Medium | Low | `simulated: true` flag; analyst reviews/edits |
+| R-G3-10: Schema migration fails on existing DB | 03-01 | Low | High | Migration is additive; tested in CI fresh-install + recovery drill |
+| R-G3-11: Vertical slice reveals contract problems | 03-02 | Medium | Medium | **This is the point of 03-02** — early discovery is better than late discovery |
+| R-G3-12: Coordination complexity delays G03 | 03-06, 03-07 | Medium | Medium | Phased implementation; coordination is additive to core reform |
 
+---
+
+## 15. Mission Dependencies Graph (Revised)
+
+```
+03-00 (DESIGN — REVISED)
+  │
+  ▼
+03-01 (SCHEMA — 12 tables, 13 permissions, coordination-aware RLS)
+  │
+  ▼
+03-02 (VERTICAL SLICE — minimum viable single-tenant reform) ← NEW
+  │
+  ├──→ 03-03 (ALTERNATIVES — multiple options + selection)
+  │       │
+  │       └──→ 03-04 (COMPARISON + ADVISOR) ←─┐
+  │                 │                          │
+  │                 └──→ 03-05 (ENHANCED APPROVAL) ←─┘
+  │                         │
+  │                         ▼
+  │                    03-06 (COORDINATION SERVICES)
+  │                         │
+  │                         ▼
+  │                    03-07 (COORDINATION VERTICAL SLICE) ← NEW
+  │                         │
+  │                         ▼
+  └──→ 03-08 (POLISH + CLOSURE) ← NEW
+            │
+            ▼
+       G03 CLOSURE (FINAL_REVIEW + ACCEPTANCE_MATRIX + KNOWN_LIMITATIONS + G04_READINESS_HANDOFF)
+```
+
+**Critical path**: 03-00 → 03-01 → 03-02 → 03-03 → 03-04 → 03-05 → 03-06 → 03-07 → 03-08 (9 sequential missions)
+
+---
+
+## 16. Conclusion
+
+GROUP 03 is decomposed into **9 missions** (was 7 in rev 1), totaling an estimated **~210 new tests** and **~7500 LOC**. The revision adds:
+- **Vertical slice early** (03-02) — per owner directive, validates contracts before expanding
+- **Coordination as core** (03-06, 03-07) — per owner directive, multi-institution reform is a first-class capability
+- **Polish + closure mission** (03-08) — explicit closure phase
+
+Each mission has:
 - A clear functional goal
 - A scoped boundary (no scope creep)
 - Explicit entry/exit contracts
@@ -868,10 +789,15 @@ GROUP 03 is decomposed into **7 missions** (1 design + 1 schema + 5 service), to
 - Hard dependencies on previous missions
 - A Definition of Done aligned with the project's 9-step process
 
-The decomposition honors the GROUP 02 pattern (bootstrap + service missions) while extending it to cover the reform loop's additional phases (approval, implementation, verification, feedback).
+The decomposition honors the owner's directives:
+- Multi-institution coordination is core (D6 elevated)
+- Vertical slice validates contracts early
+- Numbers are estimates, not goals
+- G02 limitations are assessed per-limitation, not blanket-deferred
+- Epistemic separation between problem/cause and verification/measurement
 
-**Ready for owner + reviewer approval.**
+**Ready for owner + reviewer final approval.**
 
 ---
 
-*End of G03-00 Mission Roadmap. Companion documents: ARCHITECTURE_PROPOSAL.md, DOMAIN_MODEL.md, WORKFLOW_AND_APPROVALS.md, INTEGRATION_CONTRACTS.md, SECURITY_AND_EVIDENCE_POLICY.md, OPEN_DECISIONS.md.*
+*End of G03-00 Mission Roadmap (Revised). Companion documents: ARCHITECTURE_PROPOSAL.md (revised), DOMAIN_MODEL.md (revised), WORKFLOW_AND_APPROVALS.md (revised), INTEGRATION_CONTRACTS.md (revised), SECURITY_AND_EVIDENCE_POLICY.md (revised), OPEN_DECISIONS.md (revised), THREAT_MODEL.md (new).*

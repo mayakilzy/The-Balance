@@ -2,10 +2,25 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Domain model specification (DESIGN ONLY — no code, no migrations)
-> **Date:** 2026-10-18
+> **Date:** 2026-10-18 (revision 2 — post owner review)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — awaiting owner + reviewer approval
+> **Status:** REVISED per owner directive — re-awaiting final approval
 > **Companion to:** `G03_00_ARCHITECTURE_PROPOSAL.md` §7
+
+> ⚠️ **REVISION NOTE (2026-10-18 rev 2)**: This document specifies the 7 core reform tables from rev 1.
+> The **5 coordination tables** added per owner directive D6 are documented in:
+> - `G03_00_THREAT_MODEL.md` §4 (table schemas + RLS pattern)
+> - `G03_00_OPEN_DECISIONS.md` §7 (D6 — coordination model details)
+>
+> **Total table count is now 12** (7 core below + 5 coordination):
+> - Core: `reform_proposals`, `reform_alternatives`, `reform_approvals`, `reform_actions`, `reform_action_updates`, `reform_verifications`, `reform_feedback_loops`
+> - Coordination (NEW): `reform_coordinations`, `reform_coordination_participants`, `reform_coordination_invitations`, `reform_coordination_shared_snapshots`, `reform_coordination_shared_snapshot_revocations`
+>
+> **D3 revision**: `hypothesizedCauses[]` schema expanded with `confidenceBasis`, `contradictingEvidenceIds`, `reviewStatus`, `reviewedBy`, `reviewedAt` — see `G03_00_OPEN_DECISIONS.md` §4.
+>
+> The 7 core table schemas below remain accurate. The coordination tables will be specified
+> in detail in mission 03-01's migration SQL. A full content update of this document
+> (integrating coordination tables + D3 schema expansion) will be done if the owner requires it.
 
 ---
 

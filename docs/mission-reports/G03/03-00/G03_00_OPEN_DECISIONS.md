@@ -1,616 +1,596 @@
-# G03-00 — Open Decisions
+# G03-00 — Open Decisions (Revised)
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Open decisions register (DESIGN ONLY — no code)
-> **Date:** 2026-10-18
+> **Date:** 2026-10-18 (revision 2 — post owner review)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — awaiting owner approval
-> **Companion to:** `G03_00_ARCHITECTURE_PROPOSAL.md` §15
+> **Status:** REVISED per owner directive — re-awaiting final approval
+> **Companion to:** `G03_00_THREAT_MODEL.md` (new), `G03_00_ARCHITECTURE_PROPOSAL.md` (revised)
 
 ---
 
-## 1. Overview
+## 1. Revision History
 
-This document lists the **open decisions** that require explicit owner approval before GROUP 03 implementation can begin. Each decision includes:
-
-1. **The question** — what needs to be decided
-2. **My recommendation** — what I (GLM, the implementation agent) recommend, with rationale
-3. **Alternatives considered** — what other options exist, with trade-offs
-4. **Impact of each option** — what changes if this option is chosen
-5. **Urgency** — when the decision is needed (before 03-01, before 03-02, etc.)
-
-### 1.1 Decision Status Legend
-
-| Status | Meaning |
-|--------|---------|
-| **PROPOSED** | GLM's recommendation — awaiting owner review |
-| **APPROVED** | Owner has approved the decision |
-| **REJECTED** | Owner has rejected the recommendation — alternatives must be explored |
-| **DEFERRED** | Decision postponed to a later mission |
-| **SUPERSEDED** | A later decision overrides this one |
-
-### 1.2 Decision Count
-
-8 open decisions (D1 through D8) require owner approval before 03-01 can begin.
+| Rev | Date | Changes |
+|-----|------|---------|
+| 1 | 2026-10-18 | Initial proposal — 8 decisions (D1-D8) |
+| 2 | 2026-10-18 (this) | Owner review feedback incorporated. D6 elevated from "DEFERRED" to "APPROVED WITH MODIFICATIONS" (multi-institution coordination is now a core capability). D3 expanded (confidence basis + supporting/contradicting evidence + review status). D8 changed from "defer all" to "per-limitation dependency assessment". New THREAT_MODEL.md document added. New D9 (coordination model details) added. |
 
 ---
 
-## 2. Decision D1 — Independent Reform Tables vs. Reuse G01 Program/Project
+## 2. Decision Status Summary
 
-### 2.1 The Question
-
-Should GROUP 03 introduce **independent tables** for reform proposals, alternatives, actions, and updates? Or should it **reuse the existing G01 Program/Project tables** by extending them with reform-specific fields?
-
-### 2.2 Recommendation: Independent Tables
-
-**I recommend independent tables** (`reform_proposals`, `reform_alternatives`, `reform_actions`, etc.) for the following reasons:
-
-1. **Honors invariant #10** (`src/lib/state-builder/` diff = 0): Reusing G01 tables would require modifying them, violating the read-only constraint on G01 code.
-
-2. **Semantic separation**: A `Program` is a strategic planning artifact (from G01's Strategy Composer). A `ReformAction` is an implementation tracking artifact (from G03). They have different lifecycles, different ownership, and different audit requirements. Conflating them creates conceptual confusion.
-
-3. **Lifecycle mismatch**: Programs have `status: draft | proposed | active | completed | retired`. Reform actions have `status: planned | in_progress | completed | blocked | cancelled`. Different states, different transitions.
-
-4. **Clean rollback**: If G03 needs to be removed (hypothetically), dropping the 7 new tables is cleaner than rolling back extensions to G01 tables.
-
-5. **Pattern consistency**: G02 introduced 5 independent tables (IndicatorDefinition, ObservationPeriod, Observation, VarianceRecord, Alert) rather than extending G01. G03 should follow the same pattern.
-
-### 2.3 Alternatives Considered
-
-#### Alternative A: Extend G01 Program/Project tables
-
-- **Mechanism**: Add nullable columns like `reformProposalId`, `reformStatus`, `reformProgressPercentage` to the `programs` and `projects` tables.
-- **Pros**: Fewer tables (no new `reform_*` tables); single source of truth for "what's being done".
-- **Cons**:
-  - Violates invariant #10 (`state-builder/` diff must = 0)
-  - Conflates two semantically distinct concepts (strategic plan vs. implementation tracking)
-  - Lifecycle state machines don't align
-  - Harder to audit (reform-specific audit actions mixed with strategy audit actions)
-  - Breaks G01's existing tests
-- **Rejected**: Violates invariant + semantic confusion.
-
-#### Alternative B: Reuse G00 Decision + DecisionEvent tables
-
-- **Mechanism**: Use the existing `decisions` table for reform approvals (since `Decision` already has `supportingEvidence`/`counterEvidence` JSONB snapshots).
-- **Pros**: Less schema duplication; leverages existing lifecycle (`proposed → reviewed → approved → implemented → reversed`).
-- **Cons**:
-  - `Decision` is tied to `StrategyVersion` (nullable FK), not to `ReformProposal`. The semantics are different.
-  - `DecisionEvent` doesn't have F6 verification (reform verification needs `verifiedAction` + `evidenceSource`).
-  - The reform loop has more phases than the decision lifecycle (alternatives, actions, action updates, feedback loops).
-  - Mixing decisions and reform approvals in the same table creates audit confusion.
-- **Rejected**: Semantically distinct; doesn't fit the reform lifecycle.
-
-### 2.4 Impact of Independent Tables
-
-- **Schema**: +7 new tables (migration 03-01)
-- **Code**: +11 service modules in `src/lib/reform/`
-- **Tests**: ~190 new tests
-- **Maintenance**: Slightly more code to maintain, but cleaner separation of concerns
-
-### 2.5 Urgency
-
-**Before 03-01** (schema bootstrap). This decision shapes the entire schema.
+| # | Decision | Owner directive | Status |
+|---|----------|-----------------|--------|
+| D1 | Independent reform tables vs. reuse G01 | APPROVED IN PRINCIPLE | Under revision — review all 9 tables for redundancy |
+| D2 | System-initiated opportunity detection | APPROVED — advisory only | Approved |
+| D3 | Problem vs. cause analysis | APPROVED WITH MODIFICATIONS | Under revision — add evidence supporting/contradicting, confidence basis, review status |
+| D4 | Optional FK to Program/Project | APPROVED IN PRINCIPLE | Under revision — add strict tenant/country/strategy context verification |
+| D5 | Three distinct lifecycle states | APPROVED IN PRINCIPLE | Under revision — separate execution verification from outcome measurement |
+| D6 | Cross-ministry coordination | **APPROVED WITH MODIFICATIONS** (elevated from deferred) | Under revision — institution-based, not tenant-based; two-level approval; explicit shared snapshots |
+| D7 | Duplicate proposal prevention | APPROVED — warning + justified override | Approved |
+| D8 | G02 limitations | **CHANGED** — per-limitation dependency assessment, not blanket defer | Under revision — independent assessment of each G02-L22 through L26 |
+| D9 (NEW) | Coordination model details | Required by D6 | Proposed — multi-table model (4 tables), threat model documented separately |
 
 ---
 
-## 3. Decision D2 — System-Initiated "Opportunity Detection"
+## 3. D1 — Independent Reform Tables (Revised)
 
-### 3.1 The Question
+### 3.1 Owner Directive
 
-Should the system **proactively suggest reform opportunities** (e.g., "Alert X has been open for 30 days — consider drafting a reform proposal")? Or should reform initiation be **strictly human** (analyst decides what to reform, system only responds to explicit requests)?
+> "اعتمد مفاهيم التنسيق الجديدة، مع مراجعة الجداول التسعة جميعاً بحثاً عن التكرار. لا ندمج سجل التقدم غير القابل للتلاعب داخل JSONB."
 
-### 3.2 Recommendation: Advisory Opportunity Detection (No Auto-Create)
+### 3.2 Revised Recommendation
 
-**I recommend advisory-only opportunity detection**:
+After owner review, the recommendation stands with the following adjustments:
 
-1. The system may compute a list of "reform opportunities" (alerts that are open for >N days, variances that exceed threshold M, etc.)
-2. This list is presented to analysts as **suggestions**, not as created proposals
-3. The analyst must explicitly click "Draft Proposal from this Opportunity" to create a proposal — the system never creates proposals automatically
-4. The opportunity list is descriptive (no causal claims, no ranking)
+1. **9 tables total** (7 original + 2 coordination... but see D6 below — coordination requires 4 tables, not 2). Total: **7 + 4 = 11 tables** for G03.
 
-### 3.3 Rationale
+2. **Review for redundancy** — I performed this review. Findings:
+   - `reform_action_updates` (append-only progress log): **KEEP** — owner explicitly directed not to merge into JSONB. The append-only enforcement is a security property, not a data modeling choice.
+   - `reform_approvals` (immutable approval record): **KEEP** — evidence snapshot at approval time requires a separate table. Merging into `reform_proposals` would lose the snapshot's immutability.
+   - `reform_verifications` (F6-pattern verification): **KEEP** — one per action (unique constraint). Merging into `reform_actions` would conflate execution lifecycle with verification status (violates invariant #7).
+   - `reform_feedback_loops` (descriptive before/after): **KEEP** — one per action (unique constraint). Merging into `reform_actions` would lose the `attributionLevel` DB trigger enforcement.
+   - `reform_alternatives`: **KEEP** — multiple per proposal; cannot be a JSONB array on `reform_proposals` because alternatives have their own lifecycle (selected/withdrawn) and unique constraints.
+   - All other tables are non-redundant.
 
-1. **Honors invariant #14** (human remains sovereign): No automatic reform creation. The system suggests; the human decides.
+3. **No merges**: Per owner directive, `reform_action_updates` stays as a separate table. All other tables are similarly justified.
 
-2. **Reduces analyst cognitive load**: Without opportunity detection, analysts must manually scan all alerts + variances to find candidates for reform. With it, the system surfaces the most pressing candidates.
+### 3.3 Final Count
 
-3. **Advisory only**: The opportunity list is not a "to-do list" — it's a "consider these" list. The analyst may ignore all suggestions.
+| Table group | Count | Purpose |
+|-------------|-------|---------|
+| Core reform entities | 7 | ReformProposal, ReformAlternative, ReformApproval, ReformAction, ReformActionUpdate, ReformVerification, ReformFeedbackLoop |
+| Coordination entities (D6) | 4 | ReformCoordination, ReformCoordinationParticipant, ReformCoordinationInvitation, ReformCoordinationSharedSnapshot |
+| **TOTAL** | **11** | |
 
-4. **Pattern consistency**: G02's `assessEarlyWarning` is already advisory + descriptive. G03's opportunity detection follows the same pattern.
+### 3.4 Number of Services (Result, Not Goal)
 
-### 3.4 Alternatives Considered
+| Service group | Count | Purpose |
+|---------------|-------|---------|
+| Core reform services | 11 | (as originally proposed) |
+| Coordination services | 1 | `reform-coordination-service.ts` (CRUD + invitations + shared snapshots + plan approval) |
+| **TOTAL** | **12** | |
 
-#### Alternative A: No system suggestions (strict human-initiated)
-
-- **Mechanism**: Analysts must manually navigate to alerts/variances and decide to draft proposals. No "opportunity list" is computed.
-- **Pros**: Maximum human sovereignty; no risk of system bias.
-- **Cons**: Analysts may miss pressing issues; cognitive load is high.
-- **Rejected**: Limits value; advisory suggestions don't violate sovereignty.
-
-#### Alternative B: Auto-create draft proposals from opportunities
-
-- **Mechanism**: When an alert is open for >N days, the system automatically creates a `ReformProposal` with `status: draft` and pre-fills the problem statement.
-- **Pros**: Faster turnaround; no manual initiation.
-- **Cons**:
-  - Violates invariant #14 (human remains sovereign — even draft creation is a human act)
-  - Creates clutter (many auto-generated drafts that analysts never review)
-  - May produce causal claims if the LLM is used for auto-drafting
-- **Rejected**: Violates sovereignty; creates clutter.
-
-### 3.5 Implementation Note
-
-Opportunity detection is NOT part of 03-00 through 03-06. It's a **future mission** (03-07 or later) that builds on the core reform pipeline. The current design (03-00) only specifies that the *architecture* supports it — the actual detection service is deferred.
-
-### 3.6 Urgency
-
-**Low** — opportunity detection is a future mission. The decision here is only about whether the *architecture* permits it. (Yes, it does — `ReformProposal.originatingAlertId` is nullable, so proposals can be created from alerts OR from human initiative.)
+**Critical**: Per owner directive, these numbers are **estimates derived from the design**, not goals to hit. They will be adjusted if the design evolves further.
 
 ---
 
-## 4. Decision D3 — Distinguishing Problem Detection vs. Cause Analysis
+## 4. D3 — Problem & Cause Analysis (Revised)
 
-### 4.1 The Question
+### 4.1 Owner Directive
 
-How should GROUP 03 distinguish between:
-- **Problem detection** — "what is the observed variance?" (descriptive, factual)
-- **Cause analysis** — "why does this variance exist?" (hypothetical, inferential)
+> "افصل المشكلة المرصودة عن الفرضيات التفسيرية. استخدم مستوى ثقة وصفياً: `unknown / low / medium / high`. وأضف: Evidence supporting the hypothesis. Evidence contradicting the hypothesis. Confidence basis and assessment source. Hypothesis review status and timestamp. لا تعرض مستوى الثقة على أنه احتمال إحصائي معاير دون دليل."
 
-### 4.2 Recommendation: Separate Fields with Confidence Levels
+### 4.2 Revised `hypothesizedCauses[]` Schema
 
-**I recommend separate fields** on `ReformProposal`:
+```typescript
+export const HypothesizedCauseSchema = z.object({
+  cause: z.string().min(1).max(2000),
+  // Confidence level — descriptive, not probabilistic
+  confidenceLevel: z.enum(["unknown", "low", "medium", "high"]).default("unknown"),
+  // Confidence basis — what is the confidence based on?
+  confidenceBasis: z.enum([
+    "analyst_judgment",           // analyst's expert judgment
+    "historical_pattern",          // based on historical data patterns
+    "statistical_correlation",     // based on statistical correlation (NOT causation)
+    "expert_consultation",         // consulted with domain experts
+    "literature_review",           // based on published research
+    "international_comparison",    // compared with other countries' experiences
+    "unknown",                     // basis not specified
+  ]).default("unknown"),
+  // Evidence supporting the hypothesis (live links, not snapshots — these are working hypotheses)
+  supportingEvidenceIds: z.array(z.string()).default([]),
+  // Evidence contradicting the hypothesis (CRITICAL — owner directive)
+  contradictingEvidenceIds: z.array(z.string()).default([]),
+  // Hypothesis review status
+  reviewStatus: z.enum([
+    "proposed",                    // initial draft
+    "under_review",                // being analyzed
+    "validated",                   // supporting evidence outweighs contradicting
+    "invalidated",                 // contradicting evidence outweighs supporting
+    "inconclusive",                // evidence is balanced or insufficient
+    "superseded",                  // replaced by a newer hypothesis
+  ]).default("proposed"),
+  // Review tracking
+  reviewedBy: z.string().optional(),
+  reviewedAt: z.date().optional(),
+  reviewNotes: z.string().max(5000).optional(),
+  // Provenance
+  proposedBy: z.string(),
+  proposedAt: z.date().default(() => new Date()),
+  // Last modification (for hypothesis evolution tracking)
+  lastModifiedAt: z.date().default(() => new Date()),
+  lastModifiedBy: z.string().optional(),
+});
+```
 
-1. `problemStatement` (String, required) — describes the observed variance/problem. Descriptive only, no causal claims. Example: "Quarterly inflation exceeded the planned milestone by 2.3 percentage points for two consecutive periods."
+### 4.3 Critical Design Choices
 
-2. `hypothesizedCauses` (JSONB array, optional) — list of hypothesized causes, each with:
-   - `cause` (String) — the hypothesized cause
-   - `confidenceLevel` (Enum: `low` | `medium` | `high`) — analyst's confidence in this hypothesis
-   - `supportingEvidenceIds` (String[]) — evidence supporting this hypothesis
+1. **`confidenceLevel` is descriptive, not probabilistic**: `unknown/low/medium/high` — never a percentage. Per owner directive, no calibrated probability without evidence.
 
-### 4.3 Rationale
+2. **`confidenceBasis` is required for non-`unknown` confidence**: If `confidenceLevel != "unknown"`, the basis must be specified. This prevents analysts from setting `high` confidence without justification.
 
-1. **Epistemic honesty**: Problem detection is factual (the variance exists). Cause analysis is hypothetical (we *think* X caused Y, but we're not sure). Conflating them creates false certainty.
+3. **`contradictingEvidenceIds` is a first-class field**: Not hidden in `metadata`. The system explicitly tracks evidence that contradicts each hypothesis.
 
-2. **Honors invariant #1** (`attributionLevel = "descriptive"`): By separating `problemStatement` (descriptive) from `hypothesizedCauses` (explicitly hypothetical), we make it clear that causes are *assumptions*, not facts.
+4. **`reviewStatus` tracks the hypothesis lifecycle**: A hypothesis is not static — it evolves as evidence accumulates. The system tracks: proposed → under_review → validated/invalidated/inconclusive → superseded.
 
-3. **Supports later verification**: When the reform is verified (F6 pattern), the verifier can check whether the hypothesized causes were validated — without conflating them with the original problem.
+5. **`reviewedBy` + `reviewedAt`**: Hypothesis validation is a human act, not automatic. The reviewer who validated/invalidated the hypothesis is recorded.
 
-4. **Pattern consistency**: G02's `VarianceRecord` separates `varianceAbsolute` (factual) from `attributionLevel: "descriptive"` (epistemic stance). G03 follows the same separation.
+6. **Live links, not snapshots**: `supportingEvidenceIds` and `contradictingEvidenceIds` are live references to the `Evidence` table. As evidence is verified/refuted over time, the hypothesis context naturally updates. This is different from `ReformApproval`'s evidence snapshot (which is frozen at approval time).
 
-### 4.4 Alternatives Considered
+### 4.4 Honest Acknowledgment (Per Owner Directive)
 
-#### Alternative A: Single `problemDescription` field
+> "ولا تعتبر regex أو `attributionLevel="descriptive"` ضماناً كافياً لسلامة النصوص من الادعاءات السببية."
 
-- **Mechanism**: One field that covers both problem + causes.
-- **Pros**: Simpler schema.
-- **Cons**:
-  - Conflates observation with hypothesis
-  - No structured way to capture confidence levels
-  - Harder to verify causes later
-- **Rejected**: Epistemically dishonest; loses structured confidence data.
+The owner correctly identified that my original `regex` pattern + `attributionLevel` DB trigger is **insufficient** to guarantee causal-language-free text. The revised model addresses this by:
 
-#### Alternative B: Separate `Problem` and `Cause` entities (normalized)
+1. **Epistemic separation in the data model** (not just the text): `problemStatement` (descriptive, factual) is separate from `hypothesizedCauses[]` (explicitly hypothetical). The system cannot conflate them.
 
-- **Mechanism**: A `ReformProblem` table and a `ReformCause` table, with `ReformCause.problemId` FK.
-- **Pros**: Fully normalized; causes can be shared across problems.
-- **Cons**:
-  - Overkill for the current use case
-  - Adds 2 more tables (we'd have 9 instead of 7)
-  - Causes are rarely shared across problems (each problem has its own context)
-- **Rejected**: YAGNI; JSONB array is sufficient.
+2. **`reviewStatus` field makes epistemic state explicit**: A hypothesis is `proposed`, `under_review`, `validated`, `invalidated`, `inconclusive`, or `superseded`. The reviewer must explicitly decide the epistemic status.
 
-### 4.5 Urgency
+3. **`confidenceBasis` forces epistemic honesty**: The analyst must declare the basis for their confidence. "Statistical correlation" is allowed (because correlation is descriptive), but it's explicitly labeled — not hidden.
 
-**Before 03-01** (schema bootstrap). This shapes the `ReformProposal` table structure.
+4. **Reviewer judgment is the primary defense**: The system cannot replace human review. The reviewer reads the text, evaluates the evidence, and decides whether the hypothesis is valid. The DB triggers and regex patterns are **defense in depth**, not the primary safeguard.
 
----
+5. **Regex stays as a defense-in-depth layer** (not removed): It catches obvious policy-outcome language in `verifiedAction`. But it's documented as a weak check — not a guarantee.
 
-## 5. Decision D4 — Relationship Between ReformAction and G01 Program/Project
+6. **Audit trail of epistemic decisions**: Every `reviewStatus` change is audited via `writeAuditTx` (action: `reform.hypothesis_reviewed`). The reviewer is accountable.
 
-### 5.1 The Question
+### 4.5 What This Does NOT Solve
 
-Should `ReformAction` have a **required** foreign key to G01 `Program` or `Project`? Or should the link be **optional** (nullable)?
+- A determined analyst can still write subtly causal language in the `cause` field (e.g., "the lag in monetary transmission contributes to inflation persistence"). The system cannot detect this. The reviewer must.
+- The system cannot verify that `supportingEvidenceIds` actually support the cause. The reviewer must read the evidence.
+- The system cannot prevent analysts from overestimating confidence. The reviewer must challenge it.
 
-### 5.2 Recommendation: Optional Nullable FK
-
-**I recommend optional nullable FK**:
-- `ReformAction.programId` (nullable) — optional link to G01 Program
-- `ReformAction.projectId` (nullable) — optional link to G01 Project
-
-### 5.3 Rationale
-
-1. **Not all reforms fit existing programs**: A reform may be triggered by an alert that doesn't align with any existing G01 program. Forcing a link would require creating a "fake" program just to satisfy the FK — bad data hygiene.
-
-2. **Some reforms are standalone**: A targeted reform (e.g., "issue a memo clarifying regulation X") may not need a full program/project structure. It's a single action, not a multi-project initiative.
-
-3. **When a reform DOES fit a program, the link is valuable**: The analyst can see "this reform action is part of program Y, which is part of strategy Z." This provides strategic context.
-
-4. **Pattern consistency**: G02's `IndicatorDefinition` has optional FKs to `Objective`, `Program`, and `StrategyVersion` (all nullable). G03 follows the same pattern.
-
-### 5.4 Alternatives Considered
-
-#### Alternative A: Required FK to Program
-
-- **Mechanism**: `ReformAction.programId` is NOT NULL.
-- **Pros**: Every reform is tied to a strategic program — stronger traceability.
-- **Cons**:
-  - Forces creation of "fake" programs for standalone reforms
-  - Some legitimate reforms don't fit any program
-  - Breaks the "human initiative" path (an analyst may want to create a reform without first creating a program)
-- **Rejected**: Too rigid; doesn't match real-world reform patterns.
-
-#### Alternative B: Required FK to either Program OR Project (XOR)
-
-- **Mechanism**: `ReformAction.programId` OR `ReformAction.projectId` must be set (but not both).
-- **Pros**: Forces strategic alignment; ensures every reform is tied to planning.
-- **Cons**:
-  - XOR constraints are awkward in PostgreSQL (requires a CHECK constraint)
-  - Still forces a link when none exists
-  - Breaks standalone reforms
-- **Rejected**: Same issue as Alternative A, plus implementation complexity.
-
-### 5.5 Urgency
-
-**Before 03-01** (schema bootstrap). This shapes the `ReformAction` table structure.
+These are inherent limitations of any system that relies on human judgment. The model provides the **structure** for honest epistemic practice, but it cannot enforce it.
 
 ---
 
-## 6. Decision D5 — Definition of "Approved", "Implemented", "Verified"
+## 5. D4 — Optional FK to Program/Project (Revised)
 
-### 6.1 The Question
+### 5.1 Owner Directive
 
-When is a reform "approved"? When is it "implemented"? When is its impact "verified"? Should these be:
-- **Three distinct states** with clear boundaries?
-- **A single linear progression** (approved → implemented → verified)?
-- **Conflated** (e.g., "approved" = "implemented")?
+> "روابط Program/Project اختيارية، مع التحقق الصارم من المستأجر والبلد والسياق الاستراتيجي."
 
-### 6.2 Recommendation: Three Distinct States
+### 5.2 Revised Service-Layer Verification
 
-**I recommend three distinct states**, each with its own entity + lifecycle:
+When a ReformAction is created with `programId` or `projectId`, the service must verify:
 
-1. **Approved** — A human reviewer has signed off on the reform proposal (via `ReformApproval` record). The reform is *authorized* but not yet *executed*.
+1. **Tenant match**: The Program/Project belongs to the same tenant as the ReformAction.
+2. **Country match**: The Program's strategy version references a Strategy whose tenant's country matches the ReformProposal's tenant's country.
+3. **Strategic context match**: The Program's `strategyVersionId` matches (or is compatible with) the ReformProposal's `strategyVersionId` (if set on the proposal).
 
-2. **Implemented** — The reform action has been carried out (via `ReformAction.status = "completed"`). The reform is *executed* but its impact is not yet *verified*.
+### 5.3 Verification Logic
 
-3. **Verified** — A human reviewer has verified that the specific action was executed (via `ReformVerification.verificationStatus = "verified"`, F6 pattern). The reform is *verified as executed* but its *impact on indicators* is not yet *measured*.
+```typescript
+async function verifyProgramLink(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  programId: string,
+  proposalStrategyVersionId?: string
+): Promise<void> {
+  const program = await tx.program.findFirst({
+    where: { id: programId, tenantId },
+    include: { strategyVersion: { include: { strategy: { include: { tenant: true } } } } },
+  });
+  if (!program) {
+    throw new NotFoundError("Program not found in tenant scope");
+  }
 
-4. **Measured** (optional, via `ReformFeedbackLoop`) — A new observation has been taken post-reform, and a descriptive comparison is made. The impact is *described* but **never causally attributed** to the reform.
+  // Country match check
+  const programCountryId = program.strategyVersion.strategy.tenant.countryId;
+  const actionTenant = await tx.tenant.findUnique({ where: { id: tenantId } });
+  if (actionTenant?.countryId !== programCountryId) {
+    throw new ConflictError(
+      "Country mismatch: ReformAction's tenant country must match Program's strategy version country"
+    );
+  }
 
-### 6.3 Rationale
+  // Strategic context match (if proposal has a strategyVersionId)
+  if (proposalStrategyVersionId && program.strategyVersionId !== proposalStrategyVersionId) {
+    // Not a hard error — the program may be from a different but compatible strategy
+    // Log a warning and require explicit confirmation in the input
+    // (the service accepts `allowCrossStrategyProgramLink: true` to override)
+  }
+}
+```
 
-1. **Audit granularity**: Each state transition is a separate audit event. Conflating them loses the audit trail.
+### 5.4 Acceptance
 
-2. **F6 compliance**: Verification (state 3) requires `verifiedAction` + `evidenceSource` — describing the *specific action verified*, not a policy outcome. This is only possible if verification is a separate state from implementation.
-
-3. **Causal attribution prohibition**: The feedback loop (state 4) is *descriptive only*. By separating "verified as executed" (state 3) from "impact measured" (state 4), we make it clear that execution verification does NOT imply causal attribution.
-
-4. **Pattern consistency**: G02's Alert separates `lifecycleStage` (detected → notified → reviewed → decision_documented → closed) from `executionStatus` (not_applicable → pending → verified → disputed). G03 follows the same separation principle.
-
-### 6.4 Alternatives Considered
-
-#### Alternative A: Single linear progression
-
-- **Mechanism**: `ReformProposal.status` goes `draft → approved → implemented → verified` (single field).
-- **Pros**: Simpler schema.
-- **Cons**:
-  - Loses the distinction between "authorized" and "executed"
-  - Cannot represent "approved but not yet started" vs. "in progress"
-  - F6 verification would be conflated with implementation
-- **Rejected**: Loses audit granularity; conflates distinct concepts.
-
-#### Alternative B: Conflate "approved" with "implemented"
-
-- **Mechanism**: Approval automatically sets the action to "in_progress".
-- **Pros**: Faster workflow.
-- **Cons**:
-  - Removes the "authorized but not started" state
-  - Makes it impossible to track "approved reforms that haven't been started yet"
-- **Rejected**: Loses important state information.
-
-### 6.5 Urgency
-
-**Before 03-01** (schema bootstrap). This shapes the entire lifecycle structure.
+This adds verification complexity but honors the owner's directive for strict context matching. The `allowCrossStrategyProgramLink` flag allows legitimate cases where a reform action references a program from a different (but compatible) strategy.
 
 ---
 
-## 7. Decision D6 — Cross-Ministry (Cross-Tenant) Reforms
+## 6. D5 — Lifecycle Separation (Revised)
 
-### 7.1 The Question
+### 6.1 Owner Directive
 
-How should GROUP 03 handle reforms that span multiple ministries (e.g., a monetary-fiscal coordination reform between the Central Bank and the Ministry of Planning)?
+> "افصل دائماً: Human approval. Implementation completion. Execution verification. Descriptive outcome measurement."
 
-### 7.2 Recommendation: Defer to Future Mission (Single-Tenant Only in G03)
+### 6.2 Four Distinct States (Revised from Three)
 
-**I recommend that G03 ships single-tenant only**, with cross-tenant coordination deferred to a future mission.
+The owner's directive separates **execution verification** from **outcome measurement**. This is a critical distinction I had conflated. Revised:
 
-### 7.3 Rationale
+| # | State | Entity | Field | What it certifies |
+|---|-------|--------|-------|-------------------|
+| 1 | **Human approval** | `ReformApproval` | (created) | A reviewer has authorized the reform |
+| 2 | **Implementation completion** | `ReformAction` | `status = completed` | The action has been executed (work done) |
+| 3 | **Execution verification** | `ReformVerification` | `verificationStatus = verified` | A reviewer has verified the specific action was executed (F6 pattern) |
+| 4 | **Descriptive outcome measurement** | `ReformFeedbackLoop` | (created) | A new observation has been taken post-reform, and a descriptive comparison is recorded |
 
-1. **Complexity**: Cross-tenant coordination requires:
-   - A `ReformCoordination` table linking proposals across tenants
-   - A multi-tenant approval workflow (all ministries must approve)
-   - Shared visibility with explicit per-tenant consent
-   - New permissions (`reform:coordination:*`)
-   - New audit actions for coordination events
-   
-   This is a significant feature that would expand G03's scope by ~30%.
+### 6.3 Critical Separation: Verification vs. Measurement
 
-2. **Current data model**: G00/G01/G02 are strictly tenant-isolated. Adding cross-tenant coordination to G03 would require rethinking the RLS model for the new coordination tables — a non-trivial architectural extension.
+- **Verification (state 3)** is about the **action**: was the memo issued? was the infrastructure completed? was the regulation published? This is F6 — `verifiedAction` + `evidenceSource` required.
 
-3. **Workaround exists**: Each ministry can create its own proposal for the same problem (referencing the same originating Alert). This is "soft coordination" — no shared state, but the audit trail shows both ministries are working on the same problem.
+- **Measurement (state 4)** is about the **outcome**: did the indicator change after the reform? This is **descriptive only** — `attributionLevel = "descriptive"`. The system never claims the reform *caused* the change.
 
-4. **G02 pattern**: G02 shipped without cross-tenant variance aggregation (each tenant computes its own variance). G03 follows the same pattern — ship single-tenant first, defer cross-tenant to a future mission.
+### 6.4 Why This Separation Matters
 
-### 7.4 Alternatives Considered
+A reform can be:
+- **Approved + Implemented + Verified + Measured**: full lifecycle.
+- **Approved + Implemented + Verified + NOT Measured**: the action was verified, but no post-reform observation has been taken yet (e.g., the next measurement period hasn't arrived).
+- **Approved + Implemented + NOT Verified + Measured**: the action was completed but not verified by a reviewer (process gap), yet observations continued.
+- **Approved + NOT Implemented**: the reform was approved but never executed (e.g., political change).
+- **Approved + Implemented + Verified + Measured + Disputed**: the verification was disputed (someone challenged the F6 claim).
 
-#### Alternative A: Implement cross-tenant coordination in G03
+The four states are **independent**. The system tracks each separately, and the audit trail preserves the full history.
 
-- **Mechanism**: Add `ReformCoordination` table + multi-tenant approval workflow.
-- **Pros**: Full cross-ministry reform support out of the box.
-- **Cons**:
-  - Significant scope expansion (~30% more work)
-  - New RLS pattern (cross-tenant visibility with consent)
-  - New permissions + audit actions
-  - Delays G03 closure by 1-2 missions
-- **Rejected**: Scope creep; G03 should ship focused.
+### 6.5 State Machine (Revised)
 
-#### Alternative B: Use a "shared tenant" pattern
-
-- **Mechanism**: Create a "joint reform tenant" that both ministries are members of. The joint tenant owns the reform proposal; both ministries see it via their membership.
-- **Pros**: Reuses existing tenant + membership model.
-- **Cons**:
-  - Requires creating joint tenants for every cross-ministry reform (administrative overhead)
-  - Doesn't scale to N-ministry reforms
-  - Confuses ownership (who owns the joint tenant?)
-- **Rejected**: Hacky; doesn't scale.
-
-### 7.5 Documented as Limitation
-
-This will be documented as **G03-L01: Cross-Tenant Reform Coordination** in the G03 Known Limitations register (produced at G03 closure).
-
-### 7.6 Urgency
-
-**Low** — deferring doesn't block 03-01. The architecture (single-tenant) is already specified.
+```
+ReformProposal: draft → under_review → approved/rejected/superseded
+                                       │
+                                       ▼ (state 1: human approval — ReformApproval)
+                                       │
+ReformAction: planned → in_progress → completed/blocked/cancelled
+                                              │
+                                              ▼ (state 2: implementation completion)
+                                              │
+ReformVerification: pending → verified/disputed
+                              │
+                              ▼ (state 3: execution verification — F6)
+                              │
+ReformFeedbackLoop: (created, immutable, attributionLevel="descriptive")
+                              │
+                              ▼ (state 4: descriptive outcome measurement)
+                              │
+[New Observation created via ingestObservation — append-only, never mutates history]
+```
 
 ---
 
-## 8. Decision D7 — Duplicate Proposal Prevention
+## 7. D6 — Multi-Institution Coordination (REVISED — Core Capability)
 
-### 8.1 The Question
+### 7.1 Owner Directive (Full Text)
 
-Should GROUP 03 **prevent** analysts from creating duplicate reform proposals for the same alert? Or should it **allow** duplicates (with a soft warning)?
+> "اعتمد مفهومي `ReformCoordination` و`CoordinationParticipant` مبدئياً، لكن لا تفترض أن كل وزارة تساوي Tenant مستقلاً. ادرس العلاقة بين Institution وTenant في المعمارية الحالية، وصمّم عضوية الجهات المشاركة وفق الهوية المؤسسية وحدود ملكية البيانات."
 
-### 8.2 Recommendation: Soft Check with Override
+> "يجب دعم: إصلاح مشترك بين مؤسسات داخل المستأجر نفسه. إمكانية التنسيق المصرح به بين جهات موزعة على مستأجرين مختلفين. مشاركة حد أدنى من بيانات التنسيق المصرح بها فقط. بقاء المقترحات والأدلة التفصيلية خاضعة لمالكها وصلاحياتها. اعتماد كل جهة لالتزاماتها، دون فرض التزام عليها بمجرد أغلبية المشاركين. عدم إضعاف RLS أو استخدام BYPASSRLS لتجاوز حدود المشاركة."
 
-**I recommend a soft check**:
-- When creating a proposal with `originatingAlertId` set, the service checks if there's already an active (non-rejected, non-superseded) proposal for that alert.
-- If found, the service returns a **warning** in the response: "Warning: An active proposal (ID: X) already exists for this alert. Are you sure you want to create another?"
-- The analyst can override the warning by setting `input.allowDuplicate = true` in the request.
-- No hard block — the analyst may have a legitimate reason to create a second proposal (e.g., different approach, different alternative set).
+### 7.2 Revised Architecture
 
-### 8.3 Rationale
+Full details in `G03_00_THREAT_MODEL.md` and `G03_00_DOMAIN_MODEL.md` (revised). Summary:
 
-1. **Avoids false positives**: Two proposals for the same alert may be legitimate (e.g., one proposes a monetary response, another proposes a fiscal response — both are valid).
+#### 7.2.1 New Tables (4)
 
-2. **Respects analyst judgment**: The analyst is closest to the problem. A hard block would force them to delete the existing proposal (losing history) or create a fake "different" alert.
+| Table | Purpose |
+|-------|---------|
+| `reform_coordinations` | Coordination metadata (title, lead tenant, policy, status) |
+| `reform_coordination_participants` | M:N coordination↔tenant (with role + status) |
+| `reform_coordination_invitations` | Pending invitations (with expiry + invited tenant) |
+| `reform_coordination_shared_snapshots` | Explicitly shared, reviewer-approved, immutable snapshots |
 
-3. **Pattern consistency**: G01's `composeStrategies` allows multiple alternatives for the same objective without deduplication. G03 follows the same pattern.
+#### 7.2.2 Institution-Aware Participant Model
 
-4. **Audit trail preserved**: Even if duplicates are created, each is a separate audited entity. The reviewer can see both during review.
+**Critical correction**: Participants are **tenants**, not institutions. Why?
 
-### 8.4 Alternatives Considered
+- `Institution` is PUBLIC (no tenantId) — it's the government body's public identity.
+- `Tenant` is the authorized organization that owns private data.
+- A coordination is between **tenants** (who own the data), not institutions (which are public references).
 
-#### Alternative A: Hard block (unique constraint on `(tenantId, originatingAlertId)`)
+However, each `ReformCoordinationParticipant` has an **optional `institutionId`** field that documents which institution the tenant is representing in this coordination. This:
+- Honors the owner's directive to be "institution-aware"
+- Allows multiple tenants representing the same institution (rare but possible)
+- Allows a single tenant representing multiple institutions in different coordinations
+- Keeps RLS simple (tenant-based, not institution-based)
 
-- **Mechanism**: DB-level unique constraint preventing two proposals for the same alert.
-- **Pros**: Strict prevention of duplicates.
-- **Cons**:
-  - Blocks legitimate use cases (multiple approaches to same problem)
-  - Forces analysts to "delete and recreate" (losing history)
-  - Doesn't account for rejected/superseded proposals
-- **Rejected**: Too rigid; blocks legitimate use cases.
+#### 7.2.3 Three Coordination Scenarios (All Supported)
 
-#### Alternative B: Hard block only on active proposals (partial unique index)
+| Scenario | Topology | Example |
+|----------|----------|---------|
+| A. Intra-tenant multi-institution | Single tenant, multiple institutionId participants | Government planning tenant coordinates 3 ministries (each represented by an institutionId) |
+| B. Cross-tenant same-country | Multiple tenants, same country | MOP tenant + CB tenant coordinate on monetary-fiscal reform |
+| C. Cross-tenant cross-country | Multiple tenants, different countries | Demolandia + Neighborland coordinate on border trade (deferred — G03-L11) |
 
-- **Mechanism**: Partial unique index on `(tenantId, originatingAlertId) WHERE status IN ('draft', 'under_review', 'approved')`.
-- **Pros**: Allows re-proposal after rejection/supersession.
-- **Cons**:
-  - Still blocks legitimate parallel proposals (e.g., monetary + fiscal response to same alert)
-  - Forces sequential workflow when parallel might be better
-- **Rejected**: Still too rigid.
+#### 7.2.4 Two-Level Approval (No Majority Override)
 
-### 8.5 Implementation Note
+- **Coordination plan approval**: Lead reviewer approves the coordination plan (title, objectives, participant list). This does NOT commit any participant.
+- **Per-participant proposal approval**: Each participant's reviewer approves their own ReformProposal (standard `approveReformProposalWithAuditSafe` workflow). No participant is bound until they individually approve.
+- **Coordination `active` state**: Requires ALL linked proposals to be `approved`. No majority rule.
 
-The soft check is implemented in the service layer (not the DB). It returns a warning in the response payload, not an error. The API route can choose to surface the warning to the UI or log it.
+#### 7.2.5 Explicit Shared Snapshots (No Live Links to Private Data)
 
-### 8.6 Urgency
+- Participants share **explicitly approved snapshots** (title, summary, type) via `CoordinationSharedSnapshot`.
+- Each snapshot requires **reviewer approval** before becoming visible to other participants.
+- Snapshots are **immutable** (RLS blocks UPDATE/DELETE). To revoke, create a revocation record in a separate append-only table.
+- The shared view service NEVER queries participants' private tables. It only queries `CoordinationSharedSnapshot`.
 
-**Before 03-02** (proposal service). The check is in the service layer, not the schema.
+### 7.3 New Permissions (4 added — total G03 permissions now 13)
+
+| Permission | Roles | Purpose |
+|-----------|-------|---------|
+| `reform:coordination:read` | admin, analyst, reviewer, observer | Read coordination metadata + shared snapshots (within own participation) |
+| `reform:coordination:manage` | admin, reviewer | Create coordination, add/remove participants, manage invitations |
+| `reform:coordination:approve` | admin, reviewer (lead tenant) | Approve coordination plan (lead only) |
+| `reform:coordination:share` | admin, reviewer | Approve shared snapshots before visible to other participants |
+
+### 7.4 RLS Pattern: Coordination-Aware RLS via SECURITY DEFINER Helper
+
+The standard tenant-isolation RLS is insufficient for coordination tables (coordination metadata must be visible to all participants). Solution:
+
+```sql
+-- Helper function (SECURITY DEFINER — bypasses RLS for this check only)
+CREATE OR REPLACE FUNCTION is_coordination_participant(p_coordination_id TEXT)
+RETURNS BOOLEAN
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM reform_coordination_participants
+    WHERE "coordinationId" = p_coordination_id
+    AND "tenantId" = current_setting('app.tenant_id', true)
+    AND "status" = 'active'
+  );
+$$;
+
+GRANT EXECUTE ON FUNCTION is_coordination_participant(TEXT) TO balance_app;
+
+-- RLS policy for reform_coordinations: visible to lead OR active participant
+CREATE POLICY reform_coordinations_visible_to_participants ON reform_coordinations
+  FOR SELECT
+  TO balance_app
+  USING (
+    "leadTenantId" = current_setting('app.tenant_id', true)
+    OR is_coordination_participant("id"::text)
+  );
+```
+
+This pattern is the **same as G02's observation chain integrity** (which uses `SECURITY DEFINER` functions for cross-row checks). It's proven safe and tested.
+
+### 7.5 Threat Model
+
+10 threats identified and mitigated — see `G03_00_THREAT_MODEL.md` for full details. Key threats:
+- T1: Cross-tenant data leakage via shared view
+- T2: Membership forgery
+- T3: Approval override (majority forcing commitment)
+- T4: Shared snapshot information disclosure
+- T5: Coordination lead privilege escalation
+- T6: Cross-tenant audit bypass
+- T7: Shared view polluting private tenant data
+- T8: Invitation replay attack
+- T9: Information aggregation via metadata
+- T10: Coordination supersession confusion
+
+### 7.6 Implementation Phasing
+
+Per owner directive ("تنفيذ تدريجي يحافظ على استقلال كل وزارة وصلاحياتها"), coordination implementation is **phased within G03**:
+
+| Phase | Mission | Scope |
+|-------|---------|-------|
+| Phase 1 (Foundation) | 03-01 | Schema bootstrap includes 4 coordination tables + RLS + triggers + 4 new permissions |
+| Phase 2 (Core single-tenant reform) | 03-02 through 03-04 | Single-tenant reform proposals/alternatives/approval (coordination-agnostic) |
+| Phase 3 (Implementation tracking) | 03-05 | ReformAction + updates (coordination-agnostic) |
+| Phase 4 (Verification + feedback) | 03-06 | F6 verification + feedback loop (coordination-agnostic) |
+| Phase 5 (Coordination services) | 03-07 (NEW) | Coordination CRUD + invitations + shared snapshots + plan approval |
+| Phase 6 (Vertical integration test) | 03-08 (NEW) | End-to-end coordination flow: alert → multi-institution proposal → approval → action → verification → feedback |
+
+**Note**: The new 03-07 and 03-08 missions replace the original "deferred coordination" stance. Total mission count: 9 (was 7). See revised `G03_00_MISSION_ROADMAP.md`.
 
 ---
 
-## 9. Decision D8 — Which G02 Limitations to Address in G03
+## 8. D7 — Duplicate Proposal Prevention (Approved)
 
-### 9.1 The Question
+### 8.1 Owner Directive
 
-GROUP 02 left several limitations deferred (G02-L22, L23, L24) or documented (G02-L25, L26). Which of these should GROUP 03 **address** (fix), and which should it **leave deferred**?
+> "استخدم تحذيراً من المقترحات المكررة مع تجاوز بشري مبرر وموثق."
 
-### 9.2 Recommendation: Defer All to Future Missions
+### 8.2 Implementation
 
-**I recommend that G03 does NOT address any G02 limitations**. All limitations remain in their current state:
-
-| Limitation | Current status | G03 action |
-|-----------|---------------|------------|
-| G02-L22 (Institutional Early Warning Not Computed) | DEFERRED | Remains deferred |
-| G02-L23 (No Hierarchical Institution Aggregation) | DEFERRED | Remains deferred |
-| G02-L24 (Sector View Observability Not Computed) | DEFERRED | Remains deferred |
-| G02-L25 (Publication Approval Gap) | DOCUMENTED | Remains documented (G03 has no publication workflow) |
-| G02-L26 (Government Projection Limited to Public Evidence) | DOCUMENTED | Remains documented (G3 inherits conservative clearance) |
-
-### 9.3 Rationale
-
-1. **Scope discipline**: G03 is already a large group (7 missions, ~190 tests). Adding G02 limitation fixes would expand scope by 2-3 more missions.
-
-2. **G03 doesn't need them to function**:
-   - G02-L22 (institutional early warning): G03 can work with national-scope early warnings. If institutional-scope is needed, the analyst can manually check the institutional view.
-   - G02-L23 (hierarchical institution aggregation): G03's `ReformAction.owningInstitutionId` is a single institution. Hierarchical rollup is not needed for the reform loop.
-   - G02-L24 (sector observability): G03's `ReformProposal` references `Program.sector` (from G01). Sector observability is not needed for the reform loop.
-   - G02-L25 (publication): G03 has no publication workflow. This is consistent with the fail-closed design.
-   - G02-L26 (government clearance): G03 inherits the conservative clearance. No weakening.
-
-3. **Future hardening mission**: A dedicated "G02 Hardening" mission (post-G03, or as part of G04/G05) can address these limitations with focused effort.
-
-4. **Pattern consistency**: G02 didn't fix G01's limitations (StubProvider, no real data, etc.). G03 follows the same discipline — don't fix predecessor's limitations unless they block the current group's functionality.
-
-### 9.4 Alternatives Considered
-
-#### Alternative A: Address G02-L22 (Institutional Early Warning) in G03
-
-- **Mechanism**: Extend G02's `assessEarlyWarning` to support institutional scope. Add `getInstitutionalEarlyWarning()` to G02 (modifying `state-observatory/`).
-- **Pros**: G03 can use institutional-scope early warnings as reform signals.
-- **Cons**:
-  - Violates invariant #11 (`state-observatory/` diff = 0 unless explicitly approved)
-  - Expands G03 scope by 1 mission
-  - G03 can function without it (national scope is sufficient for the reform loop)
-- **Rejected**: Violates invariant; not needed for G03 functionality.
-
-#### Alternative B: Address G02-L25 (Publication Approval) in G03
-
-- **Mechanism**: Add a `publication_status` field to `ReformProposal` + a publication approval workflow.
-- **Pros**: Allows published reforms to be visible to the public/research tiers.
-- **Cons**:
-  - Significant scope expansion (publication workflow is non-trivial)
-  - Requires designing a publication approval model (who approves? what's the criteria?)
-  - G03 reforms are tenant-private by default — publication is a separate concern
-- **Rejected**: Scope creep; publication is a separate mission.
-
-### 9.5 Documented as G03 Limitations
-
-At G03 closure, the following limitations will be documented:
-- G03-L01: Cross-Tenant Reform Coordination (see D6)
-- G03-L02: No Browser UI for Reform (deferred — mirrors G02-L03)
-- G03-L03: Publication Workflow Not Implemented (inherits G02-L25)
-- G03-L04: Government Projection Limited to Public Evidence (inherits G02-L26)
-- G03-L05: LLM Advisor Uses StubProvider
-- G03-L06: No Real Country Data (inherits G02-L04)
-- G03-L07: G02-L22/L23/L24 Still Deferred
-- G03-L08: Advisor Causal Language Rejection Is Pattern-Based (regex, not NLP)
-- G03-L09: No Sub-Year Granularity for Reform Timeline (inherits G02-L01)
-- G03-L10: No External Integrations (Email/SMS/Webhooks) (inherits G02-L05)
-
-### 9.6 Urgency
-
-**Low** — deferring doesn't block 03-01. The architecture (no G02 fixes) is already specified.
+When creating a proposal with `originatingAlertId`, the service:
+1. Checks if there's an existing active proposal for the same alert in the same tenant.
+2. If found, returns a warning in the response payload (NOT an error).
+3. The analyst can override by setting `input.allowDuplicate = true` in the request with a `duplicateJustification` (required text field, min 20 chars).
+4. The override is recorded in `metadata.duplicateOverride` with the justification, the actor, and the timestamp — for audit.
 
 ---
 
-## 10. Decision Summary
+## 9. D8 — G02 Limitations (Revised — Per-Limitation Assessment)
 
-| # | Decision | Recommendation | Urgency | Status |
-|---|----------|----------------|---------|--------|
-| D1 | Independent reform tables vs. reuse G01 | **Independent tables** | Before 03-01 | PROPOSED |
-| D2 | System-initiated opportunity detection | **Advisory only** (no auto-create) | Low (future mission) | PROPOSED |
-| D3 | Problem detection vs. cause analysis | **Separate fields** (`problemStatement` + `hypothesizedCauses[]`) | Before 03-01 | PROPOSED |
-| D4 | ReformAction → Program/Project link | **Optional nullable FK** | Before 03-01 | PROPOSED |
-| D5 | Definition of approved/implemented/verified | **Three distinct states** | Before 03-01 | PROPOSED |
-| D6 | Cross-ministry reforms | **Defer to future mission** (single-tenant in G03) | Low | PROPOSED |
-| D7 | Duplicate proposal prevention | **Soft check with override** | Before 03-02 | PROPOSED |
-| D8 | Which G02 limitations to address | **Defer all** (no G02 fixes in G03) | Low | PROPOSED |
+### 9.1 Owner Directive
+
+> "أجرِ Dependency Assessment مستقلاً لكل من: G02-L22, G02-L23, G02-L24, G02-L25, G02-L26. صنّف كل قيد: REQUIRED FOR G03 CORE / REQUIRED FOR A SPECIFIC G03 CAPABILITY / SAFELY DEFERRED. وقدّم مبررات واضحة لكل تصنيف دون تعديل GROUP 02 تلقائياً."
+
+### 9.2 Per-Limitation Dependency Assessment
+
+#### G02-L22: Institutional Early Warning Not Computed
+
+- **Description**: `assessEarlyWarning` (02-03) supports national scope only. Institutional early warning is `"not_computed"`.
+- **G03 dependency**: MEDIUM. If a ReformProposal originates from an institutional-scope Alert (national) but the reform targets a specific institution, the analyst may want institutional early warning as a signal. However, G03 can function with national early warning — the analyst manually filters.
+- **Classification**: **REQUIRED FOR A SPECIFIC G03 CAPABILITY** (institutional-scope reform proposals). Not required for G03 core (national-scope reforms work without it).
+- **Recommendation**: **SAFELY DEFERRED** from G03 core. If institutional-scope reform becomes a priority, address in a hardening mission (03-09 or later) — but this requires modifying `state-observatory/` (violates invariant #11) unless we extend it via a new service in `state-observatory/` (which requires owner approval).
+
+#### G02-L23: No Hierarchical Institution Aggregation
+
+- **Description**: Parent/child institution measurements are NOT auto-merged. Each institution's view contains only its own direct measurements.
+- **G03 dependency**: LOW. ReformAction.owningInstitutionId is a single institution (no hierarchical rollup needed). If a reform targets a parent ministry, the analyst can manually aggregate child institutions' data.
+- **Classification**: **SAFELY DEFERRED**. G03 does not need hierarchical institution aggregation.
+- **Recommendation**: DEFER to a future mission (G04 or later).
+
+#### G02-L24: Sector View Observability Not Computed
+
+- **Description**: `aggregateObservability.status = "not_computed"` in sector view. Real observability requires per-indicator `analyzeAggregateIndependence`.
+- **G03 dependency**: LOW. ReformProposal references `Program.sector` (from G01), but does not require sector-level observability.
+- **Classification**: **SAFELY DEFERRED**. G03 does not need sector observability.
+- **Recommendation**: DEFER to a future mission (G04 or later).
+
+#### G02-L25: Publication Approval Gap
+
+- **Description**: No publication approval mechanism exists. Public/Research tiers return `publication_unavailable` (fail-closed).
+- **G03 dependency**: **HIGH**. If reform data is ever to be visible to the public (e.g., published reform outcomes for transparency), G02-L25 blocks this.
+- **Classification**: **REQUIRED FOR A SPECIFIC G03 CAPABILITY** (public publication of reform outcomes). Not required for G03 core (tenant-private reforms work without it).
+- **Recommendation**: **SAFELY DEFERRED** from G03 core. The owner has not yet directed that reforms be publicly published. When/if the owner wants public reform visibility, a dedicated publication mission is needed (03-10 or later) that:
+  1. Designs a publication approval workflow (similar to G01's strategy approval)
+  2. Adds a `publication_status` field to relevant G03 tables
+  3. Implements `publishReformProposal()` with atomic approval + audit
+  4. Integrates with G02's `PermissionedView` to expose published reforms
+
+  **Critical**: This does NOT modify G02. The publication workflow is purely G03-side, with optional G02 PermissionedView integration (which uses G02's existing contracts).
+
+#### G02-L26: Government Projection Limited to Public Evidence
+
+- **Description**: Government tier shows only `classification="public"` evidence. No granular clearance model.
+- **G03 dependency**: MEDIUM. If reform data is exposed to government viewers via PermissionedView, the same conservative clearance applies.
+- **Classification**: **REQUIRED FOR A SPECIFIC G03 CAPABILITY** (classified reform data visible to cleared government viewers). Not required for G03 core (reforms with `classification="public"` evidence work without it).
+- **Recommendation**: **SAFELY DEFERRED** from G03 core. G03 inherits the conservative clearance (all reform evidence defaults to `classification="public"`). When/if the owner wants a granular clearance model, a dedicated mission is needed (likely G04 or later) that:
+  1. Designs a per-user clearance model (e.g., `UserClearance` table)
+  2. Modifies `PermissionedView` to respect clearance (requires modifying `state-observatory/` — owner approval needed)
+  3. Allows classified reform evidence to be visible to cleared viewers
+
+  **Critical**: This MAY require modifying G02's `permissioned-view-service.ts`. Per invariant #11, this requires explicit owner approval.
+
+### 9.3 Summary Table
+
+| Limitation | Classification | Recommendation | Mission |
+|-----------|----------------|----------------|---------|
+| G02-L22 (Institutional Early Warning) | REQUIRED FOR SPECIFIC CAPABILITY | DEFER from G03 core; address if institutional-scope reforms become priority | 03-09+ (requires G02 extension) |
+| G02-L23 (Hierarchical Institution Aggregation) | SAFELY DEFERRED | DEFER to G04+ | G04+ |
+| G02-L24 (Sector View Observability) | SAFELY DEFERRED | DEFER to G04+ | G04+ |
+| G02-L25 (Publication Approval) | REQUIRED FOR SPECIFIC CAPABILITY | DEFER from G03 core; address when owner wants public reform visibility | 03-10+ (G03-side publication workflow) |
+| G02-L26 (Government Projection Clearance) | REQUIRED FOR SPECIFIC CAPABILITY | DEFER from G03 core; address when owner wants classified reform visibility | G04+ (requires G02 extension) |
+
+### 9.4 Critical Conclusion
+
+**None of these limitations are addressed in G03's 9 missions.** All are deferred, but each is classified by its dependency on G03 capabilities — not blanket-deferred as in my original proposal. The owner can prioritize specific limitations based on real-world needs.
+
+---
+
+## 10. D9 — Coordination Model Details (NEW)
+
+### 10.1 Origin
+
+This decision was created during the revision process to consolidate the coordination model details that emerged from D6.
+
+### 10.2 Recommendation
+
+Adopt the 4-table coordination model documented in:
+- `G03_00_THREAT_MODEL.md` — full threat analysis
+- `G03_00_DOMAIN_MODEL.md` (revised) — table schemas + RLS + triggers
+- `G03_00_WORKFLOW_AND_APPROVALS.md` (revised) — two-level approval flow
+
+### 10.3 Open Sub-Questions for Owner
+
+1. **Should `reform:coordination:manage` be restricted to admin only?** Currently admin + reviewer. The owner may want admin-only.
+2. **Should coordination creation require a "charter" document?** A formal charter signed by all participants might be needed for high-stakes reforms. Out of scope for 03-00.
+3. **Should there be a coordination-level audit log (separate from `audit_log`)?** Currently all coordination actions go to standard `audit_log` with `details.coordinationId`. May want a dedicated table for cleaner reporting.
+
+These are flagged for owner review but not blocking for 03-01.
 
 ---
 
 ## 11. Decisions That Require Owner Approval Before 03-01
 
-The following decisions **must** be approved before mission 03-01 (schema bootstrap) can begin:
-
-- **D1** — Independent tables (shapes the schema)
-- **D3** — Separate fields for problem vs. causes (shapes `ReformProposal` table)
-- **D4** — Optional FK to Program/Project (shapes `ReformAction` table)
-- **D5** — Three distinct states (shapes the entire lifecycle)
-
-The following decisions can be approved later (before their respective missions):
-
-- **D7** — Before 03-02 (service layer, not schema)
-- **D2, D6, D8** — Low urgency (architecture already supports deferral)
-
----
-
-## 12. Owner Approval Process
-
-For each decision, the owner should respond with one of:
-
-1. **APPROVED** — accept the recommendation as-is
-2. **APPROVED with modification** — accept the recommendation with specific changes (please describe)
-3. **REJECTED** — reject the recommendation; explore alternatives
-4. **DEFERRED** — postpone the decision to a later mission (architecture supports deferral for D2, D6, D7, D8)
-
-### 12.1 Example Approval Format
-
-```
-D1: APPROVED
-D2: APPROVED
-D3: APPROVED with modification — add `evidenceContradictsIds` field to `hypothesizedCauses[]` for tracking contradicting evidence
-D4: APPROVED
-D5: APPROVED
-D6: DEFERRED (future mission)
-D7: APPROVED
-D8: APPROVED
-```
-
-### 12.2 What Happens After Approval
-
-Once all required decisions (D1, D3, D4, D5) are approved:
-
-1. I (GLM) update the design documents to reflect any modifications
-2. The architecture becomes **frozen** — no further changes without owner approval
-3. Mission 03-01 (schema bootstrap) can begin
-
-If any required decision is REJECTED, I will propose alternatives and re-submit for approval before proceeding.
+| # | Decision | Status | Required before 03-01? |
+|---|----------|--------|------------------------|
+| D1 | 11 tables (7 core + 4 coordination) | PROPOSED (revised) | YES |
+| D3 | Expanded `hypothesizedCauses[]` schema | PROPOSED (revised) | YES |
+| D4 | Strict tenant/country/strategy verification for Program/Project links | PROPOSED (revised) | YES |
+| D5 | Four distinct lifecycle states (separation of verification from measurement) | PROPOSED (revised) | YES |
+| D6 | Multi-institution coordination (4 tables, 4 permissions, two-level approval, shared snapshots) | PROPOSED (revised) | YES |
+| D9 | Coordination model details | PROPOSED (new) | YES |
+| D2 | Advisory opportunity detection | APPROVED | No (future mission) |
+| D7 | Soft duplicate check with override | APPROVED | No (before 03-02) |
+| D8 | Per-limitation G02 assessment | PROPOSED (revised) | No (informational) |
 
 ---
 
-## 13. GLM's Technical Opinion (As Requested by Owner)
+## 12. GLM's Technical Opinion (Revised)
 
-Per the owner's directive: *"لا تتردد في طرح رأيك أو مقترحك بنهاية تنفيذ اي مهمة"* — here is my honest technical opinion on the open decisions:
+### 12.1 What I Got Wrong in the First Version
 
-### 13.1 Strongly Recommended (High Confidence)
+1. **D6 was incorrectly deferred.** The owner correctly identified that multi-institution reform is a core government capability, not a "nice to have". My original "single-tenant only" stance would have shipped a platform that doesn't match real government work.
 
-- **D1 (Independent tables)**: This is the only correct choice. Reusing G01 tables would violate invariants and create semantic confusion.
-- **D5 (Three distinct states)**: This is essential for audit granularity and F6 compliance. Conflating states would weaken the entire reform loop.
-- **D8 (Defer all G02 limitations)**: G03 is already large. Adding G02 fixes would cause scope creep and delay delivery.
+2. **Conflated execution verification with outcome measurement.** The owner's directive to separate "execution verification" from "descriptive outcome measurement" is epistemically critical. My original three-state model blurred this distinction.
 
-### 13.2 Recommended (Medium Confidence)
+3. **Over-relied on regex + DB trigger for causal language prevention.** The owner correctly identified that these are defense-in-depth layers, not guarantees. The revised model adds epistemic structure (separate problem statement, hypothesis lifecycle, confidence basis) as the primary defense.
 
-- **D3 (Separate fields)**: This is the epistemically honest choice, but I can see arguments for a simpler single-field approach if the owner prioritizes simplicity over precision.
-- **D4 (Optional FK)**: This matches real-world reform patterns. A required FK would be too rigid.
+4. **Treated table count as a goal.** The owner correctly noted that "we don't need 7 tables and 11 services and 30 API routes just because they're written in design docs". The numbers are estimates derived from the design, not targets.
 
-### 13.3 Defensible Either Way (Low Confidence)
+5. **Did not study the Institution-Tenant relationship carefully.** My original coordination design assumed "ministry = tenant" (1:1), which ADR-0004 explicitly rejects. The revised design uses institutionId as an optional attribute on participants, keeping RLS tenant-based.
 
-- **D2 (Opportunity detection)**: I lean toward advisory-only, but I can see arguments for strict human-initiated if the owner prioritizes maximum sovereignty.
-- **D6 (Cross-tenant coordination)**: Deferring is the pragmatic choice, but if the owner has a strong use case for cross-ministry reforms, addressing it in G03 is defensible (with scope expansion).
-- **D7 (Duplicate prevention)**: Soft check is my preference, but a hard block (partial unique index) is also defensible if the owner wants strict deduplication.
+### 12.2 What I'm Confident About Now
 
-### 13.4 My Biggest Concern
+1. **The 4-table coordination model** is the right granularity. Fewer tables would lose the invitation flow or the shared snapshot model. More tables would be over-engineering.
 
-**D6 (Cross-ministry coordination)** is the decision I'm least certain about. In a real government context, many reforms ARE cross-ministry (monetary-fiscal coordination, security-economic balance, etc.). Shipping G03 single-tenant-only may limit real-world usefulness.
+2. **The two-level approval (coordination plan + per-participant proposal)** is the only model that honors both "coordination is meaningful" and "no majority override".
 
-However, I also believe that shipping a focused single-tenant G03 is better than delaying it to add cross-tenant coordination. The workaround (each ministry creates its own proposal referencing the same alert) is functional, even if not ideal.
+3. **The `SECURITY DEFINER` helper function for coordination RLS** is a proven pattern (G02 uses it for observation chain integrity). It's safe and tested.
 
-**My recommendation to the owner**: Approve D6 as DEFERRED for now. If, during G03 implementation, you find that cross-ministry reforms are critical, we can revisit and add a 03-07 mission for cross-tenant coordination.
+4. **The expanded `hypothesizedCauses[]` schema** with `confidenceBasis`, `contradictingEvidenceIds`, and `reviewStatus` makes the epistemic state explicit. This is structurally honest.
 
----
+5. **The 9-mission roadmap** (with 03-07 coordination + 03-08 vertical integration) provides a practical path: ship core reform first (03-02 through 03-06), then coordination (03-07 + 03-08), then iterate.
 
-## 14. Conclusion
+### 12.3 What I'm Still Uncertain About
 
-The 8 open decisions listed here shape the entire GROUP 03 architecture. My recommendations are designed to:
+1. **The vertical slice mission (03-08).** The owner directed: "أفضّل أن يقدّم GROUP 03 في مرحلة مبكرة مساراً رأسياً صغيراً يعمل فعلياً". I've added this as 03-08 at the end. But the owner may want it earlier — perhaps a "minimum viable reform" mission before coordination. I'd appreciate the owner's view on timing.
 
-1. **Honor all 14 inherited invariants** — no violations
-2. **Follow proven G01/G02 patterns** — consistency over novelty
-3. **Ship a focused, valuable G03** — no scope creep
-4. **Preserve human sovereignty** — no automatic decisions
-5. **Maintain epistemic honesty** — descriptive, never causal
-6. **Defer cross-cutting concerns** — cross-tenant, publication, G02 fixes
+2. **The shared snapshot reviewer approval.** Requiring reviewer approval for every shared snapshot may slow down coordination. But without it, an analyst could leak info via summaries. I've kept the approval requirement, but the owner may want a "draft mode" where snapshots are visible only to the sharing tenant until approved.
 
-I await the owner's approval (or modification/rejection) of each decision. Once D1, D3, D4, D5 are approved, the architecture is frozen and mission 03-01 can begin.
+3. **The `allowCrossStrategyProgramLink` flag (D4).** Allowing a ReformAction to link to a Program from a different strategy version (with explicit override) may be too permissive. The owner may want this blocked entirely, requiring the analyst to create a new Program in the current strategy.
+
+### 12.4 What I'd Like the Owner to Clarify
+
+1. **Should the vertical slice mission be earlier?** (e.g., as 03-02 instead of 03-08)
+2. **Should `reform:coordination:manage` be admin-only or admin+reviewer?**
+3. **Should shared snapshots have a "draft mode" visible only to the sharing tenant?**
+4. **Should `allowCrossStrategyProgramLink` be removed entirely?**
 
 ---
 
-*End of G03-00 Open Decisions. This completes the 7-document design package for Mission 03-00.*
+## 13. Conclusion
+
+The revised open decisions document reflects the owner's directive to:
+1. Elevate multi-institution coordination from deferred to core
+2. Separate epistemic states (problem vs. cause, verification vs. measurement)
+3. Assess G02 limitations individually, not blanket-defer
+4. Add a vertical slice mission for early validation
+5. Treat numbers as estimates, not goals
+
+The architecture is now more complex (11 tables, 12 services, 13 permissions, 9 missions) but more honest about the real-world needs of government reform. The threat model identifies 10 specific threats with mitigations that do not weaken RLS or tenant sovereignty.
+
+I await the owner's final approval (or further modifications) before proceeding to mission 03-01.
+
+---
+
+*End of G03-00 Open Decisions (Revised). Companion documents: THREAT_MODEL.md, ARCHITECTURE_PROPOSAL.md (revised), DOMAIN_MODEL.md (revised), WORKFLOW_AND_APPROVALS.md (revised), INTEGRATION_CONTRACTS.md (revised), SECURITY_AND_EVIDENCE_POLICY.md (revised), MISSION_ROADMAP.md (revised).*

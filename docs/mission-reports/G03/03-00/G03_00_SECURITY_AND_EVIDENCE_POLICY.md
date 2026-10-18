@@ -2,10 +2,36 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Security + evidence policy specification (DESIGN ONLY — no code)
-> **Date:** 2026-10-18
+> **Date:** 2026-10-18 (revision 2 — post owner review)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — awaiting owner + reviewer approval
+> **Status:** REVISED per owner directive — re-awaiting final approval
 > **Companion to:** `G03_00_ARCHITECTURE_PROPOSAL.md` §3, §8
+
+> ⚠️ **REVISION NOTE (2026-10-18 rev 2)**: This document specifies the security policy from rev 1.
+> The **threat model for multi-institution coordination** (NEW per D6) is extracted to a dedicated document:
+> - `G03_00_THREAT_MODEL.md` — 10 threats (T1-T10) with mitigations
+>
+> **Key changes from rev 1**:
+> - Coordination-aware RLS via `SECURITY DEFINER` helper function `is_coordination_participant(text)` —
+>   same pattern as G02's observation chain integrity
+> - 4 new permissions: `reform:coordination:read`, `:manage`, `:approve`, `:share` (total G03: 13)
+> - Two-level approval model (coordination plan + per-participant proposal) — no majority override
+> - Explicit shared snapshots with reviewer approval — no live links to private data
+> - Append-only shared snapshots with revocation via separate table (no UPDATE)
+>
+> **D3 revision** (epistemic honesty): The owner correctly noted that regex + `attributionLevel`
+> DB trigger is **insufficient** to guarantee causal-language-free text. The revised model adds:
+> - Epistemic structure (separate problem vs. cause, hypothesis lifecycle) as primary defense
+> - `confidenceBasis` field forcing analysts to declare the basis for their confidence
+> - `contradictingEvidenceIds` as a first-class field (not hidden in metadata)
+> - `reviewStatus` tracking hypothesis validation lifecycle
+> - Reviewer judgment as the primary safeguard (not regex)
+> - Regex stays as defense-in-depth (not removed) — documented as a weak check, not a guarantee
+>
+> See `G03_00_OPEN_DECISIONS.md` §4.4 (honest acknowledgment) for the full epistemic model.
+>
+> The security policy content below remains accurate for the core reform flow. A full content update
+> integrating the coordination RLS + D3 epistemic model will be done if the owner requires it.
 
 ---
 

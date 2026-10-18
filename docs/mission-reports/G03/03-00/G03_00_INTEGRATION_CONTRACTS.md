@@ -2,10 +2,34 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Service contract specification (DESIGN ONLY — no code)
-> **Date:** 2026-10-18
+> **Date:** 2026-10-18 (revision 2 — post owner review)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — awaiting owner + reviewer approval
+> **Status:** REVISED per owner directive — re-awaiting final approval
 > **Companion to:** `G03_00_ARCHITECTURE_PROPOSAL.md` §2.2, §4.2
+
+> ⚠️ **REVISION NOTE (2026-10-18 rev 2)**: This document specifies the 11 core service contracts from rev 1.
+> The **coordination service contracts** (NEW per D6) are documented in:
+> - `G03_00_THREAT_MODEL.md` §5 (trust boundaries) + §6 (approval flow) + §7 (shared snapshot model)
+> - `G03_00_OPEN_DECISIONS.md` §7 (D6 — coordination model details)
+>
+> **Total service count is now 12** (11 core below + 1 coordination):
+> - Core: contracts, proposal, alternative, comparison, advisor, approval, action, action-update, verification, feedback, query
+> - Coordination (NEW): `reform-coordination-service.ts` (CRUD + invitations + shared snapshots + plan approval)
+>
+> **D3 revision**: `HypothesizedCauseSchema` expanded with `confidenceBasis`, `contradictingEvidenceIds`,
+> `reviewStatus`, `reviewedBy`, `reviewedAt` — see `G03_00_OPEN_DECISIONS.md` §4.2.
+>
+> **D4 revision**: Strict tenant/country/strategy context verification for Program/Project links —
+> see `G03_00_OPEN_DECISIONS.md` §5.
+>
+> **D5 revision**: 4 distinct lifecycle states (separated verification from measurement) —
+> see `G03_00_OPEN_DECISIONS.md` §6.
+>
+> **New permissions** (4 added): `reform:coordination:read`, `:manage`, `:approve`, `:share` —
+> total G03 permissions: 13 (was 9).
+>
+> The core service contracts below remain accurate. The coordination service contracts will be
+> specified in detail in mission 03-06. A full content update of this document will be done if the owner requires it.
 
 ---
 

@@ -2,10 +2,28 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Architecture proposal (DESIGN ONLY — no code, no migrations, no permissions changes)
-> **Date:** 2026-10-18
+> **Date:** 2026-10-18 (revision 2 — post owner review)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — awaiting owner + reviewer approval
+> **Status:** REVISED per owner directive — re-awaiting final approval
 > **Builds on:** GROUP 00 (Foundation), GROUP 01 (State Builder), GROUP 02 (State Observatory)
+
+> ⚠️ **REVISION NOTE (2026-10-18 rev 2)**: This document is the original rev 1 architecture proposal.
+> The substantive revisions after owner review are captured in three companion documents:
+> - `G03_00_OPEN_DECISIONS.md` (fully revised) — D1-D9 with owner directives
+> - `G03_00_THREAT_MODEL.md` (NEW) — 10 threats for multi-institution coordination
+> - `G03_00_MISSION_ROADMAP.md` (fully revised) — 9 missions with vertical slice
+>
+> **Key changes from rev 1**:
+> - Multi-institution coordination (D6) elevated from DEFERRED to CORE — adds 5 coordination tables + 4 permissions
+> - Mission count: 7 → 9 (added 03-02 vertical slice, 03-06 coordination, 03-07 coordination vertical slice, 03-08 polish)
+> - Table count: 7 → 12 (7 core + 5 coordination)
+> - Permission count: 9 → 13 (added `reform:coordination:*`)
+> - Lifecycle states (D5): 3 → 4 (separated execution verification from outcome measurement)
+> - Hypothesis schema (D3): expanded with `confidenceBasis`, `contradictingEvidenceIds`, `reviewStatus`
+>
+> The content below reflects rev 1 thinking and is preserved for context. For the authoritative
+> revised decisions, see the three companion documents above. A full content update of this
+> document will be done in mission 03-01 if the owner requires it before approval.
 
 ---
 
