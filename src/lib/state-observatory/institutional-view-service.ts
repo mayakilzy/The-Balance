@@ -191,9 +191,9 @@ export async function getInstitutionalView(
       const programViews: InstitutionalView["programs"] = [];
 
       for (const program of programs) {
-        // Fetch indicators linked to this program (CORRECTION 2: tenant scoped)
+        // FIX 1: Fetch indicators linked to this program — require strategyVersionId match
         const indicators = await tx.indicatorDefinition.findMany({
-          where: { tenantId, programId: program.id },
+          where: { tenantId, programId: program.id, strategyVersionId: params.strategyVersionId },
           select: {
             id: true, code: true, displayName: true, unit: true,
             preferredDirection: true,
@@ -225,26 +225,34 @@ export async function getInstitutionalView(
             select: { id: true, observedValue: true, observedAt: true, isSynthetic: true },
           });
 
-          if (nationalObs?.isSynthetic || institutionalObs?.isSynthetic) {
-            anySimulated = true;
-            simulatedInspected = true;
+          if (nationalObs) {
+            simulatedInspected = true; // FIX 2: inspected regardless of isSynthetic
+            if (nationalObs.isSynthetic) anySimulated = true;
+          }
+          if (institutionalObs) {
+            simulatedInspected = true; // FIX 2: inspected regardless of isSynthetic
+            if (institutionalObs.isSynthetic) anySimulated = true;
           }
 
           // Fetch variance (national-scoped)
+          // FIX 1: variance must match strategyVersionId + period + indicator + tenant
           const variance = await tx.varianceRecord.findFirst({
             where: {
               tenantId, indicatorDefinitionId: indicator.id,
               observationPeriodId: params.observationPeriodId,
+              strategyVersionId: params.strategyVersionId,
             },
             select: { varianceDirection: true, varianceAbsolute: true, comparisonValid: true },
             orderBy: { createdAt: "desc" },
           });
 
           // Fetch alerts (period-scoped via varianceRecordId — FIX 2 from 02-02)
+          // FIX 1: variance records for alert scoping must match strategyVersionId
           const periodVRs = await tx.varianceRecord.findMany({
             where: {
               tenantId, indicatorDefinitionId: indicator.id,
               observationPeriodId: params.observationPeriodId,
+              strategyVersionId: params.strategyVersionId,
             },
             select: { id: true },
           });

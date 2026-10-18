@@ -1,0 +1,486 @@
+// ============================================================
+// tests/integration/g02-institutional-view.integration.test.ts
+// ------------------------------------------------------------
+// Real PostgreSQL integration tests for 02-04 institutional + sector views.
+// Covers V-09..V-18 + CORRECTION 4 requirements.
+// Runs in CI against real PostgreSQL 16 (RUN_INTEGRATION_TESTS=1).
+// ============================================================
+import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { PrismaClient } from "@prisma/client";
+import { hashPassword } from "@/lib/password";
+import type { Session } from "next-auth";
+
+const DATABASE_URL = process.env.DATABASE_URL ?? "";
+const DIRECT_URL = process.env.DIRECT_URL ?? "";
+const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
+const describeIntegration = RUN_INTEGRATION ? describe : describe.skip;
+
+let appClient: PrismaClient;
+let adminClient: PrismaClient;
+let tenantAId: string;
+let tenantBId: string;
+let countryId: string;
+let countryJorId: string;
+let analystUserId: string;
+let reviewerUserId: string;
+let strategyVersionId: string;
+let objectiveId: string;
+let centralBankSourceId: string;
+let institutionEduId: string; // Ministry of Education (DML)
+let institutionHealthId: string; // Ministry of Health (DML)
+let institutionJorId: string; // Jordan institution (JOR)
+
+function makeSession(user: { id: string; tenantId: string; roleCode: string; membershipStatus: string }): Session {
+  return { user: { id: user.id, tenantId: user.tenantId, roleCode: user.roleCode, membershipStatus: user.membershipStatus }, expires: new Date(Date.now() + 3600_000).toISOString() } as unknown as Session;
+}
+
+beforeAll(async () => {
+  if (!RUN_INTEGRATION) return;
+  appClient = new PrismaClient({ datasources: { db: { url: DATABASE_URL } } });
+  adminClient = new PrismaClient({ datasources: { db: { url: DIRECT_URL } } });
+  await appClient.$queryRaw`SELECT 1`;
+  await adminClient.$queryRaw`SELECT 1`;
+
+  const country = await adminClient.country.findUnique({ where: { iso3: "DML" } });
+  if (!country) throw new Error("DML not seeded");
+  countryId = country.id;
+
+  let jorCountry = await adminClient.country.findUnique({ where: { iso3: "JOR" } });
+  if (!jorCountry) {
+    jorCountry = await adminClient.country.create({ data: { iso3: "JOR", iso2: "JO", displayName: "Jordan (test)", status: "active" } });
+  }
+  countryJorId = jorCountry.id;
+
+  const tenantA = await adminClient.tenant.findUnique({ where: { code: "DML-MOP-TENANT" } });
+  const tenantB = await adminClient.tenant.findUnique({ where: { code: "DML-CB-TENANT" } });
+  if (!tenantA || !tenantB) throw new Error("tenants not seeded");
+  tenantAId = tenantA.id;
+  tenantBId = tenantB.id;
+
+  const analyst = await adminClient.user.findUnique({ where: { email: "analyst@demolandia.test" } });
+  if (!analyst) throw new Error("analyst not seeded");
+  analystUserId = analyst.id;
+
+  const reviewer = await adminClient.user.upsert({
+    where: { email: "g02-04-corr-reviewer@demolandia.test" },
+    update: {},
+    create: { email: "g02-04-corr-reviewer@demolandia.test", name: "G02-04 Corr Reviewer", passwordHash: await hashPassword("Test1234!"), status: "active" },
+  });
+  await adminClient.membership.upsert({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+    update: { status: "active", roleCode: "reviewer" },
+    create: { userId: reviewer.id, tenantId: tenantAId, roleCode: "reviewer", status: "active" },
+  });
+  reviewerUserId = reviewer.id;
+
+  let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
+  if (!sv) {
+    const strategy = await adminClient.strategy.create({ data: { tenantId: tenantAId, title: "G02-04 Strategy", createdBy: analystUserId } });
+    sv = await adminClient.strategyVersion.create({ data: { strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}", status: "approved", approvedBy: analystUserId, approvedAt: new Date(), metadata: { simulated: true }, createdBy: analystUserId } });
+  }
+  strategyVersionId = sv.id;
+
+  let obj = await adminClient.objective.findFirst({ where: { tenantId: tenantAId } });
+  if (!obj) {
+    obj = await adminClient.objective.create({ data: { tenantId: tenantAId, countryId, title: "G02-04 Objective", targetMetric: "test", targetValue: "5.0", horizon: 5, status: "active", createdBy: analystUserId } });
+  }
+  objectiveId = obj.id;
+
+  let cb = await adminClient.source.findFirst({ where: { code: "DML-CB-SYNTHETIC" } });
+  if (!cb) {
+    cb = await adminClient.source.create({ data: { code: "DML-CB-SYNTHETIC", displayName: "Demolandia Central Bank — synthetic", type: "government", reviewStatus: "approved", metadata: { synthetic: true, country: "DML" } } });
+  }
+  centralBankSourceId = cb.id;
+
+  // Create institutions
+  let instEdu = await adminClient.institution.findFirst({ where: { countryId, code: "DML-MIN-EDU" } });
+  if (!instEdu) {
+    instEdu = await adminClient.institution.create({ data: { countryId, code: "DML-MIN-EDU", displayName: "Ministry of Education (DML)", type: "ministry" } });
+  }
+  institutionEduId = instEdu.id;
+
+  let instHealth = await adminClient.institution.findFirst({ where: { countryId, code: "DML-MIN-HEALTH" } });
+  if (!instHealth) {
+    instHealth = await adminClient.institution.create({ data: { countryId, code: "DML-MIN-HEALTH", displayName: "Ministry of Health (DML)", type: "ministry" } });
+  }
+  institutionHealthId = instHealth.id;
+
+  let instJor = await adminClient.institution.findFirst({ where: { countryId: countryJorId, code: "JOR-MIN-EDU" } });
+  if (!instJor) {
+    instJor = await adminClient.institution.create({ data: { countryId: countryJorId, code: "JOR-MIN-EDU", displayName: "Jordan Ministry of Education", type: "ministry" } });
+  }
+  institutionJorId = instJor.id;
+});
+
+afterAll(async () => {
+  if (RUN_INTEGRATION) {
+    await adminClient.alert.deleteMany({});
+    await adminClient.varianceRecord.deleteMany({});
+    await adminClient.observation.deleteMany({});
+    await adminClient.observationPeriod.deleteMany({});
+    await adminClient.indicatorDefinition.deleteMany({});
+    await adminClient?.$disconnect();
+    await appClient?.$disconnect();
+  }
+});
+
+beforeEach(async () => {
+  if (!RUN_INTEGRATION) return;
+  await adminClient.alert.deleteMany({});
+  await adminClient.varianceRecord.deleteMany({});
+  await adminClient.observation.deleteMany({});
+  await adminClient.observationPeriod.deleteMany({});
+  await adminClient.indicatorDefinition.deleteMany({});
+});
+
+async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+  const periodValue = `${year}-Q${quarter}`;
+  const startMonth = (quarter - 1) * 3;
+  const startAt = new Date(Date.UTC(year, startMonth, 1));
+  const endAt = new Date(Date.UTC(year, startMonth + 3, 0, 23, 59, 59));
+  const existing = await adminClient.observationPeriod.findFirst({ where: { tenantId, periodType: "quarterly", periodValue } });
+  if (existing) return existing.id;
+  return (await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } })).id;
+}
+
+// V-09: Program ownership and institutional linkage
+describeIntegration("V-09: program ownership + institutional linkage", () => {
+  it("institutional view returns programs owned by the institution", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+
+    // Create a program owned by Ministry of Education
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "Edu Reform", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    await defineIndicator(analystSession, {
+      code: "IND_INST_V09", displayName: "Indicator V-09", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+    });
+
+    expect(view.institution.id).toBe(institutionEduId);
+    expect(view.programs).toHaveLength(1);
+    expect(view.programs[0]!.title).toBe("Edu Reform");
+    expect(view.programs[0]!.indicators).toHaveLength(1);
+  });
+});
+
+// V-10: Exact institutional geoRefId matching
+describeIntegration("V-10: exact institutional geoRefId", () => {
+  it("institutional observation appears only when geoRefId matches institutionId", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { ingestObservation } = await import("@/lib/state-observatory/observation-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V10 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const indicator = await defineIndicator(analystSession, {
+      code: "IND_INST_V10", displayName: "V-10", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+
+    // Ingest national observation
+    await ingestObservation(analystSession, {
+      indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
+      observedValue: 9.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
+    });
+    // Ingest institutional observation with geoRefId = institutionEduId
+    await ingestObservation(analystSession, {
+      indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
+      observedValue: 7.5, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
+      geoLevel: "institutional", geoRefId: institutionEduId,
+    });
+
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+    });
+
+    const ind = view.programs[0]!.indicators[0]!;
+    expect(ind.nationalObservation).not.toBeNull();
+    expect(ind.institutionalObservation).not.toBeNull();
+    expect(Number(ind.institutionalObservation!.observedValue)).toBe(7.5);
+  });
+});
+
+// V-11: National indicator labeled "linked" not "attributed"
+describeIntegration("V-11: national labeled 'linked'", () => {
+  it("attributionSummary uses linkedNationalIndicatorsCount", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { ingestObservation } = await import("@/lib/state-observatory/observation-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V11 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const indicator = await defineIndicator(analystSession, {
+      code: "IND_INST_V11", displayName: "V-11", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+    await ingestObservation(analystSession, {
+      indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
+      observedValue: 9.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
+    });
+
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+    });
+
+    expect(view.attributionSummary.linkedNationalIndicatorsCount).toBe(1);
+    expect(view.attributionSummary).not.toHaveProperty("nationalIndicatorsAttributed");
+  });
+});
+
+// V-12: No automatic national-outcome attribution
+describeIntegration("V-12: no automatic national attribution", () => {
+  it("national observation is NOT presented as institutional achievement", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { ingestObservation } = await import("@/lib/state-observatory/observation-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V12 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const indicator = await defineIndicator(analystSession, {
+      code: "IND_INST_V12", displayName: "V-12", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+    // Only national observation — NO institutional observation
+    await ingestObservation(analystSession, {
+      indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
+      observedValue: 9.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
+    });
+
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+    });
+
+    const ind = view.programs[0]!.indicators[0]!;
+    // National observation exists
+    expect(ind.nationalObservation).not.toBeNull();
+    // But NO institutional observation
+    expect(ind.institutionalObservation).toBeNull();
+    // Attribution shows national scope, NOT institutional
+    expect(ind.attribution.measuredOutcomeScope).toBe("national");
+    // Causal attribution remains descriptive
+    expect(ind.attribution.causalAttribution).toBe("descriptive");
+  });
+});
+
+// V-13: Parent/child institution separation
+describeIntegration("V-13: parent/child institution separation", () => {
+  it("parent institution view does not include child institution's observations", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { ingestObservation } = await import("@/lib/state-observatory/observation-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    // Create a child institution under Ministry of Education
+    const childInst = await adminClient.institution.create({
+      data: { countryId, code: "DML-EDU-DIR", displayName: "Education Directorate (child)", type: "directorate", parentId: institutionEduId },
+    });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V13 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const indicator = await defineIndicator(analystSession, {
+      code: "IND_INST_V13", displayName: "V-13", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+    // Ingest institutional observation with geoRefId = CHILD institution
+    await ingestObservation(analystSession, {
+      indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
+      observedValue: 7.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
+      geoLevel: "institutional", geoRefId: childInst.id, // child, NOT parent
+    });
+
+    // Request parent institution's view
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, // PARENT
+      strategyVersionId, observationPeriodId: periodId,
+    });
+
+    const ind = view.programs[0]!.indicators[0]!;
+    // Parent should NOT see child's institutional observation
+    expect(ind.institutionalObservation).toBeNull();
+  });
+});
+
+// V-14: Cross-country institution rejection
+describeIntegration("V-14: cross-country institution rejection", () => {
+  it("throws when requesting institution from a different country", async () => {
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+
+    await expect(
+      getInstitutionalView(reviewerSession, {
+        institutionId: institutionJorId, // Jordan institution, tenant is DML
+        strategyVersionId, observationPeriodId: periodId,
+      })
+    ).rejects.toThrow(/country/);
+  });
+});
+
+// V-15: Cross-tenant isolation despite shared public Institution
+describeIntegration("V-15: cross-tenant isolation with shared institution", () => {
+  it("Tenant B cannot see Tenant A's programs for the same institution", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+
+    // Tenant A creates a program
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V15 Program A", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    await defineIndicator(analystSession, {
+      code: "IND_INST_V15", displayName: "V-15", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+
+    // Tenant B has no strategyVersion (different tenant) — will fail at SV validation
+    const tenantBReviewer = await adminClient.user.upsert({
+      where: { email: "g02-04-tenantb@demolandia.test" },
+      update: {},
+      create: { email: "g02-04-tenantb@demolandia.test", name: "Tenant B", passwordHash: await hashPassword("Test1234!"), status: "active" },
+    });
+    await adminClient.membership.upsert({
+      where: { userId_tenantId: { userId: tenantBReviewer.id, tenantId: tenantBId } },
+      update: { status: "active", roleCode: "reviewer" },
+      create: { userId: tenantBReviewer.id, tenantId: tenantBId, roleCode: "reviewer", status: "active" },
+    });
+    const tenantBSession = makeSession({ id: tenantBReviewer.id, tenantId: tenantBId, roleCode: "reviewer", membershipStatus: "active" });
+
+    // Tenant B requests view for same institution + Tenant A's strategyVersion
+    await expect(
+      getInstitutionalView(tenantBSession, {
+        institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+      })
+    ).rejects.toThrow(/not approved in tenant/);
+  });
+});
+
+// V-18: UNKNOWN for missing institutional observations
+describeIntegration("V-18: missing institutional observations = UNKNOWN", () => {
+  it("institutional observation is null + unknowns include 'no institutional observation'", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { ingestObservation } = await import("@/lib/state-observatory/observation-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V18 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const indicator = await defineIndicator(analystSession, {
+      code: "IND_INST_V18", displayName: "V-18", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+    // Only national — NO institutional
+    await ingestObservation(analystSession, {
+      indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
+      observedValue: 9.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
+    });
+
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+    });
+
+    const ind = view.programs[0]!.indicators[0]!;
+    expect(ind.institutionalObservation).toBeNull();
+    expect(ind.uncertainties.unknowns).toContain("no institutional observation (geoRefId mismatch or missing)");
+  });
+});
+
+// V-08b: No fabricated execution verification
+describeIntegration("V-08b: no fabricated execution verification", () => {
+  it("executionProgress = 'not_tracked' even when Program.status = 'completed'", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const program = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V08b Program", sector: "education", owningInstitutionId: institutionEduId, status: "completed" },
+    });
+    await defineIndicator(analystSession, {
+      code: "IND_INST_V08B", displayName: "V-08B", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    });
+
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+    });
+
+    expect(view.programs[0]!.status).toBe("completed");
+    expect(view.programs[0]!.indicators[0]!.attribution.executionProgress).toBe("not_tracked");
+  });
+});
+
+// Sector view: deduplication + not_computed observability
+describeIntegration("V-17: sector view deduplication", () => {
+  it("same indicator in 2 programs counted once", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { getSectorView } = await import("@/lib/state-observatory/sector-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const prog1 = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "Sector P1", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const prog2 = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "Sector P2", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    // Same indicator linked to BOTH programs
+    await defineIndicator(analystSession, {
+      code: "IND_SECTOR_V17", displayName: "V-17", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: prog1.id,
+    });
+    await defineIndicator(analystSession, {
+      code: "IND_SECTOR_V17B", displayName: "V-17B", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: prog2.id,
+    });
+
+    const view = await getSectorView(reviewerSession, {
+      sector: "education", strategyVersionId, observationPeriodId: periodId,
+    });
+
+    expect(view.totalPrograms).toBe(2);
+    expect(view.totalIndicators).toBe(2); // 2 distinct indicators
+    expect(view.aggregateObservability.status).toBe("not_computed");
+  });
+});

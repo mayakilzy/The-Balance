@@ -58,6 +58,15 @@ export async function getSectorView(
       throw new Error(`StrategyVersion ${params.strategyVersionId} not approved in tenant`);
     }
 
+    // FIX 1: verify ObservationPeriod belongs to tenant
+    const period = await tx.observationPeriod.findFirst({
+      where: { id: params.observationPeriodId, tenantId },
+      select: { id: true },
+    });
+    if (!period) {
+      throw new Error(`ObservationPeriod ${params.observationPeriodId} not found in tenant`);
+    }
+
     // Fetch programs in this sector (D9: tenant + strategyVersion scoped)
     const programs = await tx.program.findMany({
       where: {
@@ -90,8 +99,20 @@ export async function getSectorView(
         })
       : [];
 
-    // CORRECTION 2: verify each institution belongs to tenant's country
+    // FIX 1: verify each institution belongs to tenant's country.
+    // Do NOT silently omit cross-country institutions — report them explicitly.
     const validInstitutions = institutions.filter((inst) => inst.countryId === tenant.countryId);
+    const invalidInstitutionIds = institutions
+      .filter((inst) => inst.countryId !== tenant.countryId)
+      .map((inst) => inst.id);
+    if (invalidInstitutionIds.length > 0) {
+      // Report the integrity issue explicitly — do not present an apparently complete result
+      throw new Error(
+        `Data integrity violation: ${invalidInstitutionIds.length} institution(s) ` +
+        `referenced by programs in sector "${params.sector}" belong to a different country ` +
+        `than tenant ${tenantId}. Invalid institution IDs: ${invalidInstitutionIds.join(", ")}`
+      );
+    }
 
     // For each valid institution, count programs + indicators
     const institutionViews: SectorView["institutions"] = [];
@@ -105,10 +126,10 @@ export async function getSectorView(
       );
       const instProgramIds = instPrograms.map((p) => p.id);
 
-      // Fetch indicators for these programs (D9: tenant scoped)
+      // FIX 1: indicators must match strategyVersionId in addition to tenant + program
       const indicators = instProgramIds.length > 0
         ? await tx.indicatorDefinition.findMany({
-            where: { tenantId, programId: { in: instProgramIds } },
+            where: { tenantId, programId: { in: instProgramIds }, strategyVersionId: params.strategyVersionId },
             select: { id: true },
           })
         : [];

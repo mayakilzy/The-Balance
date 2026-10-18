@@ -13,6 +13,7 @@ vi.mock("@/lib/audit", () => ({ writeAuditTx: (...a: unknown[]) => mockWriteAudi
 
 const mockTx = {
   strategyVersion: { findFirst: vi.fn() },
+  observationPeriod: { findFirst: vi.fn() },
   program: { findMany: vi.fn() },
   institution: { findMany: vi.fn() },
   tenant: { findUnique: vi.fn() },
@@ -31,6 +32,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockWriteAuditTx.mockResolvedValue(undefined);
   mockTx.strategyVersion.findFirst.mockResolvedValue({ id: "sv_1" });
+  mockTx.observationPeriod.findFirst.mockResolvedValue({ id: "p1" });
   mockTx.tenant.findUnique.mockResolvedValue({ countryId: "country_DML" });
   mockTx.program.findMany.mockResolvedValue([]);
 });
