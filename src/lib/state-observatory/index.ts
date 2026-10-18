@@ -17,3 +17,6 @@ export * from "./observatory-query-service";
 // 02-03 additions
 export * from "./temporal-trend-service";
 export * from "./early-warning-service";
+// 02-04 additions
+export * from "./institutional-view-service";
+export * from "./sector-view-service";
