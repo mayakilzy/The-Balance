@@ -20,3 +20,5 @@ export * from "./early-warning-service";
 // 02-04 additions
 export * from "./institutional-view-service";
 export * from "./sector-view-service";
+// 02-05 additions
+export * from "./permissioned-view-service";

@@ -260,11 +260,11 @@ beforeAll(async () => {
 afterAll(async () => {
   if (RUN_INTEGRATION) {
     // Clean up G02 entities created during tests (admin can see all tenants)
-    await adminClient.alert.deleteMany({});
-    await adminClient.varianceRecord.deleteMany({});
-    await adminClient.observation.deleteMany({});
-    await adminClient.observationPeriod.deleteMany({});
-    await adminClient.indicatorDefinition.deleteMany({});
+    await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
 
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
@@ -274,11 +274,11 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
   // Clean G02 tables before each test (preserves G00/G01 data)
-  await adminClient.alert.deleteMany({});
-  await adminClient.varianceRecord.deleteMany({});
-  await adminClient.observation.deleteMany({});
-  await adminClient.observationPeriod.deleteMany({});
-  await adminClient.indicatorDefinition.deleteMany({});
+  await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
 });
 
 // ============================================================

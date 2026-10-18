@@ -114,11 +114,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient.alert.deleteMany({});
-    await adminClient.varianceRecord.deleteMany({});
-    await adminClient.observation.deleteMany({});
-    await adminClient.observationPeriod.deleteMany({});
-    await adminClient.indicatorDefinition.deleteMany({});
+    await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
+    await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
@@ -126,16 +126,16 @@ afterAll(async () => {
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
-  await adminClient.alert.deleteMany({});
-  await adminClient.varianceRecord.deleteMany({});
-  await adminClient.observation.deleteMany({});
-  await adminClient.observationPeriod.deleteMany({});
-  await adminClient.indicatorDefinition.deleteMany({});
+  await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
   // FIX: also clean up programs to prevent cross-test interference
-  await adminClient.dependency.deleteMany({});
-  await adminClient.budgetLine.deleteMany({});
-  await adminClient.project.deleteMany({});
-  await adminClient.program.deleteMany({});
+  await adminClient.dependency.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.budgetLine.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.project.deleteMany({ where: { tenantId: tenantAId } });
+  await adminClient.program.deleteMany({ where: { tenantId: tenantAId } });
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
