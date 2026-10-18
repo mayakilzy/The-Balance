@@ -157,11 +157,19 @@ export async function analyzeTemporalTrend(
 
     const config = parseTrendConfig(indicator.measurementConstraints, indicator.unit);
 
-    // C3: fetch periods with endAt < endingPeriod.endAt, ordered by startAt DESC
+    // FIX 4 (02-03 corrective): resolve the ending period's periodType FIRST,
+    // then select ONLY periods of the SAME type. This prevents monthly/quarterly/
+    // yearly records coexisting in the tenant from invalidating a legitimate
+    // single-frequency series.
+    const endingPeriodType = endingPeriod.periodType;
+
+    // C3 + FIX 4: fetch periods with endAt < endingPeriod.endAt AND same periodType,
+    // ordered by startAt DESC
     const periods = await tx.observationPeriod.findMany({
       where: {
         tenantId,
         endAt: { lt: endingPeriod.endAt },
+        periodType: endingPeriodType, // FIX 4: filter by same period type as the ending period
       },
       select: {
         id: true,
@@ -174,27 +182,8 @@ export async function analyzeTemporalTrend(
       take: lookback,
     });
 
-    // C4: check all periods have the same periodType
-    const periodTypes = new Set(periods.map((p) => p.periodType));
-    if (periodTypes.size > 1) {
-      return {
-        indicatorId: params.indicatorId,
-        geoLevel,
-        geoRefId,
-        trendDirection: "unknown",
-        dataSufficiency: "insufficient",
-        magnitudeOfChange: "unknown",
-        dataPoints: [],
-        pointToPointChanges: [],
-        consistencyIssues: [`incompatible period types in lookback range: ${Array.from(periodTypes).join(", ")}`],
-        temporalGaps: [],
-        attributionLevel: "descriptive",
-        trendPolicyUsed: config.trendPolicy,
-        stabilityToleranceUsed: config.stabilityTolerance,
-        averageAbsoluteChange: null,
-        limitationReason: "incompatible period types in lookback range",
-      };
-    }
+    // All periods now have the same periodType (filtered at query level).
+    // No need for the C4 mixed-type rejection check — it's structurally impossible.
 
     if (periods.length === 0) {
       return {

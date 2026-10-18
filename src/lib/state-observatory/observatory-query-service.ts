@@ -583,8 +583,13 @@ export async function getObservatorySnapshot(
 
   // 02-03: Enrich indicators with temporal context OUTSIDE the transaction
   // to avoid nested transactions (owner requirement).
-  // Each call to analyzeTemporalTrend / assessEarlyWarning creates its own
-  // transaction — no nesting with the snapshot's (already committed) transaction.
+  // FIX 3 (02-03 corrective): do NOT silently swallow errors.
+  // Distinguish:
+  //   - PermissionDeniedError / authorization failures → MUST propagate (never suppressed)
+  //   - Database / integrity errors → MUST propagate (never suppressed)
+  //   - Legitimate "no data" (e.g., no periods in lookback) → handled by the service itself
+  //     returning a TemporalTrend with trendDirection="unknown" + limitationReason
+  // Only the first two categories reach the catch block — they must be re-thrown.
   for (const ind of snapshot.indicators) {
     try {
       const trend = await analyzeTemporalTrend(session, {
@@ -592,9 +597,18 @@ export async function getObservatorySnapshot(
         endingBeforePeriodId: params.observationPeriodId,
       });
       ind.temporalContext.trend = trend;
-    } catch {
-      // Temporal analysis failure is non-fatal — leave trend as null
-      ind.temporalContext.trend = null;
+    } catch (err) {
+      // FIX 3: Surface errors — do NOT silently return null.
+      // PermissionDeniedError, database failures, and integrity errors
+      // must propagate so the caller knows the snapshot is incomplete.
+      // The only "expected" case is when analyzeTemporalTrend itself
+      // handles no-data gracefully (returns unknown, doesn't throw).
+      throw new Error(
+        `Temporal trend analysis failed for indicator ${ind.indicator.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
     }
 
     try {
@@ -604,9 +618,14 @@ export async function getObservatorySnapshot(
         strategyVersionId: params.strategyVersionId,
       });
       ind.temporalContext.earlyWarning = earlyWarning;
-    } catch {
-      // Early warning failure is non-fatal — leave as null
-      ind.temporalContext.earlyWarning = null;
+    } catch (err) {
+      // FIX 3: Surface errors — do NOT silently return null.
+      throw new Error(
+        `Early warning assessment failed for indicator ${ind.indicator.id}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+        { cause: err }
+      );
     }
   }
 

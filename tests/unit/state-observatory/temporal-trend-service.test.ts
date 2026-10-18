@@ -113,15 +113,24 @@ describe("U-06: temporal gaps reported", () => {
   });
 });
 
-describe("U-07: incompatible period types → unknown", () => {
-  it("mixed quarterly + monthly → unknown", async () => {
+describe("U-07: same-type period filtering (FIX 4)", () => {
+  it("only fetches periods of the same periodType as the ending period", async () => {
+    // The query now filters by periodType at DB level (FIX 4)
+    // Verify the mock was called with periodType filter
     mockTx.observationPeriod.findMany.mockResolvedValue([
-      { id: "p1", periodType: "quarterly", periodValue: "2026-Q1", startAt: new Date("2026-01-01"), endAt: new Date("2026-03-31") },
-      { id: "p2", periodType: "monthly", periodValue: "2026-02", startAt: new Date("2026-02-01"), endAt: new Date("2026-02-28") },
+      makePeriod("p1", "2025-Q4", "2025-10-01", "2025-12-31"),
+      makePeriod("p2", "2026-Q1", "2026-01-01", "2026-03-31"),
     ]);
+    mockTx.observation.findFirst
+      .mockResolvedValueOnce(makeObs(10.0))
+      .mockResolvedValueOnce(makeObs(8.0));
     const result = await analyzeTemporalTrend(null, { indicatorId: "ind_1", endingBeforePeriodId: "p_end" });
-    expect(result.trendDirection).toBe("unknown");
-    expect(result.limitationReason).toContain("incompatible period types");
+    // Verify the findMany call included periodType filter
+    const call = mockTx.observationPeriod.findMany.mock.calls[0]![0];
+    expect(call.where.periodType).toBe("quarterly"); // same as ending period
+    // Result should be valid (not rejected for incompatible types)
+    expect(result.trendDirection).not.toBe("unknown");
+    expect(result.limitationReason).toBeNull();
   });
 });
 

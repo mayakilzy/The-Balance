@@ -56,6 +56,30 @@ vi.mock("@/lib/security/tenant-context", () => ({
   ),
 }));
 
+// FIX 3: Mock temporal + early-warning to avoid real DB calls in snapshot tests
+vi.mock("@/lib/state-observatory/temporal-trend-service", () => ({
+  analyzeTemporalTrend: vi.fn().mockResolvedValue({
+    trendDirection: "unknown", dataSufficiency: "insufficient",
+    magnitudeOfChange: "unknown", consistencyIssues: [], temporalGaps: [],
+    dataPoints: [], pointToPointChanges: [],
+    attributionLevel: "descriptive", trendPolicyUsed: "default_all_or_nothing",
+    stabilityToleranceUsed: 0, averageAbsoluteChange: null,
+    limitationReason: "test: no data",
+  }),
+}));
+vi.mock("@/lib/state-observatory/early-warning-service", () => ({
+  assessEarlyWarning: vi.fn().mockResolvedValue({
+    warningLevel: "insufficient_data", warningReason: "test",
+    contributingFactors: {
+      trendDirection: "unknown", dataSufficiency: "insufficient",
+      magnitudeOfChange: "unknown", currentVarianceDirection: "unknown",
+      observabilityMode: "LOW", consistencyIssuesCount: 0, temporalGapsCount: 0,
+    },
+    isAdvisoryOnly: true, noCausalClaims: true, isCalibrated: false,
+    limitationReason: "test", policyUsed: "default_descriptive",
+  }),
+}));
+
 // Mock analyzeAggregateIndependence to avoid complex setup
 vi.mock("@/lib/state-observatory/aggregate-independence-service", () => ({
   analyzeAggregateIndependence: vi.fn().mockResolvedValue({

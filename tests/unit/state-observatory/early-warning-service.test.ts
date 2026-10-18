@@ -26,14 +26,31 @@ vi.mock("@/lib/state-observatory/temporal-trend-service", () => ({
   analyzeTemporalTrend: vi.fn(),
 }));
 
+// FIX 2: Mock analyzeAggregateIndependence
+vi.mock("@/lib/state-observatory/aggregate-independence-service", () => ({
+  analyzeAggregateIndependence: vi.fn(),
+}));
+
 import { assessEarlyWarning } from "@/lib/state-observatory/early-warning-service";
 import { analyzeTemporalTrend } from "@/lib/state-observatory/temporal-trend-service";
+import { analyzeAggregateIndependence } from "@/lib/state-observatory/aggregate-independence-service";
 
 beforeEach(() => {
   vi.clearAllMocks();
   mockWriteAuditTx.mockResolvedValue(undefined);
   mockTx.varianceRecord.findFirst.mockResolvedValue(null);
   mockTx.observation.count.mockResolvedValue(1);
+  // FIX 2: default mock for aggregate independence — PARTIAL with sufficient data
+  (analyzeAggregateIndependence as any).mockResolvedValue({
+    observabilityMode: "PARTIAL",
+    limitationReason: null,
+    sourceDiversity: { totalSources: 1, independentSourceCount: 1 },
+    evidenceStrength: { verifiedEvidenceCount: 1 },
+    nationalClaimSupport: { level: "partial" },
+    coverage: { distinctGeoRefIds: 0 },
+    honesty: { geographicCoverageNotEqualsIndependence: true, simulatedData: true },
+    totalObservations: 1,
+  });
 });
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -60,7 +77,15 @@ describe("U-13: advisory when deteriorating + worse variance", () => {
       magnitudeOfChange: "unknown", consistencyIssues: [], temporalGaps: [],
     });
     mockTx.varianceRecord.findFirst.mockResolvedValue({ varianceDirection: "worse" });
-    mockTx.observation.count.mockResolvedValue(1);
+    (analyzeAggregateIndependence as any).mockResolvedValue({
+      observabilityMode: "PARTIAL", limitationReason: null,
+      sourceDiversity: { totalSources: 1, independentSourceCount: 1 },
+      evidenceStrength: { verifiedEvidenceCount: 1 },
+      nationalClaimSupport: { level: "partial" },
+      coverage: { distinctGeoRefIds: 0 },
+      honesty: { geographicCoverageNotEqualsIndependence: true, simulatedData: true },
+      totalObservations: 1,
+    });
 
     const result = await assessEarlyWarning(null, {
       indicatorId: "ind_1", observationPeriodId: "p1", strategyVersionId: "sv_1",
@@ -76,7 +101,15 @@ describe("U-14: none when improving — but limitationReason clarifies 'no signa
       magnitudeOfChange: "unknown", consistencyIssues: [], temporalGaps: [],
     });
     mockTx.varianceRecord.findFirst.mockResolvedValue({ varianceDirection: "better" });
-    mockTx.observation.count.mockResolvedValue(1);
+    (analyzeAggregateIndependence as any).mockResolvedValue({
+      observabilityMode: "PARTIAL", limitationReason: null,
+      sourceDiversity: { totalSources: 1, independentSourceCount: 1 },
+      evidenceStrength: { verifiedEvidenceCount: 1 },
+      nationalClaimSupport: { level: "partial" },
+      coverage: { distinctGeoRefIds: 0 },
+      honesty: { geographicCoverageNotEqualsIndependence: true, simulatedData: true },
+      totalObservations: 1,
+    });
 
     const result = await assessEarlyWarning(null, {
       indicatorId: "ind_1", observationPeriodId: "p1", strategyVersionId: "sv_1",
