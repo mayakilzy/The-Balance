@@ -8,7 +8,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
+import { FixtureTracker } from "./helpers/fixture-tracker";
 
+
+const fixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -81,6 +84,7 @@ beforeAll(async () => {
     const strategy = await adminClient.strategy.create({
       data: { tenantId: tenantAId, title: "G02-02 Test Strategy", createdBy: analystUserId },
     });
+    fixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -117,23 +121,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
+  await fixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
-  await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
+  await fixtures.cleanup(adminClient);
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -161,6 +157,8 @@ describeIntegration("H-01: subnational spread → PARTIAL (not FULL)", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H01",
       displayName: "Indicator H-01",
@@ -170,6 +168,7 @@ describeIntegration("H-01: subnational spread → PARTIAL (not FULL)", () => {
       strategyVersionId,
       objectiveId,
     });
+    fixtures.track.indicator(indicator.id);
 
     // 5 sources, all independent
     const sources = [];
@@ -225,6 +224,8 @@ describeIntegration("H-02/H-03: FULL via national obs + 2 independent verified e
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H02",
       displayName: "Indicator H-02",
@@ -234,14 +235,17 @@ describeIntegration("H-02/H-03: FULL via national obs + 2 independent verified e
       strategyVersionId,
       objectiveId,
     });
+    fixtures.track.indicator(indicator.id);
 
     // 2 independent sources
     const src1 = await adminClient.source.create({
       data: { code: "SRC_H02_1", displayName: "Source H-02 1", type: "government", reviewStatus: "approved", independenceGroup: null, metadata: { synthetic: true, country: "DML" } },
     });
+    fixtures.track.source(src1.id);
     const src2 = await adminClient.source.create({
       data: { code: "SRC_H02_2", displayName: "Source H-02 2", type: "government", reviewStatus: "approved", independenceGroup: null, metadata: { synthetic: true, country: "DML" } },
     });
+    fixtures.track.source(src2.id);
 
     // Direct evidence (verified, source 1)
     const directEvidence = await adminClient.evidence.create({
@@ -254,6 +258,7 @@ describeIntegration("H-02/H-03: FULL via national obs + 2 independent verified e
         metadata: { countryId },
       },
     });
+    fixtures.track.evidence(directEvidence.id);
 
     // Related evidence (verified, source 2) — relatedEvidenceId points to directEvidence
     const relatedEvidence = await adminClient.evidence.create({
@@ -302,6 +307,8 @@ describeIntegration("H-04: 1 national source + 1 verified evidence → PARTIAL",
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H04",
       displayName: "Indicator H-04",
@@ -311,10 +318,12 @@ describeIntegration("H-04: 1 national source + 1 verified evidence → PARTIAL",
       strategyVersionId,
       objectiveId,
     });
+    fixtures.track.indicator(indicator.id);
 
     const src1 = await adminClient.source.create({
       data: { code: "SRC_H04_1", displayName: "Source H-04 1", type: "government", reviewStatus: "approved", independenceGroup: null, metadata: { synthetic: true, country: "DML" } },
     });
+    fixtures.track.source(src1.id);
 
     // Only 1 verified evidence (no related evidence)
     const directEvidence = await adminClient.evidence.create({
@@ -327,6 +336,7 @@ describeIntegration("H-04: 1 national source + 1 verified evidence → PARTIAL",
         metadata: { countryId },
       },
     });
+    fixtures.track.evidence(directEvidence.id);
 
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
@@ -360,6 +370,8 @@ describeIntegration("H-05: coverage vs independence separation", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H05",
       displayName: "Indicator H-05",
@@ -369,10 +381,12 @@ describeIntegration("H-05: coverage vs independence separation", () => {
       strategyVersionId,
       objectiveId,
     });
+    fixtures.track.indicator(indicator.id);
 
     const src = await adminClient.source.create({
       data: { code: "SRC_H05_SINGLE", displayName: "Source H-05", type: "government", reviewStatus: "approved", independenceGroup: null, metadata: { synthetic: true, country: "DML" } },
     });
+    fixtures.track.source(src.id);
 
     // 3 subnational obs from 3 different geos but SAME source
     for (let i = 1; i <= 3; i++) {

@@ -29,7 +29,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
+import { FixtureTracker } from "./helpers/fixture-tracker";
 
+
+const fixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -169,6 +172,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    fixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -260,25 +264,17 @@ beforeAll(async () => {
 afterAll(async () => {
   if (RUN_INTEGRATION) {
     // Clean up G02 entities created during tests (admin can see all tenants)
-    await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
 
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
+  await fixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
   // Clean G02 tables before each test (preserves G00/G01 data)
-  await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
+  await fixtures.cleanup(adminClient);
 });
 
 // ============================================================
@@ -335,6 +331,8 @@ describeIntegration("I-01: T2-slice negative path", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     // Define UNEMPLOYMENT indicator with NO alertThresholds
     const indicator = await defineIndicator(analystSession, {
@@ -435,6 +433,8 @@ describeIntegration("I-02: T2-slice positive path — full lifecycle", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     // Define INFLATION indicator WITH alertThresholds
     const indicator = await defineIndicator(analystSession, {
@@ -576,6 +576,8 @@ describeIntegration("I-03: Correction scenario", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I03",
@@ -605,6 +607,7 @@ describeIntegration("I-03: Correction scenario", () => {
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
+    fixtures.track.observation(original.id);
 
     // Compute variance BEFORE correction
     const beforeVr = await computeVariance(reviewerSession, {
@@ -671,6 +674,8 @@ describeIntegration("I-04: F3 concurrent correction conflict", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I04",
@@ -699,6 +704,7 @@ describeIntegration("I-04: F3 concurrent correction conflict", () => {
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
+    fixtures.track.observation(original.id);
 
     // Two parallel correction attempts
     const promises = [
@@ -781,6 +787,8 @@ describeIntegration("I-05: StrategyVersion immutability", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I05",
@@ -863,7 +871,11 @@ describeIntegration("I-06: RLS cross-tenant isolation", () => {
     });
 
     const periodIdA = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodIdA);
+    fixtures.track.observationPeriod(periodIdA);
     const periodIdB = await ensureQuarter(tenantBId, 2026, 2);
+    fixtures.track.observationPeriod(periodIdB);
+    fixtures.track.observationPeriod(periodIdB);
 
     // Tenant A creates an indicator + observation
     const indicatorA = await defineIndicator(tenantASession, {
@@ -921,6 +933,7 @@ describeIntegration("I-07: Revoked membership", () => {
         status: "active",
       },
     });
+    fixtures.track.user(revokedUser.id);
     const membership = await adminClient.membership.create({
       data: {
         userId: revokedUser.id,
@@ -945,6 +958,8 @@ describeIntegration("I-07: Revoked membership", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I07",
@@ -1022,6 +1037,8 @@ describeIntegration("I-08: writeAuditTx atomic for every operation", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I08",
@@ -1059,6 +1076,7 @@ describeIntegration("I-08: writeAuditTx atomic for every operation", () => {
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
+    fixtures.track.observation(obs.id);
 
     await correctObservation(analystSession, obs.id, {
       newValue: 9.2,
@@ -1126,6 +1144,8 @@ describeIntegration("I-09: New strategy version preserves old observations", () 
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     // Define indicator linked to current approved version
     const indicator = await defineIndicator(analystSession, {
@@ -1147,6 +1167,7 @@ describeIntegration("I-09: New strategy version preserves old observations", () 
       isSynthetic: true,
       strategyVersionId,
     });
+    fixtures.track.observation(obs.id);
 
     // Verify observation references v1
     expect(obs.strategyVersionId).toBe(strategyVersionId);
@@ -1169,6 +1190,7 @@ describeIntegration("I-09: New strategy version preserves old observations", () 
         createdBy: analystUserId,
       },
     });
+    fixtures.track.strategyVersion(newVersion.id);
 
     // The original observation should STILL reference the old version
     const oldObsCheck = await adminClient.observation.findUnique({
@@ -1214,6 +1236,8 @@ describeIntegration("I-10: isSynthetic=true visible in outputs", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I10",
@@ -1242,6 +1266,7 @@ describeIntegration("I-10: isSynthetic=true visible in outputs", () => {
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
+    fixtures.track.observation(obs.id);
 
     // Observation row should have isSynthetic=true
     expect(obs.isSynthetic).toBe(true);
@@ -1282,6 +1307,8 @@ describeIntegration("I-11: R1 separation", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I11",
@@ -1302,6 +1329,7 @@ describeIntegration("I-11: R1 separation", () => {
       verificationStatus: "verified", // but verified
       isSynthetic: true,
     });
+    fixtures.track.observation(obs.id);
 
     expect(obs.originType).toBe("synthetic");
     expect(obs.verificationStatus).toBe("verified");
@@ -1329,6 +1357,8 @@ describeIntegration("I-12: F1 + E3", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I12_F1",
@@ -1383,6 +1413,8 @@ describeIntegration("I-12: F1 + E3", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     // Find or create an institution in a DIFFERENT country (JOR — Jordan)
     let jorCountry = await adminClient.country.findUnique({ where: { iso3: "JOR" } });
@@ -1458,6 +1490,8 @@ describeIntegration("I-13: F4 — observationId=null when unknown", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     // Indicator with NO defaultTargetValue and NO periodMilestones
     // (use analystSession — reviewer doesn't have indicator:write)
@@ -1513,6 +1547,8 @@ describeIntegration("I-14: F2 + R4 — corrections preserve all versions", () =>
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(periodId);
+    fixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I14",
@@ -1533,6 +1569,7 @@ describeIntegration("I-14: F2 + R4 — corrections preserve all versions", () =>
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
+    fixtures.track.observation(original.id);
 
     // First correction
     const corrected1 = await correctObservation(analystSession, original.id, {

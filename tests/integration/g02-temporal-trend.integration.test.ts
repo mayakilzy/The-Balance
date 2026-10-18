@@ -4,7 +4,10 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
+import { FixtureTracker } from "./helpers/fixture-tracker";
 
+
+const fixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -53,6 +56,7 @@ beforeAll(async () => {
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
   if (!sv) {
     const strategy = await adminClient.strategy.create({ data: { tenantId: tenantAId, title: "G02-03 Trend Strategy", createdBy: analystUserId } });
+    fixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({ data: { strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}", status: "approved", approvedBy: analystUserId, approvedAt: new Date(), metadata: { simulated: true }, createdBy: analystUserId } });
   }
   strategyVersionId = sv.id;
@@ -70,23 +74,15 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
-    await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
+  await fixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
-  await adminClient.alert.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.varianceRecord.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.observation.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.observationPeriod.deleteMany({ where: { tenantId: tenantAId } });
-  await adminClient.indicatorDefinition.deleteMany({ where: { tenantId: tenantAId } });
+  await fixtures.cleanup(adminClient);
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -110,14 +106,23 @@ describeIntegration("T-01: 4 comparable quarterly periods with improving trend",
 
     // Create 4 periods: Q3-2025, Q4-2025, Q1-2026, Q2-2026
     const p1 = await ensureQuarter(tenantAId, 2025, 3);
+    fixtures.track.observationPeriod(p1);
+    fixtures.track.observationPeriod(p1);
     const p2 = await ensureQuarter(tenantAId, 2025, 4);
+    fixtures.track.observationPeriod(p2);
+    fixtures.track.observationPeriod(p2);
     const p3 = await ensureQuarter(tenantAId, 2026, 1);
-    const p4 = await ensureQuarter(tenantAId, 2026, 2); // this is the "current" period
+    fixtures.track.observationPeriod(p3);
+    fixtures.track.observationPeriod(p3);
+    const p4 = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(p4);
+    fixtures.track.observationPeriod(p4); // this is the "current" period
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_TREND_T01", displayName: "Indicator T-01", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
     });
+    fixtures.track.indicator(indicator.id);
 
     // Ingest 3 historical observations (before p4) with decreasing values
     for (const [pid, val] of [[p1, 10.0], [p2, 8.0], [p3, 6.0]] as [string, number][]) {
@@ -148,14 +153,23 @@ describeIntegration("T-02: temporal gap detection", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const p1 = await ensureQuarter(tenantAId, 2025, 3);
-    const p2 = await ensureQuarter(tenantAId, 2025, 4); // will have NO observation
+    fixtures.track.observationPeriod(p1);
+    fixtures.track.observationPeriod(p1);
+    const p2 = await ensureQuarter(tenantAId, 2025, 4);
+    fixtures.track.observationPeriod(p2);
+    fixtures.track.observationPeriod(p2); // will have NO observation
     const p3 = await ensureQuarter(tenantAId, 2026, 1);
+    fixtures.track.observationPeriod(p3);
+    fixtures.track.observationPeriod(p3);
     const p4 = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(p4);
+    fixtures.track.observationPeriod(p4);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_TREND_T02", displayName: "Indicator T-02", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
     });
+    fixtures.track.indicator(indicator.id);
 
     // Ingest p1 + p3 (skip p2 — gap)
     await ingestObservation(analystSession, { indicatorDefinitionId: indicator.id, observationPeriodId: p1, observedValue: 10.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true });
@@ -179,13 +193,20 @@ describeIntegration("T-04: null measurements → insufficient", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const p1 = await ensureQuarter(tenantAId, 2025, 4);
+    fixtures.track.observationPeriod(p1);
+    fixtures.track.observationPeriod(p1);
     const p2 = await ensureQuarter(tenantAId, 2026, 1);
+    fixtures.track.observationPeriod(p2);
+    fixtures.track.observationPeriod(p2);
     const p3 = await ensureQuarter(tenantAId, 2026, 2);
+    fixtures.track.observationPeriod(p3);
+    fixtures.track.observationPeriod(p3);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_TREND_T04", displayName: "Indicator T-04", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
     });
+    fixtures.track.indicator(indicator.id);
 
     // Both observations have null values
     await ingestObservation(analystSession, { indicatorDefinitionId: indicator.id, observationPeriodId: p1, observedValue: null, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true });
