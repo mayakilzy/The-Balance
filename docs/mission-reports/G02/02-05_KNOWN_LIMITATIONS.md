@@ -16,5 +16,21 @@
 - **Impact:** Government viewers see a conservative subset of evidence. The existing Observatory Snapshot (02-02) still shows all evidence for authorized users — the new projection is additive, not replacing.
 - **Status:** DOCUMENTED — conservative security design. Granular clearance requires explicit owner approval.
 
-## G02-L21 Resolution
-G02-L21 is RESOLVED: all G02 integration test files now use `deleteMany({ where: { tenantId: tenantAId } })` instead of unrestricted `deleteMany({})`. Cleanup is scoped by tenant, preventing cross-tenant/cross-suite data deletion.
+## G02-L21 Resolution — CLOSED
+
+**G02-L21 is CLOSED.** Owner-verified closure on SHA `b5fb96503ab4a11bc0204c6cf6a020b1c2d2cbd3` (CI #167 + Recovery #105).
+
+The original resolution statement (scoped `deleteMany({ where: { tenantId } })`) was superseded by a stricter ownership-aware approach in subsequent commits. The final closure path:
+
+1. **SHA `6c18c7a`** — Removed 146 redundant `testFixtures.track.observationPeriod(<id>)` calls that bypassed the ownership-aware `trackOwned` API. Added ownership-aware tracking for all `beforeAll` shared fixtures. Added 4 sentinel regression tests.
+2. **SHA `11a813b`** — Removed text-based exception suppression in `FixtureTracker.cleanup()`. Added FINAL-1 (negative regression), FINAL-2 (parallel cleanup), FINAL-2b (parallel with overlap).
+3. **SHA `b5fb965`** — Fixed FINAL-1 test (rewrote to use broken PrismaClient for deterministic DB error).
+
+Final state of the FixtureTracker:
+- `trackOwned(record)` only tracks when `createdByThisSuite=true` — pre-existing records are never registered for deletion.
+- `cleanup(client)` uses `deleteMany({ where: { id } })` (idempotent — `count=0` for missing records, no throw).
+- Real DB errors are surfaced (no text-based suppression).
+- Tracking state is RETAINED after failure.
+- 7 sentinel regression tests PASS on real PostgreSQL 16 in CI #167.
+
+See `GROUP_02_KNOWN_LIMITATIONS.md` for the authoritative GROUP 02 limitations register.
