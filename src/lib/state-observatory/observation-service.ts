@@ -194,6 +194,12 @@ export async function ingestObservation(
             `Evidence country scope violation: ${countryResult.reason}`
           );
         }
+        // B14 (02-02): surface "unknown" country-scope warning in provenanceWarnings
+        if (countryResult.level === "unknown") {
+          provenanceResult.warnings.push(
+            `evidence country scope unknown — ${countryResult.reason}`
+          );
+        }
       }
 
       // Build metadata with isSynthetic marker (E6) + validation warnings

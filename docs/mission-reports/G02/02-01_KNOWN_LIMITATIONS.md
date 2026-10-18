@@ -23,26 +23,23 @@
 
 ## New Limitations Introduced by 02-01
 
-### G02-L12: Per-Geo Independence Analysis Cannot Reach FULL Mode
+### G02-L12: Per-Geo Independence Analysis Cannot Reach FULL Mode — RESOLVED by 02-02
 - **Affected component:** `analyzeIndependence()` per-geo analysis
-- **Description:** The F1 constraint (`observations_one_current_idx`) from 02-00 allows only ONE `isCurrent=true` observation per (indicator, period, geoLevel, geoRefId). Since each observation has exactly one `sourceId`, a per-geo analysis can never have ≥2 independent sources in the same geo tuple. Therefore FULL mode (≥2 independent sources + ≥1 verified evidence) is unreachable in per-geo analysis.
-- **Workaround:** FULL mode IS reachable in unit tests (which mock multiple observations bypassing F1). For real data, FULL requires either:
-  - A future "aggregate" analyzer that spans multiple geos for the same indicator+period
-  - OR a schema change to allow multiple observations per geo (would require reopening F1)
-- **Status:** Documented limitation. Future mission may add aggregate analyzer.
+- **Original problem:** The F1 constraint from 02-00 allows only ONE `isCurrent=true` observation per (indicator, period, geoLevel, geoRefId). Per-geo analysis could never reach FULL.
+- **Resolution (02-02):** New `analyzeAggregateIndependence()` service distinguishes geographic coverage from source independence. FULL reachable via 1 national observation + ≥2 independent verified evidence linked via direct `evidenceId` OR `Evidence.relatedEvidenceId`.
+- **Status:** RESOLVED by Mission 02-02 (pending CI verification).
 
-### G02-L13: Country Scope Warning Not Surfaced in qualityNotes
+### G02-L13: Country Scope Warning Not Surfaced in qualityNotes — RESOLVED by 02-02
 - **Affected component:** `verifyEvidenceCountryScope()` integration
-- **Description:** When `evidence.metadata.countryId` is missing, the country scope check returns `level="unknown"` (warning). However, this warning is currently only logged internally — it is NOT attached to `observation.qualityNotes.provenanceWarnings` (which only contains warnings from `validateObservationProvenance()`).
-- **Impact:** Callers cannot see the "country scope unknown" warning in the observation's metadata.
-- **Mitigation:** The warning IS visible in audit_log details. A future hardening pass could surface it in `qualityNotes`.
-- **Status:** Minor — does not affect correctness, only observability.
+- **Original problem:** The "unknown" country-scope warning was not attached to `observation.qualityNotes.provenanceWarnings`.
+- **Resolution (02-02):** B14 — the warning string is now appended to `provenanceWarnings` in `ingestObservation`.
+- **Status:** RESOLVED by Mission 02-02 (pending CI verification).
 
-### G02-L14: Source/Evidence SourceId Mismatch Only Warned (Not Rejected)
+### G02-L14: Source/Evidence SourceId Mismatch Only Warned — DOCUMENTED by 02-02
 - **Affected component:** `validateObservationProvenance()` Rule 11
-- **Description:** When `observation.sourceId` ≠ `evidence.sourceId`, the validator emits a WARNING (not an error). This is intentional — evidence may legitimately cite a different primary source than the observation's direct source (e.g., evidence from a meta-analysis).
-- **Impact:** Provenance inconsistency is flagged but not blocked.
-- **Status:** Intentional design decision (A2 — warnings for non-blocking issues).
+- **Original problem:** The mismatch warning was generic ("provenance inconsistency") without explaining acceptability.
+- **Resolution (02-02):** B15 — warning now explains: "acceptable when evidence cites a different primary source (e.g., meta-analysis). Both sources preserved for review."
+- **Status:** DOCUMENTED by Mission 02-02 (pending CI verification).
 
 ## Carried Forward from 02-00 (unchanged)
 

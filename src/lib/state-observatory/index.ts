@@ -11,3 +11,6 @@ export * from "./alert-service";
 export * from "./provenance-validator";
 export * from "./evidence-country-validator";
 export * from "./evidence-independence-service";
+// 02-02 additions
+export * from "./aggregate-independence-service";
+export * from "./observatory-query-service";

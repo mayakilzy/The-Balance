@@ -172,8 +172,9 @@ export function validateObservationProvenance(
   }
 
   // Rule 11: source/evidence sourceId consistency (owner clarification #6)
-  // If both observation.sourceId and evidence.sourceId are set, they should match.
-  // (Evidence's source should not contradict the observation's declared source.)
+  // B15 (02-02): explanatory warning — distinct sources may legitimately support
+  // the same observation (e.g., evidence from a meta-analysis citing a different
+  // primary source). Preserve both source identifiers; do NOT treat as error.
   if (
     observation.sourceId !== null &&
     observation.evidenceId !== null &&
@@ -182,7 +183,9 @@ export function validateObservationProvenance(
     ctx.evidence.sourceId !== observation.sourceId
   ) {
     warnings.push(
-      `observation.sourceId (${observation.sourceId}) does not match evidence.sourceId (${ctx.evidence.sourceId}) — provenance inconsistency`
+      `observation.sourceId (${observation.sourceId}) differs from evidence.sourceId (${ctx.evidence.sourceId}) — ` +
+        `this is acceptable when evidence cites a different primary source (e.g., meta-analysis). ` +
+        `Both sources are preserved for review.`
     );
   }
 

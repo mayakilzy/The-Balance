@@ -224,7 +224,7 @@ describe("provenance-validator — additional edge cases", () => {
     ).toBe(true);
   });
 
-  it("warns when observation.sourceId ≠ evidence.sourceId (provenance inconsistency)", () => {
+  it("warns when observation.sourceId ≠ evidence.sourceId (B15: explanatory warning)", () => {
     const result = validateObservationProvenance(
       { ...baseObservation, sourceId: "src_1", evidenceId: "ev_1" },
       {
@@ -248,8 +248,15 @@ describe("provenance-validator — additional edge cases", () => {
     expect(result.valid).toBe(true);
     expect(
       result.warnings.some((w) =>
-        w.includes("does not match evidence.sourceId")
+        w.includes("differs from evidence.sourceId")
       )
+    ).toBe(true);
+    // B15: warning includes explanation that this is acceptable
+    expect(
+      result.warnings.some((w) => w.includes("acceptable"))
+    ).toBe(true);
+    expect(
+      result.warnings.some((w) => w.includes("Both sources are preserved"))
     ).toBe(true);
   });
 });
