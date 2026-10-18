@@ -4,7 +4,7 @@
 MISSION_ID = 02-03
 TARGET_GROUP = GROUP 02 (State Observatory)
 BASE_COMMIT = bb229e7dc44798861c38d62fb1efadc31f82cf9a
-FINAL_COMMIT = <set after CI passes>
+FINAL_COMMIT = e782092 (on main — CI + Recovery PASS)
 WORKTREE = clean (mission-02-03 branch)
 ```
 
@@ -82,3 +82,12 @@ bun run lint && bun run typecheck && bun run test
 ## ACCEPTANCE
 
 **PENDING CI** — local verification passes (301 tests). Awaiting CI + Recovery on real PostgreSQL 16.
+
+## CI VERIFICATION (CI #149 + Recovery #87)
+
+- **CI #149**: https://github.com/mayakilzy/The-Balance/actions/runs/39087868561 — SUCCESS
+- **Recovery #87**: https://github.com/mayakilzy/The-Balance/actions/runs/39087868560 — SUCCESS
+- **Vitest**: 773 passed | 10 skipped | 0 failed
+- **Playwright**: 5 passed | 2 flaky (passed on retry) | 0 failed
+
+ACCEPTANCE = PASS
