@@ -41,29 +41,40 @@ export class FixtureTracker {
 
   async cleanup(client: PrismaClient): Promise<void> {
     const errors: string[] = [];
-    const del = async (set: Set<string>, model: string, fn: (id: string) => Promise<unknown>) => {
+    const del = async (set: Set<string>, model: string, fn: (id: string) => Promise<{ count: number }>) => {
       for (const id of set) {
-        try { await fn(id); } catch (e) { errors.push(`${model} ${id}: ${(e as Error).message}`); }
+        try {
+          const result = await fn(id);
+          // deleteMany returns { count: 0 } if already cascade-deleted — that's OK
+          // Real database errors throw and are caught below
+        } catch (e) {
+          const msg = (e as Error).message;
+          // "No record found" is expected for cascade-deleted records — not an error
+          if (msg.includes("No record was found") || msg.includes("not found")) {
+            continue;
+          }
+          errors.push(`${model} ${id}: ${msg}`);
+        }
       }
     };
-    // FK-safe order
-    await del(this.ids.alerts, "alert", (id) => client.alert.delete({ where: { id } }));
-    await del(this.ids.varianceRecords, "varianceRecord", (id) => client.varianceRecord.delete({ where: { id } }));
-    await del(this.ids.observations, "observation", (id) => client.observation.delete({ where: { id } }));
-    await del(this.ids.evidence, "evidence", (id) => client.evidence.delete({ where: { id } }));
-    await del(this.ids.observationPeriods, "observationPeriod", (id) => client.observationPeriod.delete({ where: { id } }));
-    await del(this.ids.indicatorDefinitions, "indicatorDefinition", (id) => client.indicatorDefinition.delete({ where: { id } }));
-    await del(this.ids.projects, "project", (id) => client.project.delete({ where: { id } }));
-    await del(this.ids.budgetLines, "budgetLine", (id) => client.budgetLine.delete({ where: { id } }));
-    await del(this.ids.dependencies, "dependency", (id) => client.dependency.delete({ where: { id } }));
-    await del(this.ids.programs, "program", (id) => client.program.delete({ where: { id } }));
-    await del(this.ids.objectives, "objective", (id) => client.objective.delete({ where: { id } }));
-    await del(this.ids.strategyVersions, "strategyVersion", (id) => client.strategyVersion.delete({ where: { id } }));
-    await del(this.ids.strategies, "strategy", (id) => client.strategy.delete({ where: { id } }));
-    await del(this.ids.sources, "source", (id) => client.source.delete({ where: { id } }));
-    await del(this.ids.institutions, "institution", (id) => client.institution.delete({ where: { id } }));
-    await del(this.ids.memberships, "membership", (id) => client.membership.delete({ where: { id } }));
-    await del(this.ids.users, "user", (id) => client.user.delete({ where: { id } }));
+    // FK-safe order — using deleteMany (idempotent, doesn't throw if already deleted)
+    await del(this.ids.alerts, "alert", (id) => client.alert.deleteMany({ where: { id } }));
+    await del(this.ids.varianceRecords, "varianceRecord", (id) => client.varianceRecord.deleteMany({ where: { id } }));
+    await del(this.ids.observations, "observation", (id) => client.observation.deleteMany({ where: { id } }));
+    await del(this.ids.evidence, "evidence", (id) => client.evidence.deleteMany({ where: { id } }));
+    await del(this.ids.observationPeriods, "observationPeriod", (id) => client.observationPeriod.deleteMany({ where: { id } }));
+    await del(this.ids.indicatorDefinitions, "indicatorDefinition", (id) => client.indicatorDefinition.deleteMany({ where: { id } }));
+    await del(this.ids.projects, "project", (id) => client.project.deleteMany({ where: { id } }));
+    await del(this.ids.budgetLines, "budgetLine", (id) => client.budgetLine.deleteMany({ where: { id } }));
+    await del(this.ids.dependencies, "dependency", (id) => client.dependency.deleteMany({ where: { id } }));
+    await del(this.ids.programs, "program", (id) => client.program.deleteMany({ where: { id } }));
+    await del(this.ids.objectives, "objective", (id) => client.objective.deleteMany({ where: { id } }));
+    await del(this.ids.strategyVersions, "strategyVersion", (id) => client.strategyVersion.deleteMany({ where: { id } }));
+    await del(this.ids.strategies, "strategy", (id) => client.strategy.deleteMany({ where: { id } }));
+    await del(this.ids.sources, "source", (id) => client.source.deleteMany({ where: { id } }));
+    await del(this.ids.institutions, "institution", (id) => client.institution.deleteMany({ where: { id } }));
+    await del(this.ids.memberships, "membership", (id) => client.membership.deleteMany({ where: { id } }));
+    await del(this.ids.users, "user", (id) => client.user.deleteMany({ where: { id } }));
 
     if (errors.length === 0) {
       for (const key of Object.keys(this.ids) as Array<keyof typeof this.ids>) this.ids[key].clear();
