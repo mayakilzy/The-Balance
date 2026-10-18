@@ -48,6 +48,8 @@ const mockTx = {
   },
   institution: { findUnique: vi.fn() },
   tenant: { findUnique: vi.fn() },
+  source: { findUnique: vi.fn() },
+  evidence: { findFirst: vi.fn() },
   $queryRaw: vi.fn(),
 };
 
@@ -85,6 +87,15 @@ beforeEach(() => {
   mockTx.indicatorDefinition.findFirst.mockResolvedValue({ id: "ind_1" });
   mockTx.observationPeriod.findFirst.mockResolvedValue({ id: "period_1" });
   mockTx.strategyVersion.findFirst.mockResolvedValue({ id: "sv_1" });
+  // 02-01: defaults for provenance validation mocks
+  mockTx.source.findUnique.mockResolvedValue({
+    id: "src_1",
+    reviewStatus: "approved",
+    independenceGroup: null,
+    submittedByTenantId: null,
+  });
+  mockTx.evidence.findFirst.mockResolvedValue(null);
+  mockTx.tenant.findUnique.mockResolvedValue({ countryId: "country_DML" });
 });
 
 afterEach(() => {

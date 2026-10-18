@@ -24,6 +24,8 @@ import {
   NotFoundError,
   ConflictError,
 } from "./contracts";
+import { validateObservationProvenance } from "./provenance-validator";
+import { verifyEvidenceCountryScope } from "./evidence-country-validator";
 
 /**
  * Ingest a new observation.
@@ -99,11 +101,108 @@ export async function ingestObservation(
         await verifyInstitutionInTenantCountry(tx, tenantId, parsed.geoRefId);
       }
 
-      // Build metadata with isSynthetic marker (E6)
+      // 02-01: Provenance + country scope validation BEFORE INSERT
+      // Load source (if sourceId provided) — Source is PUBLIC G00 table
+      let sourceRow: {
+        id: string;
+        reviewStatus: string;
+        independenceGroup: string | null;
+        submittedByTenantId: string | null;
+      } | null = null;
+      if (parsed.sourceId) {
+        sourceRow = await tx.source.findUnique({
+          where: { id: parsed.sourceId },
+          select: {
+            id: true,
+            reviewStatus: true,
+            independenceGroup: true,
+            submittedByTenantId: true,
+          },
+        });
+        if (!sourceRow) {
+          throw new NotFoundError(
+            `Source ${parsed.sourceId} not found`
+          );
+        }
+      }
+
+      // Load evidence (if evidenceId provided) — RLS-enforced (filters cross-tenant)
+      let evidenceRow: {
+        id: string;
+        tenantId: string;
+        sourceId: string | null;
+        verificationStatus: string;
+        type: string;
+        metadata: unknown;
+      } | null = null;
+      if (parsed.evidenceId) {
+        evidenceRow = await tx.evidence.findFirst({
+          where: { id: parsed.evidenceId, tenantId },
+          select: {
+            id: true,
+            tenantId: true,
+            sourceId: true,
+            verificationStatus: true,
+            type: true,
+            metadata: true,
+          },
+        });
+        // If evidenceId provided but evidence not found in tenant — let validator handle
+      }
+
+      // Get tenant's countryId for country scope check
+      const tenantRow = await tx.tenant.findUnique({
+        where: { id: tenantId },
+        select: { countryId: true },
+      });
+      if (!tenantRow) {
+        throw new NotFoundError(`Tenant ${tenantId} not found`);
+      }
+
+      // Run provenance validation (pure function)
+      const provenanceResult = validateObservationProvenance(
+        {
+          originType: parsed.originType,
+          verificationStatus: parsed.verificationStatus ?? "unverified",
+          sourceId: parsed.sourceId ?? null,
+          evidenceId: parsed.evidenceId ?? null,
+          derivationMethod: parsed.derivationMethod ?? null,
+          isSynthetic: parsed.isSynthetic ?? true,
+        },
+        {
+          source: sourceRow,
+          evidence: evidenceRow,
+          sessionTenantId: tenantId,
+          tenantCountryId: tenantRow.countryId,
+        }
+      );
+
+      if (!provenanceResult.valid) {
+        throw new Error(
+          `Provenance validation failed: ${provenanceResult.errors.join("; ")}`
+        );
+      }
+
+      // Country scope check (if evidenceId provided)
+      if (parsed.evidenceId && evidenceRow) {
+        const countryResult = verifyEvidenceCountryScope({
+          evidenceMetadata: evidenceRow.metadata,
+          tenantCountryId: tenantRow.countryId,
+        });
+        if (!countryResult.valid) {
+          throw new Error(
+            `Evidence country scope violation: ${countryResult.reason}`
+          );
+        }
+      }
+
+      // Build metadata with isSynthetic marker (E6) + validation warnings
       const metadata: Record<string, unknown> = {
         ...(parsed.qualityNotes ?? {}),
         isSynthetic: parsed.isSynthetic ?? true,
         syntheticCountry: parsed.isSynthetic === false ? null : "DML",
+        // 02-01: attach non-blocking provenance warnings
+        provenanceWarnings: provenanceResult.warnings,
       };
 
       // Create the observation

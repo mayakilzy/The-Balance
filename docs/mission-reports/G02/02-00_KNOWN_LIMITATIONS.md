@@ -86,32 +86,31 @@ not auto-correct any of them.
 - **Mitigation:** Future missions may add LLM-assisted interpretation,
   but only as advisory output (never as a substitute for human review).
 
-### G02-L07: Audit Failure Injection Not Implemented (Carried from G01 #11)
+### G02-L07: Audit Failure Injection Not Implemented (Carried from G01 #11) — RESOLVED by 02-01
 - **Affected component:** `writeAuditTx` atomicity verification
 - **Description:** The atomicity of `writeAuditTx` (inside
   `withAuthenticatedTenant`) is verified structurally (the call is inside
   the transaction) and via the re-approval rejection pattern from G01.
-  However, **forced failure injection of `writeAuditTx` was NOT
-  implemented** — no test simulates a deliberate `audit_log` write
-  failure to verify the transaction rolls back.
-- **Why deferred:** Requires mocking the Prisma transaction client
-  (`tx.auditLog.create` to throw), which is not set up in the current
-  test infrastructure.
-- **Mitigation:** The structural verification (writeAuditTx is called
-  inside `withAuthenticatedTenant`, before the return) provides strong
-  evidence of atomicity. A forced-failure test would be more definitive
-  and should be added in a hardening mission.
+  Originally, forced failure injection was NOT implemented.
+- **Resolution (02-01):** H-01 + H-02 integration tests use real PostgreSQL
+  REVOKE/GRANT on `audit_log` to inject forced audit failure, then verify
+  rollback (no observation row, no partial state). Cleanup guaranteed via
+  `finally` block.
+- **Status:** RESOLVED by Mission 02-01 (pending CI verification on 02-01 SHA).
 
-### G02-L08: Counter-Evidence Country Scope Not Verified (Carried from G01 #10)
+### G02-L08: Counter-Evidence Country Scope Not Verified (Carried from G01 #10) — RESOLVED by 02-01
 - **Affected component:** `Observation.evidenceId` cross-country scope
 - **Description:** While E3 enforces that institutional `geoRefId` must
-  match the tenant's country, the `evidenceId` reference is NOT verified
+  match the tenant's country, the `evidenceId` reference was NOT verified
   for country scope. An observation could theoretically link to evidence
   from a different country.
-- **Why deferred:** Evidence country scope was deferred from GROUP 01.
-  This limitation is inherited, not introduced.
-- **Mitigation:** Future hardening pass should add an evidence country
-  check (similar to E3 for institutions).
+- **Resolution (02-01):** `verifyEvidenceCountryScope()` pure function
+  added + integrated into `ingestObservation`. Uses
+  `Evidence.metadata.countryId` (no schema change).
+  - Explicit mismatch → REJECTION (A6) — verified by H-09
+  - Missing countryId → WARNING (A5) — verified by H-10
+  - Cross-tenant evidence → REJECTION (A15) — verified by H-11
+- **Status:** RESOLVED by Mission 02-01 (pending CI verification on 02-01 SHA).
 
 ### G02-L09: Variance Computation National-Only in 02-00
 - **Affected component:** `VarianceService.computeVariance`
