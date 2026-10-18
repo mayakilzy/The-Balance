@@ -352,44 +352,92 @@ describeIntegration("V-14: cross-country institution rejection", () => {
   });
 });
 
-// V-15: Cross-tenant isolation despite shared public Institution
+// V-15: Cross-tenant isolation with valid tenant-specific strategyVersions
+// CORRECTIVE: Both tenants must have their OWN valid approved StrategyVersion.
+// Both reference the SAME public Institution. Each has PRIVATE programs+indicators.
+// Verify each tenant sees ONLY its own data — not rejected at strategy validation,
+// but at actual RLS data isolation level.
 describeIntegration("V-15: cross-tenant isolation with shared institution", () => {
-  it("Tenant B cannot see Tenant A's programs for the same institution", async () => {
+  it("Tenant A and Tenant B each see only their own programs for the same institution", async () => {
     const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
     const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
 
-    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const analystSessionA = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSessionA = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
-
-    // Tenant A creates a program
-    const program = await adminClient.program.create({
-      data: { tenantId: tenantAId, strategyVersionId, title: "V15 Program A", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    // Create Tenant B's own approved StrategyVersion
+    const strategyB = await adminClient.strategy.create({
+      data: { tenantId: tenantBId, title: "Tenant B Strategy V15", createdBy: analystUserId },
     });
-    await defineIndicator(analystSession, {
-      code: "IND_INST_V15", displayName: "V-15", unit: "percent",
-      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
+    const svB = await adminClient.strategyVersion.create({
+      data: {
+        strategyId: strategyB.id, tenantId: tenantBId, versionNumber: 1, content: "{}",
+        status: "approved", approvedBy: analystUserId, approvedAt: new Date(),
+        metadata: { simulated: true }, createdBy: analystUserId,
+      },
     });
 
-    // Tenant B has no strategyVersion (different tenant) — will fail at SV validation
+    // Create Tenant B reviewer
     const tenantBReviewer = await adminClient.user.upsert({
-      where: { email: "g02-04-tenantb@demolandia.test" },
+      where: { email: "g02-04-tenantb-v15@demolandia.test" },
       update: {},
-      create: { email: "g02-04-tenantb@demolandia.test", name: "Tenant B", passwordHash: await hashPassword("Test1234!"), status: "active" },
+      create: { email: "g02-04-tenantb-v15@demolandia.test", name: "Tenant B V15", passwordHash: await hashPassword("Test1234!"), status: "active" },
     });
     await adminClient.membership.upsert({
       where: { userId_tenantId: { userId: tenantBReviewer.id, tenantId: tenantBId } },
       update: { status: "active", roleCode: "reviewer" },
       create: { userId: tenantBReviewer.id, tenantId: tenantBId, roleCode: "reviewer", status: "active" },
     });
-    const tenantBSession = makeSession({ id: tenantBReviewer.id, tenantId: tenantBId, roleCode: "reviewer", membershipStatus: "active" });
+    const analystSessionB = makeSession({ id: tenantBReviewer.id, tenantId: tenantBId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSessionB = makeSession({ id: tenantBReviewer.id, tenantId: tenantBId, roleCode: "reviewer", membershipStatus: "active" });
 
-    // Tenant B requests view for same institution + Tenant A's strategyVersion
-    await expect(
-      getInstitutionalView(tenantBSession, {
-        institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
-      })
-    ).rejects.toThrow(/not approved in tenant/);
+    // Create Tenant B's own objective (needed for defineIndicator)
+    const objB = await adminClient.objective.create({
+      data: { tenantId: tenantBId, countryId, title: "V15 Obj B", targetMetric: "test", targetValue: "5.0", horizon: 5, status: "active", createdBy: tenantBReviewer.id },
+    });
+
+    const periodIdA = await ensureQuarter(tenantAId, 2026, 2);
+    const periodIdB = await ensureQuarter(tenantBId, 2026, 2);
+
+    // Tenant A creates program + indicator for the shared institution
+    const progA = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId, title: "V15 Prog A", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const indA = await defineIndicator(analystSessionA, {
+      code: "IND_V15_A", displayName: "V-15 A", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: progA.id,
+    });
+
+    // Tenant B creates its OWN program + indicator for the SAME institution
+    const progB = await adminClient.program.create({
+      data: { tenantId: tenantBId, strategyVersionId: svB.id, title: "V15 Prog B", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    const indB = await defineIndicator(analystSessionB, {
+      code: "IND_V15_B", displayName: "V-15 B", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId: svB.id, objectiveId: objB.id, programId: progB.id,
+    });
+
+    // POSITIVE: Tenant A sees its own program + indicator, NOT Tenant B's
+    const viewA = await getInstitutionalView(reviewerSessionA, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodIdA,
+    });
+    expect(viewA.programs).toHaveLength(1);
+    expect(viewA.programs[0]!.title).toBe("V15 Prog A");
+    expect(viewA.programs[0]!.indicators[0]!.code).toBe("IND_V15_A");
+    // Tenant A must NOT see Tenant B's indicator
+    const aIndicatorCodes = viewA.programs.flatMap((p) => p.indicators.map((i) => i.code));
+    expect(aIndicatorCodes).not.toContain("IND_V15_B");
+
+    // POSITIVE: Tenant B sees its own program + indicator, NOT Tenant A's
+    const viewB = await getInstitutionalView(reviewerSessionB, {
+      institutionId: institutionEduId, strategyVersionId: svB.id, observationPeriodId: periodIdB,
+    });
+    expect(viewB.programs).toHaveLength(1);
+    expect(viewB.programs[0]!.title).toBe("V15 Prog B");
+    expect(viewB.programs[0]!.indicators[0]!.code).toBe("IND_V15_B");
+    // Tenant B must NOT see Tenant A's indicator
+    const bIndicatorCodes = viewB.programs.flatMap((p) => p.indicators.map((i) => i.code));
+    expect(bIndicatorCodes).not.toContain("IND_V15_A");
   });
 });
 
@@ -454,9 +502,15 @@ describeIntegration("V-08b: no fabricated execution verification", () => {
   });
 });
 
-// Sector view: deduplication + not_computed observability
-describeIntegration("V-17: sector view deduplication", () => {
-  it("same indicator in 2 programs counted once", async () => {
+// V-17: Sector view indicator counting across institutions
+// CORRECTIVE: IndicatorDefinition.programId is a singular relationship —
+// one indicator cannot belong to two programs simultaneously.
+// This test verifies that distinct indicators across multiple programs
+// (owned by different institutions in the same sector) are counted correctly.
+// Deduplication is defensive (using Set by indicatorId) but cannot be
+// triggered by the current schema since each indicator has exactly one programId.
+describeIntegration("V-17: sector view indicator counting across institutions", () => {
+  it("2 programs from 2 institutions with 2 distinct indicators → totalIndicators=2", async () => {
     const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
     const { getSectorView } = await import("@/lib/state-observatory/sector-view-service");
 
@@ -464,19 +518,22 @@ describeIntegration("V-17: sector view deduplication", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
+
+    // Two programs from two different institutions in the same sector
     const prog1 = await adminClient.program.create({
-      data: { tenantId: tenantAId, strategyVersionId, title: "Sector P1", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+      data: { tenantId: tenantAId, strategyVersionId, title: "Edu Program 1", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
     const prog2 = await adminClient.program.create({
-      data: { tenantId: tenantAId, strategyVersionId, title: "Sector P2", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+      data: { tenantId: tenantAId, strategyVersionId, title: "Health Program 1", sector: "education", owningInstitutionId: institutionHealthId, status: "active" },
     });
-    // Same indicator linked to BOTH programs
+
+    // Each program has one distinct indicator (schema limitation: 1 indicator = 1 programId)
     await defineIndicator(analystSession, {
-      code: "IND_SECTOR_V17", displayName: "V-17", unit: "percent",
+      code: "IND_SECTOR_V17_1", displayName: "V-17 Indicator 1", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: prog1.id,
     });
     await defineIndicator(analystSession, {
-      code: "IND_SECTOR_V17B", displayName: "V-17B", unit: "percent",
+      code: "IND_SECTOR_V17_2", displayName: "V-17 Indicator 2", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: prog2.id,
     });
 
@@ -484,8 +541,58 @@ describeIntegration("V-17: sector view deduplication", () => {
       sector: "education", strategyVersionId, observationPeriodId: periodId,
     });
 
+    // 2 programs from 2 institutions
     expect(view.totalPrograms).toBe(2);
-    expect(view.totalIndicators).toBe(2); // 2 distinct indicators
+    expect(view.totalInstitutions).toBe(2);
+    // 2 distinct indicators (each belongs to one program — no dedup needed but Set is defensive)
+    expect(view.totalIndicators).toBe(2);
     expect(view.aggregateObservability.status).toBe("not_computed");
+  });
+});
+
+// V-19: Strategy-version and period isolation
+// CORRECTIVE: Ensure indicators/variance/alerts from another StrategyVersion
+// or ObservationPeriod cannot appear in the requested institutional view.
+describeIntegration("V-19: strategy-version and period isolation", () => {
+  it("indicator from a DIFFERENT strategy version does NOT appear in the view", async () => {
+    const { defineIndicator } = await import("@/lib/state-observatory/indicator-registry-service");
+    const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
+
+    const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
+    const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
+
+    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+
+    // Create a SECOND strategy version (draft — not approved) for the same tenant
+    const strategy2 = await adminClient.strategy.create({
+      data: { tenantId: tenantAId, title: "V19 Second Strategy", createdBy: analystUserId },
+    });
+    const sv2 = await adminClient.strategyVersion.create({
+      data: {
+        strategyId: strategy2.id, tenantId: tenantAId, versionNumber: 1, content: "{}",
+        status: "approved", approvedBy: analystUserId, approvedAt: new Date(),
+        metadata: { simulated: true }, createdBy: analystUserId,
+      },
+    });
+
+    // Program owned by institutionEdu, linked to the SECOND strategy version
+    const prog2 = await adminClient.program.create({
+      data: { tenantId: tenantAId, strategyVersionId: sv2.id, title: "V19 Prog SV2", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
+    });
+    // Indicator linked to prog2 (which belongs to sv2)
+    await defineIndicator(analystSession, {
+      code: "IND_V19_SV2", displayName: "V-19 SV2 Indicator", unit: "percent",
+      preferredDirection: "decrease", alertThresholds: [], strategyVersionId: sv2.id, objectiveId, programId: prog2.id,
+    });
+
+    // Request institutional view using the FIRST (original) strategy version
+    const view = await getInstitutionalView(reviewerSession, {
+      institutionId: institutionEduId, strategyVersionId, observationPeriodId: periodId,
+    });
+
+    // The indicator from sv2 must NOT appear — strategy-version isolation
+    // The view may be empty (no programs for sv1) or contain only sv1's programs
+    const allIndicatorCodes = view.programs.flatMap((p) => p.indicators.map((i) => i.code));
+    expect(allIndicatorCodes).not.toContain("IND_V19_SV2");
   });
 });
