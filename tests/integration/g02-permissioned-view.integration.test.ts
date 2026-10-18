@@ -54,45 +54,60 @@ beforeAll(async () => {
   adminUserId = admin.id;
 
   // Create reviewer + observer for this test
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-05-rev@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-05-rev@demolandia.test" },
     update: {}, create: { email: "g02-05-rev@demolandia.test", name: "G02-05 Rev", passwordHash: await hashPassword("Test1234!"), status: "active" },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: { userId: reviewer.id, tenantId: tenantAId, roleCode: "reviewer", status: "active" },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
 
+  const observerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-05-obs@demolandia.test" } }));
   const observer = await adminClient.user.upsert({
     where: { email: "g02-05-obs@demolandia.test" },
     update: {}, create: { email: "g02-05-obs@demolandia.test", name: "G02-05 Obs", passwordHash: await hashPassword("Test1234!"), status: "active" },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: observer.id, createdByThisSuite: !observerExisted });
+  const observerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: observer.id, tenantId: tenantAId } },
+  }));
+  const observerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: observer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "observer" },
     create: { userId: observer.id, tenantId: tenantAId, roleCode: "observer", status: "active" },
   });
+  sharedFixtures.trackOwned.membership({ id: observerMemb.id, createdByThisSuite: !observerMembExisted });
   observerUserId = observer.id;
 
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
   if (!sv) {
     const strategy = await adminClient.strategy.create({ data: { tenantId: tenantAId, title: "G02-05 Strategy", createdBy: analystUserId } });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({ data: { strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}", status: "approved", approvedBy: adminUserId, approvedAt: new Date(), metadata: { simulated: true }, createdBy: analystUserId } });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
 
   let obj = await adminClient.objective.findFirst({ where: { tenantId: tenantAId } });
   if (!obj) {
     obj = await adminClient.objective.create({ data: { tenantId: tenantAId, countryId, title: "G02-05 Obj", targetMetric: "test", targetValue: "5.0", horizon: 5, status: "active", createdBy: analystUserId } });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
 
   let cb = await adminClient.source.findFirst({ where: { code: "DML-CB-SYNTHETIC" } });
   if (!cb) {
     cb = await adminClient.source.create({ data: { code: "DML-CB-SYNTHETIC", displayName: "CB synthetic", type: "government", reviewStatus: "approved", metadata: { synthetic: true, country: "DML" } } });
+    sharedFixtures.trackOwned.source({ id: cb.id, createdByThisSuite: true });
   }
   centralBankSourceId = cb.id;
 });
@@ -144,8 +159,6 @@ describeIntegration("P-09: government tier returns indicators", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_PERM_P09", displayName: "P-09", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
@@ -176,8 +189,6 @@ describeIntegration("P-10: restricted evidence excluded from government projecti
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_PERM_P10", displayName: "P-10", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
@@ -212,8 +223,6 @@ describeIntegration("P-11: research tier fail-closed", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const result = await getPermissionedView(observerSession, { strategyVersionId, observationPeriodId: periodId });
     expect(result.tier).toBe("research");
@@ -257,8 +266,6 @@ describeIntegration("P-16: no indirect disclosure", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_PERM_P16", displayName: "P-16", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,

@@ -98,6 +98,7 @@ beforeAll(async () => {
   if (!analyst) throw new Error("analyst@demolandia.test not seeded.");
   analystUserId = analyst.id;
 
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-01-hardening-reviewer@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-01-hardening-reviewer@demolandia.test" },
     update: {},
@@ -108,7 +109,11 @@ beforeAll(async () => {
       status: "active",
     },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: {
@@ -118,6 +123,7 @@ beforeAll(async () => {
       status: "active",
     },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
 
   let sv = await adminClient.strategyVersion.findFirst({
@@ -131,7 +137,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -145,6 +151,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
 
@@ -164,6 +171,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
 
@@ -181,6 +189,7 @@ beforeAll(async () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
+    sharedFixtures.trackOwned.source({ id: centralBank.id, createdByThisSuite: true });
   }
   centralBankSourceId = centralBank.id;
 });
@@ -250,8 +259,6 @@ describeIntegration("H-01: Audit failure → real PostgreSQL rollback", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H01",
@@ -330,8 +337,6 @@ describeIntegration("H-02: Correction failure → no partial state", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H02",
@@ -427,8 +432,6 @@ describeIntegration("H-03: Concurrent correction failure → chain preserved", (
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H03",
@@ -516,8 +519,6 @@ describeIntegration("H-04: Duplicate value handling", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H04",
@@ -578,8 +579,6 @@ describeIntegration("H-04: Duplicate value handling", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H04_F1",
@@ -639,8 +638,6 @@ describeIntegration("H-09: Country scope mismatch rejected", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H09",
@@ -702,8 +699,6 @@ describeIntegration("H-10: Missing country metadata → warning", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H10",
@@ -778,8 +773,6 @@ describeIntegration("H-11: Cross-tenant evidence rejected", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H11",

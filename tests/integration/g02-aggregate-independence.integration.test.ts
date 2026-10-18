@@ -63,6 +63,7 @@ beforeAll(async () => {
   if (!analyst) throw new Error("analyst not seeded");
   analystUserId = analyst.id;
 
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-02-agg-reviewer@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-02-agg-reviewer@demolandia.test" },
     update: {},
@@ -73,11 +74,16 @@ beforeAll(async () => {
       status: "active",
     },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: { userId: reviewer.id, tenantId: tenantAId, roleCode: "reviewer", status: "active" },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
 
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
@@ -85,7 +91,7 @@ beforeAll(async () => {
     const strategy = await adminClient.strategy.create({
       data: { tenantId: tenantAId, title: "G02-02 Test Strategy", createdBy: analystUserId },
     });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -99,6 +105,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
 
@@ -116,6 +123,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
 });
@@ -175,8 +183,6 @@ describeIntegration("H-01: subnational spread → PARTIAL (not FULL)", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H01",
       displayName: "Indicator H-01",
@@ -244,8 +250,6 @@ describeIntegration("H-02/H-03: FULL via national obs + 2 independent verified e
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H02",
       displayName: "Indicator H-02",
@@ -329,8 +333,6 @@ describeIntegration("H-04: 1 national source + 1 verified evidence → PARTIAL",
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H04",
       displayName: "Indicator H-04",
@@ -394,8 +396,6 @@ describeIntegration("H-05: coverage vs independence separation", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_AGG_H05",
       displayName: "Indicator H-05",

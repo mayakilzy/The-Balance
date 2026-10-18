@@ -77,6 +77,7 @@ beforeAll(async () => {
   analystUserId = analyst.id;
 
   // Create or fetch reviewer
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-01-reviewer@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-01-reviewer@demolandia.test" },
     update: {},
@@ -87,7 +88,11 @@ beforeAll(async () => {
       status: "active",
     },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: {
@@ -97,6 +102,7 @@ beforeAll(async () => {
       status: "active",
     },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
 
   // Create Strategy + approved StrategyVersion if not exists
@@ -111,7 +117,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -125,6 +131,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
 
@@ -144,6 +151,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
 });
@@ -221,8 +229,6 @@ describeIntegration("H-05: Independence dedup by independenceGroup", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H05",
@@ -386,8 +392,6 @@ describeIntegration("H-06: Multiple obs from same source = 1 source", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H06",
@@ -489,8 +493,6 @@ describeIntegration("H-07: Corrections don't inflate independence", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H07",
@@ -586,8 +588,6 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H08_LOW",
@@ -638,8 +638,6 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H08_PARTIAL",
@@ -709,8 +707,6 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H08_FULL",
@@ -831,8 +827,6 @@ describeIntegration("H-12: Counter-evidence preserved", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_COUNTER_H12",

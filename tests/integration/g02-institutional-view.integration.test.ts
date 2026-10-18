@@ -65,35 +65,44 @@ beforeAll(async () => {
   if (!analyst) throw new Error("analyst not seeded");
   analystUserId = analyst.id;
 
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-04-corr-reviewer@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-04-corr-reviewer@demolandia.test" },
     update: {},
     create: { email: "g02-04-corr-reviewer@demolandia.test", name: "G02-04 Corr Reviewer", passwordHash: await hashPassword("Test1234!"), status: "active" },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: { userId: reviewer.id, tenantId: tenantAId, roleCode: "reviewer", status: "active" },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
 
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
   if (!sv) {
     const strategy = await adminClient.strategy.create({ data: { tenantId: tenantAId, title: "G02-04 Strategy", createdBy: analystUserId } });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({ data: { strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}", status: "approved", approvedBy: analystUserId, approvedAt: new Date(), metadata: { simulated: true }, createdBy: analystUserId } });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
 
   let obj = await adminClient.objective.findFirst({ where: { tenantId: tenantAId } });
   if (!obj) {
     obj = await adminClient.objective.create({ data: { tenantId: tenantAId, countryId, title: "G02-04 Objective", targetMetric: "test", targetValue: "5.0", horizon: 5, status: "active", createdBy: analystUserId } });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
 
   let cb = await adminClient.source.findFirst({ where: { code: "DML-CB-SYNTHETIC" } });
   if (!cb) {
     cb = await adminClient.source.create({ data: { code: "DML-CB-SYNTHETIC", displayName: "Demolandia Central Bank — synthetic", type: "government", reviewStatus: "approved", metadata: { synthetic: true, country: "DML" } } });
+    sharedFixtures.trackOwned.source({ id: cb.id, createdByThisSuite: true });
   }
   centralBankSourceId = cb.id;
 
@@ -101,18 +110,21 @@ beforeAll(async () => {
   let instEdu = await adminClient.institution.findFirst({ where: { countryId, code: "DML-MIN-EDU" } });
   if (!instEdu) {
     instEdu = await adminClient.institution.create({ data: { countryId, code: "DML-MIN-EDU", displayName: "Ministry of Education (DML)", type: "ministry" } });
+    sharedFixtures.trackOwned.institution({ id: instEdu.id, createdByThisSuite: true });
   }
   institutionEduId = instEdu.id;
 
   let instHealth = await adminClient.institution.findFirst({ where: { countryId, code: "DML-MIN-HEALTH" } });
   if (!instHealth) {
     instHealth = await adminClient.institution.create({ data: { countryId, code: "DML-MIN-HEALTH", displayName: "Ministry of Health (DML)", type: "ministry" } });
+    sharedFixtures.trackOwned.institution({ id: instHealth.id, createdByThisSuite: true });
   }
   institutionHealthId = instHealth.id;
 
   let instJor = await adminClient.institution.findFirst({ where: { countryId: countryJorId, code: "JOR-MIN-EDU" } });
   if (!instJor) {
     instJor = await adminClient.institution.create({ data: { countryId: countryJorId, code: "JOR-MIN-EDU", displayName: "Jordan Ministry of Education", type: "ministry" } });
+    sharedFixtures.trackOwned.institution({ id: instJor.id, createdByThisSuite: true });
   }
   institutionJorId = instJor.id;
 });
@@ -163,8 +175,6 @@ describeIntegration("V-09: program ownership + institutional linkage", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Create a program owned by Ministry of Education
     const program = await adminClient.program.create({
@@ -200,8 +210,6 @@ describeIntegration("V-10: exact institutional geoRefId", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V10 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
@@ -248,8 +256,6 @@ describeIntegration("V-11: national labeled 'linked'", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V11 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
@@ -286,8 +292,6 @@ describeIntegration("V-12: no automatic national attribution", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V12 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
@@ -337,8 +341,6 @@ describeIntegration("V-13: parent/child institution separation", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V13 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
@@ -376,8 +378,6 @@ describeIntegration("V-14: cross-country institution rejection", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     await expect(
       getInstitutionalView(reviewerSession, {
@@ -437,13 +437,9 @@ describeIntegration("V-15: cross-tenant isolation with shared institution", () =
     const _periodIdA_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodIdA = _periodIdA_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodIdA_owned);
-    testFixtures.track.observationPeriod(periodIdA);
-    testFixtures.track.observationPeriod(periodIdA);
     const _periodIdB_owned = await ensureQuarterOwned(tenantBId, 2026, 2);
     const periodIdB = _periodIdB_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodIdB_owned);
-    testFixtures.track.observationPeriod(periodIdB);
-    testFixtures.track.observationPeriod(periodIdB);
 
     // Tenant A creates program + indicator for the shared institution
     const progA = await adminClient.program.create({
@@ -504,8 +500,6 @@ describeIntegration("V-18: missing institutional observations = UNKNOWN", () => 
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V18 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
@@ -543,8 +537,6 @@ describeIntegration("V-08b: no fabricated execution verification", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V08b Program", sector: "education", owningInstitutionId: institutionEduId, status: "completed" },
     });
@@ -581,8 +573,6 @@ describeIntegration("V-17: sector view indicator counting across institutions", 
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Two programs from two different institutions in the same sector
     const prog1 = await adminClient.program.create({
@@ -631,8 +621,6 @@ describeIntegration("V-19: strategy-version and period isolation", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Create a SECOND strategy version (draft — not approved) for the same tenant
     const strategy2 = await adminClient.strategy.create({

@@ -67,6 +67,7 @@ beforeAll(async () => {
   if (!analyst) throw new Error("analyst not seeded");
   analystUserId = analyst.id;
 
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-02-snap-reviewer@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-02-snap-reviewer@demolandia.test" },
     update: {},
@@ -77,11 +78,16 @@ beforeAll(async () => {
       status: "active",
     },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: { userId: reviewer.id, tenantId: tenantAId, roleCode: "reviewer", status: "active" },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
 
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
@@ -89,7 +95,7 @@ beforeAll(async () => {
     const strategy = await adminClient.strategy.create({
       data: { tenantId: tenantAId, title: "G02-02 Snap Strategy", createdBy: analystUserId },
     });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}",
@@ -97,6 +103,7 @@ beforeAll(async () => {
         metadata: { simulated: true }, createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
 
@@ -105,6 +112,7 @@ beforeAll(async () => {
     obj = await adminClient.objective.create({
       data: { tenantId: tenantAId, countryId, title: "G02-02 Snap Objective", targetMetric: "test", targetValue: "5.0", horizon: 5, status: "active", createdBy: analystUserId },
     });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
 
@@ -113,6 +121,7 @@ beforeAll(async () => {
     cb = await adminClient.source.create({
       data: { code: "DML-CB-SYNTHETIC", displayName: "Demolandia Central Bank — synthetic", type: "government", reviewStatus: "approved", metadata: { synthetic: true, country: "DML" } },
     });
+    sharedFixtures.trackOwned.source({ id: cb.id, createdByThisSuite: true });
   }
   centralBankSourceId = cb.id;
 });
@@ -165,8 +174,6 @@ describeIntegration("H-06: snapshot structure", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H06",
       displayName: "Indicator H-06",
@@ -224,8 +231,6 @@ describeIntegration("H-07: refuted evidence preserved in snapshot", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H07",
       displayName: "Indicator H-07",
@@ -277,8 +282,6 @@ describeIntegration("H-08: disputed evidence preserved", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H08",
       displayName: "Indicator H-08",
@@ -326,8 +329,6 @@ describeIntegration("H-09: cross-tenant snapshot denied", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H09",
       displayName: "Indicator H-09",
@@ -379,8 +380,6 @@ describeIntegration("H-10: country-scope UNKNOWN warning in provenanceWarnings",
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H10",
       displayName: "Indicator H-10",
@@ -427,8 +426,6 @@ describeIntegration("H-11: source mismatch warning explanatory", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H11",
       displayName: "Indicator H-11",
@@ -490,8 +487,6 @@ describeIntegration("H-12: snapshot honesty block", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H12",
       displayName: "Indicator H-12",

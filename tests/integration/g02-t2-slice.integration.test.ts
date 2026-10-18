@@ -113,6 +113,7 @@ beforeAll(async () => {
   adminUserId = adminUser.id;
 
   // Create a reviewer user (G01 seed only creates admin + analyst — see G01 pattern)
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-reviewer@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-reviewer@demolandia.test" },
     update: {},
@@ -123,7 +124,11 @@ beforeAll(async () => {
       status: "active",
     },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: {
@@ -133,10 +138,12 @@ beforeAll(async () => {
       status: "active",
     },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
 
   // Create a tenant B analyst user for cross-tenant isolation tests
   // (the seeded analyst only has membership in tenant A)
+  const tenantBAnalystExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-tenantb-analyst@demolandia.test" } }));
   const tenantBAnalyst = await adminClient.user.upsert({
     where: { email: "g02-tenantb-analyst@demolandia.test" },
     update: {},
@@ -147,7 +154,11 @@ beforeAll(async () => {
       status: "active",
     },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: tenantBAnalyst.id, createdByThisSuite: !tenantBAnalystExisted });
+  const tenantBAnalystMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: tenantBAnalyst.id, tenantId: tenantBId } },
+  }));
+  const tenantBAnalystMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: tenantBAnalyst.id, tenantId: tenantBId } },
     update: { status: "active", roleCode: "analyst" },
     create: {
@@ -157,6 +168,7 @@ beforeAll(async () => {
       status: "active",
     },
   });
+  sharedFixtures.trackOwned.membership({ id: tenantBAnalystMemb.id, createdByThisSuite: !tenantBAnalystMembExisted });
   tenantBAnalystUserId = tenantBAnalyst.id;
 
   // Fetch (or create) an approved StrategyVersion for Tenant A
@@ -173,7 +185,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -188,6 +200,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
 
@@ -208,6 +221,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
 
@@ -225,6 +239,7 @@ beforeAll(async () => {
         status: "active",
       },
     });
+    sharedFixtures.trackOwned.program({ id: prog.id, createdByThisSuite: true });
   }
   programId = prog.id;
 
@@ -242,6 +257,7 @@ beforeAll(async () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
+    sharedFixtures.trackOwned.source({ id: centralBankSrc.id, createdByThisSuite: true });
   }
   centralBankSourceId = centralBankSrc.id;
 
@@ -258,6 +274,7 @@ beforeAll(async () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
+    sharedFixtures.trackOwned.source({ id: laborOfficeSrc.id, createdByThisSuite: true });
   }
   laborOfficeSourceId = laborOfficeSrc.id;
 });
@@ -341,8 +358,6 @@ describeIntegration("I-01: T2-slice negative path", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Define UNEMPLOYMENT indicator with NO alertThresholds
     const indicator = await defineIndicator(analystSession, {
@@ -445,8 +460,6 @@ describeIntegration("I-02: T2-slice positive path — full lifecycle", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Define INFLATION indicator WITH alertThresholds
     const indicator = await defineIndicator(analystSession, {
@@ -590,8 +603,6 @@ describeIntegration("I-03: Correction scenario", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I03",
@@ -690,8 +701,6 @@ describeIntegration("I-04: F3 concurrent correction conflict", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I04",
@@ -805,8 +814,6 @@ describeIntegration("I-05: StrategyVersion immutability", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I05",
@@ -891,13 +898,9 @@ describeIntegration("I-06: RLS cross-tenant isolation", () => {
     const _periodIdA_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodIdA = _periodIdA_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodIdA_owned);
-    testFixtures.track.observationPeriod(periodIdA);
-    testFixtures.track.observationPeriod(periodIdA);
     const _periodIdB_owned = await ensureQuarterOwned(tenantBId, 2026, 2);
     const periodIdB = _periodIdB_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodIdB_owned);
-    testFixtures.track.observationPeriod(periodIdB);
-    testFixtures.track.observationPeriod(periodIdB);
 
     // Tenant A creates an indicator + observation
     const indicatorA = await defineIndicator(tenantASession, {
@@ -982,8 +985,6 @@ describeIntegration("I-07: Revoked membership", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I07",
@@ -1063,8 +1064,6 @@ describeIntegration("I-08: writeAuditTx atomic for every operation", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I08",
@@ -1172,8 +1171,6 @@ describeIntegration("I-09: New strategy version preserves old observations", () 
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Define indicator linked to current approved version
     const indicator = await defineIndicator(analystSession, {
@@ -1266,8 +1263,6 @@ describeIntegration("I-10: isSynthetic=true visible in outputs", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I10",
@@ -1339,8 +1334,6 @@ describeIntegration("I-11: R1 separation", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I11",
@@ -1391,8 +1384,6 @@ describeIntegration("I-12: F1 + E3", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I12_F1",
@@ -1449,8 +1440,6 @@ describeIntegration("I-12: F1 + E3", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Find or create an institution in a DIFFERENT country (JOR — Jordan)
     let jorCountry = await adminClient.country.findUnique({ where: { iso3: "JOR" } });
@@ -1528,8 +1517,6 @@ describeIntegration("I-13: F4 — observationId=null when unknown", () => {
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     // Indicator with NO defaultTargetValue and NO periodMilestones
     // (use analystSession — reviewer doesn't have indicator:write)
@@ -1587,8 +1574,6 @@ describeIntegration("I-14: F2 + R4 — corrections preserve all versions", () =>
     const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const periodId = _periodId_owned.id;
     testFixtures.trackOwned.observationPeriod(_periodId_owned);
-    testFixtures.track.observationPeriod(periodId);
-    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "INFLATION_RATE_I14",

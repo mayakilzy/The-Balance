@@ -43,32 +43,41 @@ beforeAll(async () => {
   const analyst = await adminClient.user.findUnique({ where: { email: "analyst@demolandia.test" } });
   if (!analyst) throw new Error("analyst not seeded");
   analystUserId = analyst.id;
+  const reviewerExisted = !!(await adminClient.user.findUnique({ where: { email: "g02-03-trend-reviewer@demolandia.test" } }));
   const reviewer = await adminClient.user.upsert({
     where: { email: "g02-03-trend-reviewer@demolandia.test" },
     update: {},
     create: { email: "g02-03-trend-reviewer@demolandia.test", name: "G02-03 Trend Reviewer", passwordHash: await hashPassword("Test1234!"), status: "active" },
   });
-  await adminClient.membership.upsert({
+  sharedFixtures.trackOwned.user({ id: reviewer.id, createdByThisSuite: !reviewerExisted });
+  const reviewerMembExisted = !!(await adminClient.membership.findUnique({
+    where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
+  }));
+  const reviewerMemb = await adminClient.membership.upsert({
     where: { userId_tenantId: { userId: reviewer.id, tenantId: tenantAId } },
     update: { status: "active", roleCode: "reviewer" },
     create: { userId: reviewer.id, tenantId: tenantAId, roleCode: "reviewer", status: "active" },
   });
+  sharedFixtures.trackOwned.membership({ id: reviewerMemb.id, createdByThisSuite: !reviewerMembExisted });
   reviewerUserId = reviewer.id;
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
   if (!sv) {
     const strategy = await adminClient.strategy.create({ data: { tenantId: tenantAId, title: "G02-03 Trend Strategy", createdBy: analystUserId } });
-    sharedFixtures.track.strategy(strategy.id);
+    sharedFixtures.trackOwned.strategy({ id: strategy.id, createdByThisSuite: true });
     sv = await adminClient.strategyVersion.create({ data: { strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}", status: "approved", approvedBy: analystUserId, approvedAt: new Date(), metadata: { simulated: true }, createdBy: analystUserId } });
+    sharedFixtures.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
   }
   strategyVersionId = sv.id;
   let obj = await adminClient.objective.findFirst({ where: { tenantId: tenantAId } });
   if (!obj) {
     obj = await adminClient.objective.create({ data: { tenantId: tenantAId, countryId, title: "G02-03 Trend Objective", targetMetric: "test", targetValue: "5.0", horizon: 5, status: "active", createdBy: analystUserId } });
+    sharedFixtures.trackOwned.objective({ id: obj.id, createdByThisSuite: true });
   }
   objectiveId = obj.id;
   let cb = await adminClient.source.findFirst({ where: { code: "DML-CB-SYNTHETIC" } });
   if (!cb) {
     cb = await adminClient.source.create({ data: { code: "DML-CB-SYNTHETIC", displayName: "Demolandia Central Bank — synthetic", type: "government", reviewStatus: "approved", metadata: { synthetic: true, country: "DML" } } });
+    sharedFixtures.trackOwned.source({ id: cb.id, createdByThisSuite: true });
   }
   centralBankSourceId = cb.id;
 });
@@ -119,23 +128,15 @@ describeIntegration("T-01: 4 comparable quarterly periods with improving trend",
     const _p1_owned = await ensureQuarterOwned(tenantAId, 2025, 3);
     const p1 = _p1_owned.id;
     testFixtures.trackOwned.observationPeriod(_p1_owned);
-    testFixtures.track.observationPeriod(p1);
-    testFixtures.track.observationPeriod(p1);
     const _p2_owned = await ensureQuarterOwned(tenantAId, 2025, 4);
     const p2 = _p2_owned.id;
     testFixtures.trackOwned.observationPeriod(_p2_owned);
-    testFixtures.track.observationPeriod(p2);
-    testFixtures.track.observationPeriod(p2);
     const _p3_owned = await ensureQuarterOwned(tenantAId, 2026, 1);
     const p3 = _p3_owned.id;
     testFixtures.trackOwned.observationPeriod(_p3_owned);
-    testFixtures.track.observationPeriod(p3);
-    testFixtures.track.observationPeriod(p3);
     const _p4_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const p4 = _p4_owned.id;
     testFixtures.trackOwned.observationPeriod(_p4_owned);
-    testFixtures.track.observationPeriod(p4);
-    testFixtures.track.observationPeriod(p4); // this is the "current" period
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_TREND_T01", displayName: "Indicator T-01", unit: "percent",
@@ -174,23 +175,15 @@ describeIntegration("T-02: temporal gap detection", () => {
     const _p1_owned = await ensureQuarterOwned(tenantAId, 2025, 3);
     const p1 = _p1_owned.id;
     testFixtures.trackOwned.observationPeriod(_p1_owned);
-    testFixtures.track.observationPeriod(p1);
-    testFixtures.track.observationPeriod(p1);
     const _p2_owned = await ensureQuarterOwned(tenantAId, 2025, 4);
     const p2 = _p2_owned.id;
     testFixtures.trackOwned.observationPeriod(_p2_owned);
-    testFixtures.track.observationPeriod(p2);
-    testFixtures.track.observationPeriod(p2); // will have NO observation
     const _p3_owned = await ensureQuarterOwned(tenantAId, 2026, 1);
     const p3 = _p3_owned.id;
     testFixtures.trackOwned.observationPeriod(_p3_owned);
-    testFixtures.track.observationPeriod(p3);
-    testFixtures.track.observationPeriod(p3);
     const _p4_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const p4 = _p4_owned.id;
     testFixtures.trackOwned.observationPeriod(_p4_owned);
-    testFixtures.track.observationPeriod(p4);
-    testFixtures.track.observationPeriod(p4);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_TREND_T02", displayName: "Indicator T-02", unit: "percent",
@@ -222,18 +215,12 @@ describeIntegration("T-04: null measurements → insufficient", () => {
     const _p1_owned = await ensureQuarterOwned(tenantAId, 2025, 4);
     const p1 = _p1_owned.id;
     testFixtures.trackOwned.observationPeriod(_p1_owned);
-    testFixtures.track.observationPeriod(p1);
-    testFixtures.track.observationPeriod(p1);
     const _p2_owned = await ensureQuarterOwned(tenantAId, 2026, 1);
     const p2 = _p2_owned.id;
     testFixtures.trackOwned.observationPeriod(_p2_owned);
-    testFixtures.track.observationPeriod(p2);
-    testFixtures.track.observationPeriod(p2);
     const _p3_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
     const p3 = _p3_owned.id;
     testFixtures.trackOwned.observationPeriod(_p3_owned);
-    testFixtures.track.observationPeriod(p3);
-    testFixtures.track.observationPeriod(p3);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_TREND_T04", displayName: "Indicator T-04", unit: "percent",
