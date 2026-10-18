@@ -14,3 +14,6 @@ export * from "./evidence-independence-service";
 // 02-02 additions
 export * from "./aggregate-independence-service";
 export * from "./observatory-query-service";
+// 02-03 additions
+export * from "./temporal-trend-service";
+export * from "./early-warning-service";

@@ -20,6 +20,8 @@ import { requirePermissionWithCurrentRole } from "@/lib/permissions";
 import { writeAuditTx } from "@/lib/audit";
 import type { Session } from "next-auth";
 import { analyzeAggregateIndependence } from "./aggregate-independence-service";
+import { analyzeTemporalTrend } from "./temporal-trend-service";
+import { assessEarlyWarning } from "./early-warning-service";
 
 export interface EvidenceSummary {
   id: string;
@@ -115,6 +117,11 @@ export interface IndicatorSnapshot {
     submittedByTenantId: string | null;
     provenanceWarnings: string[];
   };
+  // 02-03: temporal context (advisory only, no causal claims)
+  temporalContext: {
+    trend: import("./temporal-trend-service").TemporalTrend | null;
+    earlyWarning: import("./early-warning-service").EarlyWarning | null;
+  };
 }
 
 export interface ObservatorySnapshot {
@@ -153,7 +160,9 @@ export async function getObservatorySnapshot(
   await requirePermissionWithCurrentRole(session, "observatory:variance:read");
   await requirePermissionWithCurrentRole(session, "observatory:alert:read");
 
-  return withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
+  // 02-03: build snapshot inside transaction, then enrich with temporal context
+  // OUTSIDE the transaction to avoid nested transactions (owner requirement)
+  const snapshot = await withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
     // B10: verify strategyVersionId is approved in this tenant
     const sv = await tx.strategyVersion.findFirst({
       where: { id: params.strategyVersionId, tenantId, status: "approved" },
@@ -526,6 +535,12 @@ export async function getObservatorySnapshot(
         },
         linkedEvidence,
         sourceProvenance,
+        // 02-03: temporalContext placeholder — populated outside the transaction
+        // to avoid nested transactions (owner requirement)
+        temporalContext: {
+          trend: null,
+          earlyWarning: null,
+        },
       };
 
       indicatorSnapshots.push(indicatorSnapshot);
@@ -561,10 +576,41 @@ export async function getObservatorySnapshot(
       honesty: {
         simulatedData: anySimulated,
         limitations: Array.from(allLimitations),
-        noCausalClaims: true,
+        noCausalClaims: true as const,
       },
     };
   });
+
+  // 02-03: Enrich indicators with temporal context OUTSIDE the transaction
+  // to avoid nested transactions (owner requirement).
+  // Each call to analyzeTemporalTrend / assessEarlyWarning creates its own
+  // transaction — no nesting with the snapshot's (already committed) transaction.
+  for (const ind of snapshot.indicators) {
+    try {
+      const trend = await analyzeTemporalTrend(session, {
+        indicatorId: ind.indicator.id,
+        endingBeforePeriodId: params.observationPeriodId,
+      });
+      ind.temporalContext.trend = trend;
+    } catch {
+      // Temporal analysis failure is non-fatal — leave trend as null
+      ind.temporalContext.trend = null;
+    }
+
+    try {
+      const earlyWarning = await assessEarlyWarning(session, {
+        indicatorId: ind.indicator.id,
+        observationPeriodId: params.observationPeriodId,
+        strategyVersionId: params.strategyVersionId,
+      });
+      ind.temporalContext.earlyWarning = earlyWarning;
+    } catch {
+      // Early warning failure is non-fatal — leave as null
+      ind.temporalContext.earlyWarning = null;
+    }
+  }
+
+  return snapshot;
 }
 
 // Helper: categorize evidence into supporting/contradictory/disputed/refuted
