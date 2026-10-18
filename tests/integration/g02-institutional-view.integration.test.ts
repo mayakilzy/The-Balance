@@ -385,8 +385,8 @@ describeIntegration("V-15: cross-tenant isolation with shared institution", () =
     });
     await adminClient.membership.upsert({
       where: { userId_tenantId: { userId: tenantBReviewer.id, tenantId: tenantBId } },
-      update: { status: "active", roleCode: "reviewer" },
-      create: { userId: tenantBReviewer.id, tenantId: tenantBId, roleCode: "reviewer", status: "active" },
+      update: { status: "active", roleCode: "analyst" },
+      create: { userId: tenantBReviewer.id, tenantId: tenantBId, roleCode: "analyst", status: "active" },
     });
     const analystSessionB = makeSession({ id: tenantBReviewer.id, tenantId: tenantBId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSessionB = makeSession({ id: tenantBReviewer.id, tenantId: tenantBId, roleCode: "reviewer", membershipStatus: "active" });
