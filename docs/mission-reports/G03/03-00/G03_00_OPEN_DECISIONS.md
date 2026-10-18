@@ -2,10 +2,10 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Open decisions register (DESIGN ONLY — no code)
-> **Date:** 2026-10-18 (revision 4 — post security audit corrections)
+> **Date:** 2026-10-18 (revision 5 — closes B1/B2/B3/B4 per owner audit)
 > **Author:** GLM (implementation agent)
-> **Status:** REV 4 — security corrections per owner/reviewer audit (S1, S2, S3)
-> **Companion to:** `G03_00_SECURITY_CORRECTIONS_REV4.md` (authoritative for S1/S2/S3)
+> **Status:** REV 5 — all blockers closed; awaiting FINAL PASS
+> **Companion to:** `G03_00_BLOCKER_CLOSURE_REV5.md` (authoritative for B1-B4 closures)
 
 ---
 
@@ -15,8 +15,9 @@
 |-----|------|---------|
 | 1 | 2026-10-18 | Initial proposal — 8 decisions (D1-D8) |
 | 2 | 2026-10-18 | Owner review: D6 elevated, D3 expanded, D8 per-limitation, vertical slice |
-| 3 | 2026-10-18 | Sub-questions resolved, SECURITY INVOKER (not DEFINER), historical preservation, draft mode, 5 docs updated |
-| 4 | 2026-10-18 (this) | Security audit corrections: S1 (SECURITY DEFINER for participant removal), S2 (DB-level revocation), S3 (institutional authority separation). Added D13/D14/D15. |
+| 3 | 2026-10-18 | Sub-questions resolved, SECURITY INVOKER (not DEFINER), historical preservation, draft mode |
+| 4 | 2026-10-18 | Security audit corrections: S1 (SECURITY DEFINER function), S2 (DB-level revocation), S3 (institutional authority) |
+| 5 | 2026-10-18 (this) | Blocker closure: B1 (Option A corrected — lead check inside UPDATE WHERE), B2 (tightened revocation), B3 (explicit institutional authority contract), B4 (all documents fully updated) |
 
 ---
 

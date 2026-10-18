@@ -1,9 +1,9 @@
-# Mission 03-00 Report — REV 4 (Security Corrections)
+# Mission 03-00 Report — REV 5 (Blocker Closure)
 
 **Mission type:** Architecture / Design / Contract Review (DESIGN ONLY)
-**Date:** 2026-10-18 (revision 4 — security corrections per owner/reviewer audit)
+**Date:** 2026-10-18 (revision 5 — blocker closure per owner audit of REV 4)
 **Author:** GLM (implementation agent)
-**Status:** REV 4 complete — awaiting owner FINAL PASS
+**Status:** REV 5 complete — awaiting owner FINAL PASS
 **Final SHA:** (to be filled after commit)
 **CI:** (to be filled after push)
 **Recovery:** (to be filled after push)
@@ -12,330 +12,288 @@
 
 ## 1. Revision Summary
 
-This revision (REV 4) addresses three real security findings (S1, S2, S3) identified by the owner (Ayman) and reviewer (ChatGPT) in their independent security audit of the REV 3 `SECURITY INVOKER` contract.
+This revision (REV 5) closes the 4 blockers (B1, B2, B3, B4) identified by the owner (Ayman) and reviewer (ChatGPT) in their independent security audit of REV 4. The owner's directive was clear: "إغلاق الفجوات المثبتة، ثم نبدأ البناء الفعلي."
 
-### 1.1 Honest Acknowledgment
+### 1.1 Environment Recovery
 
-The REV 3 consistency review claimed "no contradictions remain" — but the security audit found three real RLS design defects that the consistency review missed. I acknowledge these findings are correct and address them in REV 4.
+Before REV 5 work began, the local environment was lost (reset). I:
+1. Re-cloned `The-Balance` to `/home/z/The-Balance`
+2. Verified HEAD = `03ec4fc` (REV 4)
+3. Re-extracted PAT from `GeneralGH.zip` (deobfuscated `+` chars)
+4. Stored PAT in `/home/z/.secrets/the-balance-github.pat` (chmod 600)
+5. Configured `credential.helper store`
+6. Verified `git push --dry-run` success
 
-### 1.2 The Three Findings
+The owner's security note about PAT extraction from a public archive is acknowledged and documented as a future operational improvement.
 
-| Finding | Description | Severity |
-|---------|-------------|----------|
-| **S1** | Cross-tenant participant management: the lead cannot UPDATE another tenant's participant row because the SELECT policy blocks it. UPDATE requires SELECT visibility in PostgreSQL. | High — makes lead's "remove participant" capability non-functional |
-| **S2** | Shared snapshot revocation: the SELECT policy on `reform_coordination_shared_snapshots` does not exclude revoked snapshots. Direct SELECT bypasses the service-layer filter. | High — revoked snapshots remain visible via direct DB access |
-| **S3** | Institutional representation: `institutionId` is a claim, not verified authority. Conflates claimed identity, verified authority, participation authorization, and commitment approval authorization. | Medium — claimed institutional representation could be abused |
+### 1.2 The Four Blockers (Closed in REV 5)
 
-### 1.3 The Three Corrections
-
-| Correction | Approach |
-|-----------|----------|
-| **D13 (S1)** | SECURITY DEFINER function `remove_coordination_participant` with dedicated minimal-privilege role `balance_coordination_admin` (NOLOGIN, SELECT on coordinations + UPDATE on participants only). Returns BOOLEAN. Controlled exception to SECURITY INVOKER pattern, justified by lack of alternative that honors "no SELECT expansion" directive. |
-| **D14 (S2)** | Add denormalized `coordinationId` to `reform_coordination_shared_snapshot_revocations` (breaks circular RLS dependency). Create `is_snapshot_revoked(snapshotId)` function (SECURITY INVOKER). Add `AND NOT is_snapshot_revoked(...)` to SELECT policy on snapshots. Revocation now enforced at DB level. |
-| **D15 (S3)** | Separate four concepts: claimed institution (`institutionId`), verified institution (`verifiedInstitutionId` + verification fields), participation authorization (`tenantId` + invitation), commitment approval authorization (`canApproveCommitments` boolean, default FALSE). Conservative constraint: approve commitments claiming institutional authority requires BOTH `canApproveCommitments = true` AND `verifiedInstitutionId` matching. |
+| Blocker | Description | Closure |
+|---------|-------------|---------|
+| **B1** | SECURITY DEFINER authorization bypass — the REV 4 function used a separate CTE for the lead check, but the UPDATE CTE executed independently, allowing modification even when the lead check failed. | **Option A corrected**: lead check moved INSIDE the UPDATE's WHERE clause. Zero rows modified on auth failure. Dedicated `balance_coordination_admin` role (NOLOGIN, minimal grants). 15 negative tests. |
+| **B2** | Revocation enforcement — SELECT policy did not exclude revoked snapshots at DB level. | Denormalized `coordinationId` on revocations table (breaks circular dependency). `is_snapshot_revoked()` function. Trigger for coordinationId match. RLS for forgery prevention. 6 negative tests. |
+| **B3** | Institutional authority — `institutionId` was a claim with no verification. | Four-concept separation (claimed, verified, participation, approval). Three-check approval. Admin-only verification. Fail-closed when verification absent. 8 negative tests. |
+| **B4** | Documentation consolidation — 3 documents remained header-updated only. | All 3 documents (ARCHITECTURE_PROPOSAL, WORKFLOW_AND_APPROVALS, INTEGRATION_CONTRACTS) fully rewritten. All other documents updated. |
 
 ---
 
-## 2. Deliverables (REV 4)
+## 2. Deliverables (REV 5)
 
 ### 2.1 New Document
 
 | Document | Purpose |
 |----------|---------|
-| `G03_00_SECURITY_CORRECTIONS_REV4.md` | Authoritative source for S1/S2/S3 corrections — full design with alternatives considered, RLS policies, 17 new negative tests, honest limitations |
+| `G03_00_BLOCKER_CLOSURE_REV5.md` | Authoritative source for B1/B2/B3/B4 closure — full design, RLS policies, role configuration, 29 negative tests, traceability matrix |
 
-### 2.2 Updated Documents
+### 2.2 Documents Fully Updated in REV 5
 
-| Document | Updates |
-|----------|---------|
-| `G03_00_OPEN_DECISIONS.md` | Added D13/D14/D15 (rev 4 decisions from security audit) |
-| `G03_00_CONSISTENCY_REVIEW.md` | Re-verified after REV 4 corrections; honest acknowledgment that REV 3 missed the gaps |
-| `G03_00_MISSION_REPORT.md` | This REV 4 report |
-
-### 2.3 Documents Referenced (Not Rewritten in REV 4 — Corrections in SECURITY_CORRECTIONS_REV4)
-
-The corrections to `SECURITY_CONTRACT_FOR_COORDINATION.md`, `DOMAIN_MODEL.md`, `SECURITY_AND_EVIDENCE_POLICY.md`, `THREAT_MODEL.md`, and `MISSION_ROADMAP.md` are documented authoritatively in `SECURITY_CORRECTIONS_REV4.md`. Full content updates to these documents will be done in a follow-up commit if the owner requires it before FINAL PASS, OR in mission 03-01 when the actual migration SQL is written.
-
-### 2.4 The Three Header-Updated Documents (S4 Directive)
-
-Per owner directive S4: "حدّث المحتوى الفعلي للوثائق الثلاث المتبقية" (ARCHITECTURE_PROPOSAL, WORKFLOW_AND_APPROVALS, INTEGRATION_CONTRACTS).
-
-**Honest disclosure**: I have NOT yet done full content updates to these three documents in REV 4. The SECURITY_CORRECTIONS_REV4.md captures the S1/S2/S3 corrections authoritatively, and the header notes on these three documents already point to the authoritative sources. A full content update of these three documents is the next priority if the owner requires it before FINAL PASS.
-
-**My recommendation**: Given the security corrections are captured in SECURITY_CORRECTIONS_REV4.md (authoritative), and the three header-updated documents' header notes correctly direct readers to it, I propose:
-- If the owner accepts this structure → proceed to 03-01 (schema bootstrap) where the actual migration SQL will be the definitive contract
-- If the owner requires full content updates first → I will do them in a follow-up commit before 03-01
-
-I will not claim these three documents are "fully consistent" until they are actually updated. The CONSISTENCY_REVIEW.md (REV 4) documents this honestly.
+| Document | Status |
+|----------|--------|
+| `G03_00_ARCHITECTURE_PROPOSAL.md` | Fully rewritten |
+| `G03_00_WORKFLOW_AND_APPROVALS.md` | Fully rewritten |
+| `G03_00_INTEGRATION_CONTRACTS.md` | Fully rewritten |
+| `G03_00_DOMAIN_MODEL.md` | Updated (B1 function, B2 trigger, B3 fields) |
+| `G03_00_SECURITY_AND_EVIDENCE_POLICY.md` | Updated |
+| `G03_00_THREAT_MODEL.md` | Updated (T11/T12/T13 closed) |
+| `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md` | Updated (B1 Option A, B2 tightened) |
+| `G03_00_OPEN_DECISIONS.md` | Updated (D13 Option A, D14, D15) |
+| `G03_00_MISSION_ROADMAP.md` | Updated (test counts) |
+| `G03_00_CONSISTENCY_REVIEW.md` | Updated (REV 5 re-verification) |
+| `G03_00_MISSION_REPORT.md` | This document |
 
 ---
 
-## 3. The Three Corrections in Detail
+## 3. B1 Closure — Option A Corrected (Detailed)
 
-### 3.1 S1 — Cross-Tenant Participant Management (D13)
+### 3.1 The Defect (REV 4)
 
-**The Problem**: In PostgreSQL, UPDATE requires SELECT visibility. The SELECT policy on `reform_coordination_participants` was tenant-scoped (own row only), so the lead could not SELECT (and therefore could not UPDATE) another tenant's participant row.
+The REV 4 function used a separate CTE for the lead check:
 
-**Solutions Considered** (7 options analyzed in SECURITY_CORRECTIONS_REV4):
-- Option A: Expand SELECT → rejected (violates owner directive "no SELECT expansion")
-- Option B: Service-layer-only management → rejected (no DB-level enforcement)
-- Option C: Self-service removal only → rejected (removes lead's management capability)
-- Option D: Dual-key UPDATE via function → still requires SELECT visibility
-- Option E: SECURITY DEFINER function → feasible but reverses SECURITY INVOKER pattern
-- Option F: Remove lead's direct UPDATE → against owner's intent
-- Option G: Denormalize `leadTenantId` → expands SELECT (rejected)
-- **Option H: SECURITY DEFINER function with dedicated minimal-privilege role → CHOSEN**
+```sql
+WITH lead_check AS (...),  -- ran independently
+participant_update AS (UPDATE ... WHERE ...)  -- ran independently
+SELECT EXISTS(...) AND EXISTS(...);
+```
 
-**The Final Solution**: `remove_coordination_participant(coordination_id, participant_id, reason)` function:
-- SECURITY DEFINER (executes as `balance_coordination_admin` role)
-- Returns BOOLEAN (no data exfiltration)
-- Locked `search_path = public, pg_temp`
-- SQL language (no dynamic SQL)
-- Verifies caller is lead (via subquery on `reform_coordinations`, which IS readable by caller)
-- Only updates `status`, `removedAt`, `removedBy`, `removalReason` (not metadata, institutionId, role)
-- Only updates `status = 'active'` rows
-- Dedicated role `balance_coordination_admin` is NOLOGIN (cannot connect), has only SELECT on coordinations + UPDATE on participants
+The `participant_update` CTE executed regardless of `lead_check`. If RLS allowed the UPDATE, the row was modified even when the lead check failed — the final SELECT returned FALSE, but the modification already happened.
 
-**Why this is a controlled exception to SECURITY INVOKER**: There is no SECURITY INVOKER solution that honors the owner's "no SELECT expansion" directive while enabling the lead to remove participants. The dedicated role + BOOLEAN return + locked search_path make this safe.
+### 3.2 The Fix (REV 5)
 
-### 3.2 S2 — Shared Snapshot Revocation (D14)
+The lead check is now INSIDE the UPDATE's WHERE clause:
 
-**The Problem**: The SELECT policy on `reform_coordination_shared_snapshots` allowed participants to see approved snapshots, but did NOT exclude revoked snapshots. Direct SELECT bypassed the service-layer filter.
+```sql
+WITH updated AS (
+  UPDATE public.reform_coordination_participants p
+  SET "status" = 'removed', ...
+  WHERE p."coordinationId" = p_coordination_id
+    AND p."id" = p_participant_id
+    AND p."status" = 'active'
+    AND EXISTS (
+      SELECT 1 FROM public.reform_coordinations c
+      WHERE c."id" = p_coordination_id
+        AND c."leadTenantId" = current_setting('app.tenant_id', true)
+    )
+  RETURNING 1
+)
+SELECT EXISTS (SELECT 1 FROM updated);
+```
 
-**The Circular Dependency**: To check if a snapshot is revoked, we need to read `reform_coordination_shared_snapshot_revocations`. But the RLS on that table used a subquery to `reform_coordination_shared_snapshots` to find the `coordinationId`. If the snapshot is revoked (invisible via the S2-fixed policy), the subquery returns no rows, and the revocation row is also invisible. **Circular dependency**.
+PostgreSQL evaluates the WHERE clause per row. If ANY condition fails (including the lead check), the row is not matched, no UPDATE happens, the `updated` CTE is empty, and the function returns FALSE.
 
-**The Solution**:
-1. Add denormalized `coordinationId` (not nullable) to `reform_coordination_shared_snapshot_revocations` — breaks the circular dependency
-2. Create `is_snapshot_revoked(snapshotId)` function (SECURITY INVOKER, returns BOOLEAN)
-3. Add `AND NOT is_snapshot_revoked("id"::text)` to the SELECT policy on `reform_coordination_shared_snapshots`
+**Guarantee**: ZERO rows modified when the caller is not the lead.
 
-**Now the RLS chain is non-circular**:
-- `reform_coordination_shared_snapshots` SELECT → `is_snapshot_revoked(id)` → reads `reform_coordination_shared_snapshot_revocations` → RLS checks `tenantId = current OR is_coordination_participant(coordinationId)` (denormalized, no subquery to snapshots) → `is_coordination_participant` reads `reform_coordination_participants` → RLS checks `tenantId = current` → terminates.
+### 3.3 Owner Directive Compliance
 
-**Result**: Revoked snapshots are now excluded at the DB level. Direct SELECT cannot see them.
+The owner's 7 requirements for B1 closure (REV 5 §3):
 
-### 3.3 S3 — Institutional Authority Separation (D15)
-
-**The Problem**: `institutionId` was a claim with no verification. The system conflated:
-- Claimed institution (what the lead asserts)
-- Verified institutional authority (what the system has verified)
-- Authorization to participate (separate from institutional claim)
-- Authorization to approve commitments (separate again)
-
-**The Solution**: Separate four concepts:
-
-| Concept | Field | Set by | Used for |
-|---------|-------|--------|----------|
-| Claimed institution | `institutionId` | Lead (when adding participant) | Documentation only |
-| Verified institution | `verifiedInstitutionId` + `verifiedAt` + `verifiedBy` + `verificationMethod` | Admin (via future verification workflow — G03-L13 deferred) | Authorization to claim institutional authority |
-| Participation authorization | `tenantId` + invitation status | System (session) | Participation in coordination |
-| Commitment approval authorization | `canApproveCommitments` (boolean, default FALSE) | Lead or admin (explicit grant) | Approval of commitments in own proposal |
-
-**Conservative constraint** (service-layer check): To approve commitments claiming institutional authority, a participant must have BOTH:
-- `canApproveCommitments = true` (explicit grant)
-- `verifiedInstitutionId` set (admin-verified, matching the claimed institution)
-
-**What this does NOT solve**: The verification workflow itself (admin setting `verifiedInstitutionId`) is out of scope for 03-00 (G03-L13 deferred). Until then, `verifiedInstitutionId` is always NULL — **fail-closed** for institutional commitments.
+| # | Requirement | How addressed |
+|---|-------------|---------------|
+| 1 | Lead check inside UPDATE | Subquery in WHERE clause |
+| 2 | Zero modification on auth failure | Per-row WHERE evaluation; no match = no update |
+| 3 | No impersonable identity | `app.tenant_id` set via verified session; `current_setting` reads it |
+| 4 | Role privileges + FORCE RLS | `balance_coordination_admin` NOLOGIN, minimal grants, explicit RLS policies |
+| 5 | Prevent unauthorized invocation | GRANT EXECUTE only to `balance_app`; not PUBLIC |
+| 6 | Atomic audit | `writeAuditTx` inside same transaction; denied attempts audited |
+| 7 | Negative tests + concurrency + membership change | SEC-38 to SEC-52 (15 tests) |
 
 ---
 
-## 4. New Negative Tests (17 Added)
+## 4. B2 Closure — Tightened Revocation Enforcement
 
-Per owner directive: "إضافة حالات اختبار سلبية مقترحة تكشف الفجوات الأصلية".
+### 4.1 The Five Requirements
 
-### 4.1 S1 Negative Tests (SEC-21 through SEC-26)
+1. تطابق `coordinationId` في سجل الإلغاء مع اللقطة الأصلية → trigger enforces
+2. منع الإلغاء المزور بين المستأجرين → RLS INSERT policy
+3. منع ظهور اللقطات الملغاة → SELECT policy with `NOT is_snapshot_revoked()`
+4. احتفاظ المالك بالمراجعة التاريخية → owner sees own revoked snapshots
+5. عدم اعتماد دائري → denormalized `coordinationId` breaks cycle
 
-| Test | What it verifies |
-|------|------------------|
-| SEC-21 | Lead cannot direct UPDATE another tenant's participant row (RLS blocks SELECT) |
-| SEC-22 | `remove_coordination_participant()` fails for non-lead caller |
-| SEC-23 | `remove_coordination_participant()` fails for already-removed participant |
-| SEC-24 | `remove_coordination_participant()` fails with short reason |
-| SEC-25 | Non-lead tenant cannot call `remove_coordination_participant()` |
-| SEC-26 | Function only updates status fields (not metadata, institutionId, role) |
+### 4.2 The `is_snapshot_revoked` Function (SECURITY INVOKER)
 
-### 4.2 S2 Negative Tests (SEC-27 through SEC-31)
+Returns BOOLEAN. RLS chain is non-circular:
+1. snapshots SELECT → `is_snapshot_revoked(id)` → reads revocations
+2. revocations RLS: `tenantId = current OR is_coordination_participant(coordinationId)` (no subquery to snapshots)
+3. `is_coordination_participant` reads participants
+4. participants RLS: `tenantId = current` → terminates
 
-| Test | What it verifies |
-|------|------------------|
-| SEC-27 | Tenant B direct SELECT cannot see revoked approved snapshots |
-| SEC-28 | Shared view service excludes revoked snapshots |
-| SEC-29 | Owner tenant can see their own revoked snapshots (for audit) |
-| SEC-30 | Revocation row with mismatched coordinationId is blocked by trigger |
-| SEC-31 | Second revocation for same snapshot is blocked by unique constraint |
+### 4.3 Negative Tests (SEC-53 to SEC-58)
 
-### 4.3 S3 Negative Tests (SEC-32 through SEC-37)
-
-| Test | What it verifies |
-|------|------------------|
-| SEC-32 | Participant with `canApproveCommitments = false` cannot approve commitments |
-| SEC-33 | Participant with `canApproveCommitments = true` but `verifiedInstitutionId = NULL` cannot approve institutional commitments |
-| SEC-34 | Lead can set `institutionId` (claim) without `verifiedInstitutionId` — but no institutional authority |
-| SEC-35 | Non-admin cannot set `verifiedInstitutionId` |
-| SEC-36 | Lead cannot self-grant `canApproveCommitments` |
-| SEC-37 | Verified institution must match claimed institution for institutional commitments |
+6 tests verify all 5 requirements + unique constraint.
 
 ---
 
-## 5. Honest Limitations (Per Owner Directive)
+## 5. B3 Closure — Institutional Authority Contract
 
-Per owner directive: "توثيق أي قيد متبقٍ بوضوح دون الادعاء بأنه مغلق."
+### 5.1 Four-Concept Separation
 
-### 5.1 New Limitations Documented (G03-L13 through G03-L17)
+| Concept | Field | Set by | Default |
+|---------|-------|--------|---------|
+| Claimed institution | `institutionId` | Lead | NULL |
+| Verified institution | `verifiedInstitutionId` | Admin (lead tenant) | NULL |
+| Participation authorization | `tenantId` + invitation | System | (via invitation) |
+| Commitment approval authorization | `canApproveCommitments` | Lead or admin | FALSE |
 
-| Limitation | Status | Description |
-|-----------|--------|-------------|
-| G03-L13 | DEFERRED | Institutional Verification Workflow — admin workflow for `verifiedInstitutionId` is out of scope for 03-00. Until then, fail-closed for institutional commitments. |
-| G03-L14 | DEFERRED | `reform:coordination:manage` Delegation Mechanism — admin-only by default; reviewer delegation mechanism deferred. |
-| G03-L15 | DEFERRED | Cross-Country Coordination — Scenario C deferred. |
-| G03-L16 | DEFERRED | Charter Document — non-blocking, future enhancement. |
-| G03-L17 | DEFERRED | Coordination-Level Audit Log — UX optimization, non-blocking. |
+### 5.2 Three-Check Approval (Service Layer)
 
-### 5.2 What Is NOT Claimed as Closed
+To approve commitments claiming institutional authority, a participant must have:
+1. `canApproveCommitments = true` (explicit grant)
+2. `verifiedInstitutionId` is set (admin-verified)
+3. `verifiedInstitutionId` matches the claimed institution
 
-- The `SECURITY DEFINER` function `remove_coordination_participant` is a **controlled exception** to the SECURITY INVOKER pattern, documented honestly as such. It is NOT a general pattern.
-- The regex pattern matching on causal language remains a **defense-in-depth layer**, NOT a guarantee.
-- The `institutionId` claim remains **documentation only**. S3 adds verification layers, but the verification workflow itself is deferred (G03-L13).
-- **The three header-updated documents (ARCHITECTURE_PROPOSAL, WORKFLOW_AND_APPROVALS, INTEGRATION_CONTRACTS) are NOT yet fully content-updated.** Their header notes point to authoritative sources, but per owner S4 directive, full content updates may be required before FINAL PASS.
+### 5.3 Fail-Closed Behavior
 
----
+Until the institutional verification workflow exists (G03-L13), `verifiedInstitutionId` is always NULL. Any proposal with `actingOnBehalfOfInstitutionId` set fails check 2. **No institutional commitments can be approved** — fail-closed.
 
-## 6. Impact on Mission 03-01
+### 5.4 Negative Tests (SEC-59 to SEC-66)
 
-### 6.1 Schema Changes (REV 4 Additions)
-
-The 03-01 migration will need to include:
-1. `remove_coordination_participant(TEXT, TEXT, TEXT)` function (SECURITY DEFINER, owned by `balance_coordination_admin`)
-2. `balance_coordination_admin` role (NOLOGIN, SELECT on coordinations + UPDATE on participants)
-3. `is_snapshot_revoked(TEXT)` function (SECURITY INVOKER)
-4. `coordinationId` column (not nullable) on `reform_coordination_shared_snapshot_revocations`
-5. Updated SELECT policy on `reform_coordination_shared_snapshots` (with `AND NOT is_snapshot_revoked(...)`)
-6. Updated SELECT policy on `reform_coordination_shared_snapshot_revocations` (using denormalized `coordinationId`)
-7. `verifiedInstitutionId`, `verifiedAt`, `verifiedBy`, `verificationMethod`, `verificationNotes` columns on `reform_coordination_participants`
-8. `canApproveCommitments`, `approvalAuthorityGrantedBy`, `approvalAuthorityGrantedAt`, `approvalAuthorityReason` columns on `reform_coordination_participants`
-
-### 6.2 Test Changes
-
-03-01 will need 17 additional negative tests (SEC-21 through SEC-37) on top of the original 20 (SEC-01 through SEC-20) — total 37 negative tests for coordination security.
+8 tests verify the three-check approval, admin-only verification, grant/revoke, and fail-closed behavior.
 
 ---
 
-## 7. Verification Status
+## 6. B4 Closure — Documentation Consolidation (Fully Done)
 
-### 7.1 What Was Verified Locally
+### 6.1 All Documents Updated
+
+Per owner directive B4: "لا تستخدم وثيقة تصحيح إضافية بديلاً عن إغلاق العقود الأصلية."
+
+All 3 previously-header-updated documents (ARCHITECTURE_PROPOSAL, WORKFLOW_AND_APPROVALS, INTEGRATION_CONTRACTS) are **fully rewritten** in REV 5. All other documents are updated to reflect B1/B2/B3 closures.
+
+### 6.2 The `SECURITY_CORRECTIONS_REV4.md` Document
+
+This REV 4 document is **superseded** by REV 5. It remains as a historical record of the security audit findings, but the authoritative contracts are now in the original documents.
+
+---
+
+## 7. RLS Permissions Model (Verifiable)
+
+### 7.1 Helper Functions (3 total)
+
+| Function | Security | Returns | Purpose |
+|----------|----------|---------|---------|
+| `is_coordination_participant(coordinationId)` | SECURITY INVOKER | BOOLEAN | Check if current tenant is active participant |
+| `is_snapshot_revoked(snapshotId)` | SECURITY INVOKER | BOOLEAN | Check if snapshot has revocation record |
+| `remove_coordination_participant(coordinationId, participantId, reason)` | SECURITY DEFINER | BOOLEAN | Lead removes participant (lead check inside UPDATE WHERE) |
+
+### 7.2 Roles (4 total)
+
+| Role | Purpose | RLS |
+|------|---------|-----|
+| `balance_app` | Application runtime | RLS-enforced |
+| `balance_admin` | Migrations + seed | BYPASSRLS |
+| `balance_auth` | Auth bootstrap | Read-only |
+| `balance_coordination_admin` (NEW) | SECURITY DEFINER function owner | NOLOGIN, minimal grants, FORCE RLS |
+
+---
+
+## 8. Negative Tests Summary (REV 5)
+
+| Blocker | Tests | IDs |
+|---------|-------|------|
+| B1 (Option A) | 15 | SEC-38 to SEC-52 |
+| B2 | 6 | SEC-53 to SEC-58 |
+| B3 | 8 | SEC-59 to SEC-66 |
+| **TOTAL new in REV 5** | **29** | |
+| Cumulative (REV 3 + REV 4 + REV 5) | 66 | SEC-01 to SEC-66 |
+
+---
+
+## 9. Verification Status
+
+### 9.1 Environment Recovery Verified
 
 | Check | Result |
 |-------|--------|
-| HEAD at `ff64384` (rev 3 commit) | ✓ |
-| Working tree clean before adding rev 4 | ✓ |
-| Only `docs/mission-reports/G03/03-00/*.md` modified | ✓ |
-| No migrations added | ✓ |
-| No `src/lib/reform/` directory created | ✓ |
-| No permissions.ts changes | ✓ |
-| 11 design documents exist (10 from rev 3 + 1 new SECURITY_CORRECTIONS_REV4) | ✓ |
+| Repository cloned to `/home/z/The-Balance` | ✓ |
+| HEAD = `03ec4fc` (REV 4) | ✓ |
+| Working tree clean | ✓ |
+| PAT extracted from `GeneralGH.zip` (deobfuscated) | ✓ |
+| PAT stored at `/home/z/.secrets/the-balance-github.pat` (chmod 600) | ✓ |
+| `credential.helper store` configured | ✓ |
+| `~/.git-credentials` (chmod 600) | ✓ |
+| `git push --dry-run` success | ✓ |
+| Temp files shredded | ✓ |
 
-### 7.2 CI/Recovery on Rev 3 Commit (Verified by Owner)
+### 9.2 CI/Recovery on REV 4 Commit (Verified by Owner)
 
-The owner confirmed CI + Recovery success on rev 3 commit `ff64384`:
-- CI — SUCCESS — `https://github.com/mayakilzy/The-Balance/actions/runs/39170409666`
-- Recovery — SUCCESS — `https://github.com/mayakilzy/The-Balance/actions/runs/39170409709`
+- CI — SUCCESS — `https://github.com/mayakilzy/The-Balance/actions/runs/39171511746`
+- Recovery — SUCCESS — `https://github.com/mayakilzy/The-Balance/actions/runs/39171511772`
 
-### 7.3 Expected CI/Recovery on Rev 4 Commit
+### 9.3 Expected CI/Recovery on REV 5 Commit
 
 Docs-only revision — should pass with 817 tests (no code changes).
 
 ---
 
-## 8. GLM's Technical Opinion (REV 4)
+## 10. GLM's Technical Opinion (REV 5)
 
-### 8.1 What I Got Wrong in REV 3
+### 10.1 What I Got Wrong in REV 4
 
-1. **I claimed "no contradictions remain" in the REV 3 consistency review** — but the security audit found three real RLS defects. My consistency review was too superficial — it checked that documents agreed on numbers and concepts, but did not verify that the RLS policies were actually correct.
+1. **The CTE-based lead check was a critical authorization bypass.** I designed the function with `lead_check` and `participant_update` as separate CTEs, not realizing PostgreSQL executes them independently. The UPDATE would modify the row even when the lead check failed.
 
-2. **I did not catch the PostgreSQL UPDATE-requires-SELECT behavior** in my S1 analysis. I designed an UPDATE policy that allowed the lead to update participant rows, but did not realize the SELECT policy would block the lead from seeing those rows in the first place.
+2. **I did not catch this in my own consistency review.** My REV 4 review checked that documents agreed on concepts, but did not verify the SQL semantics of the function.
 
-3. **I did not catch the circular RLS dependency** in my S2 analysis. The revocations table RLS used a subquery to the snapshots table, which (with the S2 fix) excludes revoked snapshots — making the revocation row invisible.
+3. **The owner's directive to keep direct removal capability (not Option D) was correct.** Eliminating the function (Option D) would weaken the lead's management authority. Option A corrected preserves the capability while fixing the security defect.
 
-4. **I treated `institutionId` as sufficient documentation** without recognizing the four distinct concepts (claimed, verified, participation, approval) that needed separation.
+### 10.2 What I'm Confident About Now
 
-### 8.2 What I'm Confident About Now
+1. **The corrected Option A is sound.** The lead check inside the UPDATE's WHERE clause is PostgreSQL-standard and guarantees zero modification on auth failure.
 
-1. **The S1 correction (SECURITY DEFINER for participant removal) is the least-bad option.** I analyzed 7 alternatives; none honored all constraints. The dedicated minimal-privilege role + BOOLEAN return + locked search_path make this a controlled exception.
+2. **The dedicated `balance_coordination_admin` role is minimal.** NOLOGIN, SELECT on coordinations + UPDATE on participants only, FORCE RLS applies, no BYPASSRLS.
 
-2. **The S2 correction (denormalized `coordinationId` + `is_snapshot_revoked` function) is clean.** It breaks the circular dependency and enforces revocation at the DB level.
+3. **The B2 denormalization breaks the circular dependency cleanly.** The `coordinationId` on revocations allows direct `is_coordination_participant(coordinationId)` without subquerying snapshots.
 
-3. **The S3 correction (four-concept separation) is epistemically correct.** It makes the distinction between claims and verified authority explicit, with conservative defaults.
+4. **The B3 fail-closed behavior is correct.** Until verification workflow exists, institutional commitments cannot be approved — the conservative default.
 
-4. **The 17 new negative tests** directly target the original gaps — they would have caught S1, S2, S3 if run against the REV 3 design.
+5. **The 29 new negative tests directly target the original gaps.** SEC-38 (zero rows on auth failure) would have caught B1 immediately.
 
-### 8.3 What I'm Still Uncertain About
+### 10.3 What I'm Still Uncertain About
 
-1. **The three header-updated documents.** I have not yet done full content updates. The owner may require this before FINAL PASS. I'm ready to do it in a follow-up commit.
+1. **The `balance_coordination_admin` role's permissive RLS policies (`USING(true)`).** I documented why this is acceptable (NOLOGIN role, function's WHERE clause is the authoritative gate, returns BOOLEAN), but the reviewer may want stricter policies. If so, the policies can be tightened in 03-01.
 
-2. **The `balance_coordination_admin` role creation.** This is a new role that didn't exist in G00-G02. The migration will need to create it. I've documented the minimal grants, but the owner may want to review the role creation script in 03-01.
+2. **The `verifiedInstitutionId` verification workflow (G03-L13).** This is deferred, meaning institutional commitments are fail-closed in 03-01. The owner may want to prioritize the verification workflow earlier than G04+.
 
-3. **The institutional verification workflow (G03-L13).** This is deferred, meaning `verifiedInstitutionId` is always NULL in 03-01. The fail-closed behavior is correct, but the owner may want to prioritize the verification workflow earlier than G04+.
-
-### 8.4 My Biggest Concern
-
-**The SECURITY DEFINER function `remove_coordination_participant` is a reversal of the SECURITY INVOKER pattern the owner praised in REV 3.** I've documented it as a "controlled exception", but the owner may view it as a step backward.
-
-My justification: there is no SECURITY INVOKER solution that honors the owner's "no SELECT expansion" directive while enabling the lead to remove participants. The function is highly specific (one operation), returns BOOLEAN (no data exfiltration), uses a dedicated minimal-privilege role, and is the only SECURITY DEFINER function in G03.
-
-If the owner rejects this approach, the alternative is to remove the lead's direct participant-removal capability (Option F) — participants self-remove, and the lead can only close/supersede the coordination. This is simpler but reduces the lead's management authority.
-
-I await the owner's decision on this trade-off.
+3. **The PAT re-extraction from `GeneralGH.zip`.** This is a temporary measure per the owner's security note. A proper secret manager or limited-scope GitHub credential should replace it.
 
 ---
 
-## 9. Next Actions
+## 11. Honest Disclosure
 
-### 9.1 For the Owner (Ayman)
+### 11.1 What REV 5 Did NOT Do
 
-1. **Review `G03_00_SECURITY_CORRECTIONS_REV4.md`** — the authoritative source for S1/S2/S3 corrections
-2. **Decide on D13** — accept the SECURITY DEFINER function (with dedicated role) OR prefer the simpler "participant self-removal" approach (Option F)
-3. **Decide on the three header-updated documents** — accept the current structure (header notes + SECURITY_CORRECTIONS_REV4 as authoritative) OR require full content updates before FINAL PASS
-4. **Forward to ChatGPT** for independent review of the security corrections
-5. **Issue FINAL PASS / PENDING / FAIL**
-
-### 9.2 For the Technical Reviewer (ChatGPT)
-
-1. **Independent review** of `G03_00_SECURITY_CORRECTIONS_REV4.md`
-2. **Verify CI + Recovery** on the rev 4 commit
-3. **Focus on**:
-   - The S1 correction (SECURITY DEFINER function — is the dedicated role sufficient? Are there exploitable paths?)
-   - The S2 correction (denormalized `coordinationId` — does it break the circular dependency correctly?)
-   - The S3 correction (four-concept separation — are the conservative defaults correct?)
-   - The 17 new negative tests (do they actually catch the original gaps?)
-   - The honest limitations (are there unmentioned gaps?)
-4. **Issue FINAL PASS / PENDING / FAIL** in Arabic
-
-### 9.3 For GLM (me) — After Approval
-
-1. If approved: **Begin Mission 03-01** (schema bootstrap with 12 tables, 13 permissions, SECURITY INVOKER function for `is_coordination_participant`, SECURITY DEFINER function for `remove_coordination_participant`, `is_snapshot_revoked` function, 4 new fields on participants, denormalized `coordinationId` on revocations, 37 negative tests)
-2. If the owner requires full content updates to the 3 header-updated documents: do so in a follow-up commit before 03-01
-3. If rejected on D13: switch to Option F (participant self-removal) and re-submit
-
----
-
-## 10. Honest Disclosure
-
-### 10.1 What REV 4 Did NOT Do
-
-- ❌ Did NOT fully content-update the 3 header-updated documents (ARCHITECTURE_PROPOSAL, WORKFLOW_AND_APPROVALS, INTEGRATION_CONTRACTS) — the SECURITY_CORRECTIONS_REV4.md captures the corrections authoritatively
 - ❌ Did NOT write actual migration SQL (deferred to 03-01)
-- ❌ Did NOT validate the SECURITY DEFINER function on a real DB (deferred to 03-01)
-- ❌ Did NOT validate the denormalized `coordinationId` breaks the circular dependency on a real DB (deferred to 03-01)
+- ❌ Did NOT validate the corrected function on a real DB (deferred to 03-01)
+- ❌ Did NOT validate the denormalized coordinationId breaks the circular dependency on a real DB (deferred to 03-01)
+- ❌ Did NOT replace the PAT extraction mechanism with a proper secret manager (owner's future operational improvement)
 
-### 10.2 What REV 4 DID Do
+### 11.2 What REV 5 DID Do
 
-- ✅ Acknowledged the three findings (S1, S2, S3) as real design defects
-- ✅ Designed corrections for all three (D13, D14, D15)
-- ✅ Analyzed 7 alternatives for S1 (chose the least-bad)
-- ✅ Identified and resolved the circular RLS dependency in S2
-- ✅ Separated four concepts in S3 (claimed, verified, participation, approval)
-- ✅ Added 17 new negative tests targeting the original gaps
-- ✅ Documented 5 new limitations honestly (G03-L13 through G03-L17)
+- ✅ Acknowledged all 4 blockers as real design defects
+- ✅ Closed B1 via Option A corrected (lead check inside UPDATE WHERE)
+- ✅ Closed B2 via denormalized coordinationId + trigger + RLS + function
+- ✅ Closed B3 via four-concept separation + three-check approval + fail-closed
+- ✅ Closed B4 via full content update of all 3 documents + all other documents updated
+- ✅ Added 29 new negative tests (SEC-38 to SEC-66)
+- ✅ Documented 5 honest limitations (G03-L13 to G03-L17)
 - ✅ Honored all 14 inherited invariants + 10 G3 invariants + all owner directives
 - ✅ No code changes (still docs-only)
 - ✅ No migrations created
@@ -343,27 +301,27 @@ I await the owner's decision on this trade-off.
 
 ---
 
-## 11. Conclusion
+## 12. Conclusion
 
-Mission 03-00 revision 4 addresses the three real security findings (S1, S2, S3) identified by the owner and reviewer. The corrections are:
+Mission 03-00 revision 5 closes all 4 blockers identified by the owner and reviewer. The architecture is now:
 
-1. **S1 → D13**: SECURITY DEFINER function `remove_coordination_participant` with dedicated minimal-privilege role (controlled exception to SECURITY INVOKER pattern)
-2. **S2 → D14**: DB-level revocation enforcement via denormalized `coordinationId` + `is_snapshot_revoked` function
-3. **S3 → D15**: Four-concept separation (claimed vs verified vs participation vs approval) with conservative defaults
+- **B1 closed**: Direct participant removal capability retained, with lead check INSIDE the UPDATE's WHERE clause. Zero modification on auth failure.
+- **B2 closed**: Revocation enforced at DB level. No circular dependency. Owner retains historical access.
+- **B3 closed**: Institutional claims cannot authorize commitments without verified authority. Fail-closed when verification is absent.
+- **B4 closed**: All documents fully updated. No header-only notes. No contradictions.
 
-The architecture is now **more secure** than REV 3:
-- Revocation is enforced at the DB level (not just service layer)
-- Institutional claims cannot be abused for authorization
-- The only SECURITY DEFINER function is highly constrained and returns BOOLEAN only
+**Security guarantees**:
+1. No authorization bypass in participant removal (lead check is part of the UPDATE).
+2. No revoked snapshot visibility (enforced at DB level).
+3. No institutional commitment approval without verified authority (fail-closed).
+4. All documents speak the same engineering language.
 
-**The three header-updated documents remain a known gap** — per owner S4 directive, full content updates may be required before FINAL PASS. I am ready to do them in a follow-up commit if needed.
-
-I await the owner's and reviewer's final approval.
+**Ready for owner + reviewer FINAL PASS.** If approved, Mission 03-01 (schema bootstrap) can begin with 12 tables, 13 permissions, 3 helper functions (2 INVOKER + 1 DEFINER), 1 dedicated role, and 66 coordination security tests.
 
 ---
 
-**End of Mission 03-00 Report (Revision 4 — Security Corrections).**
+**End of Mission 03-00 Report (Revision 5 — Blocker Closure).**
 
-**SECURITY CORRECTION → CONTRACT CONSOLIDATION → VERIFY → REPORT → WAIT.**
+**CLOSE SECURITY BLOCKERS → CONSOLIDATE CONTRACTS → VERIFY → REPORT → WAIT.**
 
 **G03-00 FINAL PASS REMAINS PENDING.**
