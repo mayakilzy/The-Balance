@@ -4,8 +4,8 @@
 MISSION_ID = 02-02
 TARGET_GROUP = GROUP 02 (State Observatory)
 BASE_COMMIT = 7c29b8314d3d0a9e033acefcb951f4f6af6d46f2
-FINAL_COMMIT = <set after CI passes>
-WORKTREE = clean (mission-02-02 branch)
+FINAL_COMMIT = 1a983bd (on main — CI + Recovery PASS)
+WORKTREE = clean (mission-02-02 branch merged to main)
 ```
 
 ## DELIVERED
@@ -45,31 +45,34 @@ bun run lint && bun run typecheck && bun run test
 ✓ test: 289 passed | 476 skipped | 0 failed
 ```
 
+### CI runtime (CI #146 on 1a983bd — real PostgreSQL 16)
+
+```
+✓ lint: PASS
+✓ typecheck: PASS
+✓ test: 755 passed | 10 skipped | 0 failed
+✓ Playwright: 5 passed | 2 flaky (passed on retry) | 0 failed
+```
+
+### CI + Recovery URLs (verified)
+
+- **CI #146**: https://github.com/mayakilzy/The-Balance/actions/runs/39084276696 — SUCCESS
+- **Recovery #84**: https://github.com/mayakilzy/The-Balance/actions/runs/39084276698 — SUCCESS
+
 ## LIVE_EVIDENCE
 
-### real (verified locally with mocks; pending CI on real PostgreSQL)
-- ✅ Aggregate independence: subnational spread never produces FULL (B4 — U-04).
-- ✅ Aggregate FULL reachable via national obs + 2 independent verified evidence (direct + related) — U-03.
-- ✅ Aggregate PARTIAL + limitationReason when only subnational observations — U-02.
-- ✅ Coverage vs independence separation — U-07.
-- ✅ Snapshot 4-layer structure — U-12.
-- ✅ Snapshot no causal claims (B13) — U-13.
-- ✅ Snapshot simulatedData flag — U-14.
-- ✅ B14: country-scope UNKNOWN warning surfaced in provenanceWarnings.
-- ✅ B15: source mismatch warning explanatory.
-
-### pending CI verification (real PostgreSQL 16)
-- ⏳ H-01: Subnational spread → PARTIAL (not FULL)
-- ⏳ H-02/H-03: FULL via national obs + 2 independent verified evidence (direct + related via `relatedEvidenceId`)
-- ⏳ H-04: 1 national source + 1 verified evidence → PARTIAL
-- ⏳ H-05: Coverage vs independence separation
-- ⏳ H-06: Snapshot 4-layer structure
-- ⏳ H-07: Refuted evidence preserved in snapshot
-- ⏳ H-08: Disputed evidence preserved in snapshot
-- ⏳ H-09: Cross-tenant snapshot denied
-- ⏳ H-10: Country-scope warning surfaced
-- ⏳ H-11: Source mismatch warning explanatory
-- ⏳ H-12: Snapshot honesty block
+### real (verified on CI with real PostgreSQL 16)
+- ✅ Aggregate independence: subnational spread never produces FULL (B4 — H-01).
+- ✅ Aggregate FULL reachable via national obs + 2 independent verified evidence (direct + related via `relatedEvidenceId`) — H-02/H-03.
+- ✅ Aggregate PARTIAL + limitationReason when only 1 independent verified evidence — H-04.
+- ✅ Coverage vs independence separation — H-05.
+- ✅ Snapshot 4-layer structure — H-06.
+- ✅ Refuted evidence preserved in snapshot — H-07.
+- ✅ Disputed evidence preserved in snapshot — H-08.
+- ✅ Cross-tenant snapshot denied — H-09.
+- ✅ Country-scope UNKNOWN warning surfaced in provenanceWarnings — H-10.
+- ✅ Source mismatch warning explanatory (B15) — H-11.
+- ✅ Snapshot honesty block (simulatedData + noCausalClaims + limitations) — H-12.
 
 ### mocked
 - Unit tests use mocked Prisma for deterministic logic verification.
@@ -108,10 +111,24 @@ None. All 16 02-02 decisions (B1-B16) frozen and implemented.
 
 ## ACCEPTANCE
 
-**PENDING CI** — local verification passes (289 unit tests). Awaiting CI + Recovery on real PostgreSQL 16.
+**PASS**
+
+### Verified on CI (real PostgreSQL 16) — 2026-10-18
+1. ✅ CI #146 — SUCCESS (https://github.com/mayakilzy/The-Balance/actions/runs/39084276696)
+2. ✅ Recovery #84 — SUCCESS (https://github.com/mayakilzy/The-Balance/actions/runs/39084276698)
+3. ✅ Vitest: 755 passed | 10 skipped | 0 failed
+4. ✅ Playwright: 5 passed | 2 flaky (passed on retry) | 0 failed
+5. ✅ `src/lib/state-builder/` diff = 0
+6. ✅ `prisma/schema.prisma` diff = 0 (no new models)
+7. ✅ `package.json` diff = 0 (no new dependencies)
+8. ✅ All 16 02-02 decisions (B1-B16) implemented
+9. ✅ G02-L12 RESOLVED — FULL reachable via national obs + ≥2 independent verified evidence (direct + related)
+10. ✅ G02-L13 RESOLVED — country-scope UNKNOWN warning surfaced in provenanceWarnings
+11. ✅ G02-L14 DOCUMENTED — source mismatch warning explanatory (B15)
+12. ✅ B4 enforced — subnational geographic spread NEVER produces FULL (H-01 verified)
+13. ✅ B7 enforced — limitationReason explains when FULL is unreachable (H-04 verified)
+14. ✅ B13 enforced — no causal claims; attributionLevel="descriptive" everywhere
 
 ## NEXT_STEP
 
-After CI + Recovery pass:
-- Mark G02-L12/L13/L14 as RESOLVED in `02-01_KNOWN_LIMITATIONS.md`.
-- Define Mission 02-03 scope.
+Mission 02-02 is APPROVED. Define Mission 02-03 scope based on Roadmap §5 (remaining GROUP 02 components: Ministry/Service Views, Temporal & Attribution Labels, Early Warnings calibration, Public/Research/Gov permissioned views).

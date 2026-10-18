@@ -27,19 +27,19 @@
 - **Affected component:** `analyzeIndependence()` per-geo analysis
 - **Original problem:** The F1 constraint from 02-00 allows only ONE `isCurrent=true` observation per (indicator, period, geoLevel, geoRefId). Per-geo analysis could never reach FULL.
 - **Resolution (02-02):** New `analyzeAggregateIndependence()` service distinguishes geographic coverage from source independence. FULL reachable via 1 national observation + ≥2 independent verified evidence linked via direct `evidenceId` OR `Evidence.relatedEvidenceId`.
-- **Status:** RESOLVED by Mission 02-02 (pending CI verification).
+- **Status:** RESOLVED by Mission 02-02 (CI #146 verified on 1a983bd — H-01..H-05 pass on real PostgreSQL 16).
 
 ### G02-L13: Country Scope Warning Not Surfaced in qualityNotes — RESOLVED by 02-02
 - **Affected component:** `verifyEvidenceCountryScope()` integration
 - **Original problem:** The "unknown" country-scope warning was not attached to `observation.qualityNotes.provenanceWarnings`.
 - **Resolution (02-02):** B14 — the warning string is now appended to `provenanceWarnings` in `ingestObservation`.
-- **Status:** RESOLVED by Mission 02-02 (pending CI verification).
+- **Status:** RESOLVED by Mission 02-02 (CI #146 verified on 1a983bd — H-01..H-05 pass on real PostgreSQL 16).
 
 ### G02-L14: Source/Evidence SourceId Mismatch Only Warned — DOCUMENTED by 02-02
 - **Affected component:** `validateObservationProvenance()` Rule 11
 - **Original problem:** The mismatch warning was generic ("provenance inconsistency") without explaining acceptability.
 - **Resolution (02-02):** B15 — warning now explains: "acceptable when evidence cites a different primary source (e.g., meta-analysis). Both sources preserved for review."
-- **Status:** DOCUMENTED by Mission 02-02 (pending CI verification).
+- **Status:** DOCUMENTED by Mission 02-02 (CI #146 verified on 1a983bd — H-11 passes on real PostgreSQL 16).
 
 ## Carried Forward from 02-00 (unchanged)
 
