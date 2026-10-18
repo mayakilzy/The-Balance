@@ -1,0 +1,140 @@
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:12: NOTICE:  drop cascades to 3 other objects
+DETAIL:  drop cascades to table g03_b1_test.reform_coordinations
+drop cascades to table g03_b1_test.reform_coordination_participants
+drop cascades to function g03_b1_test.remove_coordination_participant(text,text,text)
+DROP SCHEMA
+CREATE SCHEMA
+DO
+DO
+DO
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
+GRANT
+SET
+CREATE TABLE
+CREATE TABLE
+CREATE INDEX
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+CREATE FUNCTION
+ALTER FUNCTION
+GRANT
+REVOKE
+SET
+INSERT 0 2
+INSERT 0 4
+RESET
+
+=== B1 TEST 1: Lead removes participant ===
+SET
+BEGIN
+SET
+SET
+ test1_result 
+--------------
+ t
+(1 row)
+
+COMMIT
+RESET
+SET
+     test     |   id    | status  |  removedBy   
+--------------+---------+---------+--------------
+ TEST1_verify | part-B1 | removed | user-A-admin
+(1 row)
+
+RESET
+
+=== B1 TEST 2: Non-lead tries to remove participant ===
+SET
+BEGIN
+SET
+SET
+ test2_result 
+--------------
+ f
+(1 row)
+
+COMMIT
+RESET
+SET
+     test     |   id    | status | removedBy 
+--------------+---------+--------+-----------
+ TEST2_verify | part-A1 | active | 
+(1 row)
+
+RESET
+
+=== B1 TEST 3: Direct cross-tenant UPDATE blocked by RLS ===
+SET
+BEGIN
+SET
+UPDATE 0
+COMMIT
+RESET
+SET
+     test     |   id    | status | removalReason 
+--------------+---------+--------+---------------
+ TEST3_verify | part-B2 | active | 
+(1 row)
+
+RESET
+
+=== B1 TEST 4: PUBLIC cannot call function ===
+DO
+CREATE ROLE
+GRANT
+SET
+BEGIN
+SET
+SET
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:233: ERROR:  permission denied for function remove_coordination_participant
+ROLLBACK
+RESET
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:236: ERROR:  role "test_public_user" cannot be dropped because some objects depend on it
+DETAIL:  privileges for schema g03_b1_test
+
+=== B1 TEST 5: set_config impersonation (documented limitation) ===
+SET
+BEGIN
+SET
+SET
+ test5_result 
+--------------
+ t
+(1 row)
+
+COMMIT
+RESET
+SET
+     test     |   id    | status  |  removedBy   
+--------------+---------+---------+--------------
+ TEST5_verify | part-A2 | removed | impersonator
+(1 row)
+
+RESET
+
+=== B1 VALIDATION COMPLETE ===
+Expected results:
+TEST 1: result=t, status=removed (lead can remove)
+TEST 2: result=f, status=active (non-lead cannot remove)
+TEST 3: 0 rows updated (RLS blocks cross-tenant direct UPDATE)
+TEST 4: ERROR permission denied (PUBLIC cannot EXECUTE)
+TEST 5: result=t — IMPERSONATION SUCCEEDS (documented limitation)
