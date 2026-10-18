@@ -4,7 +4,7 @@
 MISSION_ID = 02-00
 TARGET_GROUP = GROUP 02 (State Observatory)
 BASE_COMMIT = 51409a09fccdae807b329c750df0632c8f39d664
-FINAL_COMMIT = 0c709d13268277b02cc4222d502674f170cc4eec (on main)
+FINAL_COMMIT = 6672460e79e0e18745f1c492555bd68b33e5549b (on main)
 WORKTREE = clean (mission-02-00 branch merged to main)
 ```
 
@@ -54,7 +54,7 @@ WORKTREE = clean (mission-02-00 branch merged to main)
 bun run lint && bun run typecheck && bun run test
 ```
 
-### Actual CI runtime output (CI #140 on 0c709d1)
+### Actual CI runtime output (CI #141 on 6672460)
 
 ```
 ✓ lint: PASS (0 errors, 3 pre-existing G00 warnings)
@@ -65,8 +65,8 @@ bun run lint && bun run typecheck && bun run test
 
 ### CI + Recovery URLs (verified by owner)
 
-- **CI #140**: https://github.com/mayakilzy/The-Balance/actions/runs/39079818108 — SUCCESS
-- **Recovery #78**: https://github.com/mayakilzy/The-Balance/actions/runs/39079818119 — SUCCESS
+- **CI #141**: https://github.com/mayakilzy/The-Balance/actions/runs/39080612585 — SUCCESS
+- **Recovery #79**: https://github.com/mayakilzy/The-Balance/actions/runs/39080612604 — SUCCESS
 
 ## LIVE_EVIDENCE
 
@@ -154,8 +154,8 @@ None. All 34 architectural and execution decisions (Q1-Q15 + R1-R5 + E1-E8 + F1-
 **PASS**
 
 ### Verified on CI (real PostgreSQL 16) — 2026-10-17
-1. ✅ CI #140 — SUCCESS (https://github.com/mayakilzy/The-Balance/actions/runs/39079818108)
-2. ✅ Recovery #78 — SUCCESS (https://github.com/mayakilzy/The-Balance/actions/runs/39079818119)
+1. ✅ CI #141 — SUCCESS (https://github.com/mayakilzy/The-Balance/actions/runs/39080612585)
+2. ✅ Recovery #79 — SUCCESS (https://github.com/mayakilzy/The-Balance/actions/runs/39080612604)
 3. ✅ Vitest: 679 passed | 10 skipped | 0 failed
 4. ✅ Playwright: 5 passed | 2 flaky (passed on retry) | 0 failed
 5. ✅ `src/lib/state-builder/` diff = 0 — no GROUP 01 code modified
@@ -189,8 +189,8 @@ Mission 02-00 is APPROVED. Define Mission 02-01 scope based on `GROUP_02_READINE
 
 ## Honest Notes (per Roadmap §12)
 
-- This report reflects the ACTUAL published SHA (0c709d1) and ACTUAL CI/Recovery results.
-- The 4 intermediate commits (67d1335, f76cf24, a4a5722, 0c709d1) were iterative CI fixes — each corrected a specific failure discovered by CI on real PostgreSQL 16.
+- This report reflects the ACTUAL published SHA (6672460) and ACTUAL CI/Recovery results.
+- The 5 commits (67d1335, f76cf24, a4a5722, 0c709d1, 6672460) were iterative — first 4 corrected CI failures on real PostgreSQL 16, 5th was this documentation sync.
 - Test count (679 passed) is the actual CI runtime output, not a prediction.
 - All 11 known limitations are documented in `02-00_KNOWN_LIMITATIONS.md`.
 - The mission does NOT claim production readiness — Demolandia only, no real data, no UI, no external integrations, no LLM.
