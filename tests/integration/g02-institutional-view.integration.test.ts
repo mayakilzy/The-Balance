@@ -119,11 +119,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient?.$disconnect();
-    await appClient?.$disconnect();
+    try {
+      await testFixtures.cleanup(adminClient);
+      await sharedFixtures.cleanup(adminClient);
+    } finally {
+      await adminClient?.$disconnect();
+      await appClient?.$disconnect();
+    }
   }
-  await testFixtures.cleanup(adminClient);
-    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
@@ -137,14 +140,15 @@ afterEach(async () => {
   }
 });
 
-async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+async function ensureQuarterOwned(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4): Promise<{ id: string; createdByThisSuite: boolean }> {
   const periodValue = `${year}-Q${quarter}`;
   const startMonth = (quarter - 1) * 3;
   const startAt = new Date(Date.UTC(year, startMonth, 1));
   const endAt = new Date(Date.UTC(year, startMonth + 3, 0, 23, 59, 59));
   const existing = await adminClient.observationPeriod.findFirst({ where: { tenantId, periodType: "quarterly", periodValue } });
-  if (existing) return existing.id;
-  return (await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } })).id;
+  if (existing) return { id: existing.id, createdByThisSuite: false };
+  const created = await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } });
+  return { id: created.id, createdByThisSuite: true };
 }
 
 // V-09: Program ownership and institutional linkage
@@ -156,7 +160,9 @@ describeIntegration("V-09: program ownership + institutional linkage", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -191,7 +197,9 @@ describeIntegration("V-10: exact institutional geoRefId", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
@@ -237,7 +245,9 @@ describeIntegration("V-11: national labeled 'linked'", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
@@ -273,7 +283,9 @@ describeIntegration("V-12: no automatic national attribution", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
@@ -322,7 +334,9 @@ describeIntegration("V-13: parent/child institution separation", () => {
       data: { countryId, code: "DML-EDU-DIR", displayName: "Education Directorate (child)", type: "directorate", parentId: institutionEduId },
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
@@ -359,7 +373,9 @@ describeIntegration("V-14: cross-country institution rejection", () => {
     const { getInstitutionalView } = await import("@/lib/state-observatory/institutional-view-service");
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -418,10 +434,14 @@ describeIntegration("V-15: cross-tenant isolation with shared institution", () =
     });
     testFixtures.track.objective(objB.id);
 
-    const periodIdA = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodIdA_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodIdA = _periodIdA_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodIdA_owned);
     testFixtures.track.observationPeriod(periodIdA);
     testFixtures.track.observationPeriod(periodIdA);
-    const periodIdB = await ensureQuarter(tenantBId, 2026, 2);
+    const _periodIdB_owned = await ensureQuarterOwned(tenantBId, 2026, 2);
+    const periodIdB = _periodIdB_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodIdB_owned);
     testFixtures.track.observationPeriod(periodIdB);
     testFixtures.track.observationPeriod(periodIdB);
 
@@ -481,7 +501,9 @@ describeIntegration("V-18: missing institutional observations = UNKNOWN", () => 
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
@@ -518,7 +540,9 @@ describeIntegration("V-08b: no fabricated execution verification", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
@@ -554,7 +578,9 @@ describeIntegration("V-17: sector view indicator counting across institutions", 
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -602,7 +628,9 @@ describeIntegration("V-19: strategy-version and period isolation", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 

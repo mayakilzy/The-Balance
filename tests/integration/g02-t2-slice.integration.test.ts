@@ -264,13 +264,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    // Clean up G02 entities created during tests (admin can see all tenants)
-
-    await adminClient?.$disconnect();
-    await appClient?.$disconnect();
+    try {
+      await testFixtures.cleanup(adminClient);
+      await sharedFixtures.cleanup(adminClient);
+    } finally {
+      await adminClient?.$disconnect();
+      await appClient?.$disconnect();
+    }
   }
-  await testFixtures.cleanup(adminClient);
-    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
@@ -287,11 +288,11 @@ afterEach(async () => {
 // ============================================================
 // Helper: create a period for a quarter
 // ============================================================
-async function ensureQuarter(
+async function ensureQuarterOwned(
   tenantId: string,
   year: number,
   quarter: 1 | 2 | 3 | 4
-): Promise<string> {
+): Promise<{ id: string; createdByThisSuite: boolean }> {
   const periodValue = `${year}-Q${quarter}`;
   const startMonth = (quarter - 1) * 3;
   const startAt = new Date(Date.UTC(year, startMonth, 1));
@@ -299,11 +300,11 @@ async function ensureQuarter(
   const existing = await adminClient.observationPeriod.findFirst({
     where: { tenantId, periodType: "quarterly", periodValue },
   });
-  if (existing) return existing.id;
+  if (existing) return { id: existing.id, createdByThisSuite: false };
   const created = await adminClient.observationPeriod.create({
     data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt },
   });
-  return created.id;
+  return { id: created.id, createdByThisSuite: true };
 }
 
 // ============================================================
@@ -337,7 +338,9 @@ describeIntegration("I-01: T2-slice negative path", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -439,7 +442,9 @@ describeIntegration("I-02: T2-slice positive path — full lifecycle", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -582,7 +587,9 @@ describeIntegration("I-03: Correction scenario", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -680,7 +687,9 @@ describeIntegration("I-04: F3 concurrent correction conflict", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -793,7 +802,9 @@ describeIntegration("I-05: StrategyVersion immutability", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -877,10 +888,14 @@ describeIntegration("I-06: RLS cross-tenant isolation", () => {
       membershipStatus: "active",
     });
 
-    const periodIdA = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodIdA_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodIdA = _periodIdA_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodIdA_owned);
     testFixtures.track.observationPeriod(periodIdA);
     testFixtures.track.observationPeriod(periodIdA);
-    const periodIdB = await ensureQuarter(tenantBId, 2026, 2);
+    const _periodIdB_owned = await ensureQuarterOwned(tenantBId, 2026, 2);
+    const periodIdB = _periodIdB_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodIdB_owned);
     testFixtures.track.observationPeriod(periodIdB);
     testFixtures.track.observationPeriod(periodIdB);
 
@@ -964,7 +979,9 @@ describeIntegration("I-07: Revoked membership", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1043,7 +1060,9 @@ describeIntegration("I-08: writeAuditTx atomic for every operation", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1150,7 +1169,9 @@ describeIntegration("I-09: New strategy version preserves old observations", () 
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1242,7 +1263,9 @@ describeIntegration("I-10: isSynthetic=true visible in outputs", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1313,7 +1336,9 @@ describeIntegration("I-11: R1 separation", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1363,7 +1388,9 @@ describeIntegration("I-12: F1 + E3", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1419,7 +1446,9 @@ describeIntegration("I-12: F1 + E3", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1496,7 +1525,9 @@ describeIntegration("I-13: F4 — observationId=null when unknown", () => {
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -1553,7 +1584,9 @@ describeIntegration("I-14: F2 + R4 — corrections preserve all versions", () =>
       membershipStatus: "active",
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 

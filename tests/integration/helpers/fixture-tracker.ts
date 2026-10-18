@@ -1,6 +1,11 @@
 // tests/integration/helpers/fixture-tracker.ts
 // G02-L21 FIX: Exact fixture ownership tracking.
+// FIX B: Only tracks records CREATED by this tracker — never pre-existing records.
+// FIX C: Complete tracking — callers must use trackOwned, not track.
+// FIX A: cleanup must run BEFORE disconnect (callers manage disconnect in finally).
 import type { PrismaClient } from "@prisma/client";
+
+export interface OwnedRecord { id: string; createdByThisSuite: boolean; }
 
 export class FixtureTracker {
   private ids = {
@@ -15,6 +20,28 @@ export class FixtureTracker {
     memberships: new Set<string>(),
   };
 
+  // FIX B: trackOwned only tracks when createdByThisSuite = true
+  trackOwned = {
+    alert: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.alerts.add(r.id); },
+    varianceRecord: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.varianceRecords.add(r.id); },
+    observation: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.observations.add(r.id); },
+    observationPeriod: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.observationPeriods.add(r.id); },
+    indicator: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.indicatorDefinitions.add(r.id); },
+    program: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.programs.add(r.id); },
+    project: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.projects.add(r.id); },
+    budgetLine: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.budgetLines.add(r.id); },
+    dependency: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.dependencies.add(r.id); },
+    evidence: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.evidence.add(r.id); },
+    source: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.sources.add(r.id); },
+    objective: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.objectives.add(r.id); },
+    strategy: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.strategies.add(r.id); },
+    strategyVersion: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.strategyVersions.add(r.id); },
+    institution: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.institutions.add(r.id); },
+    user: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.users.add(r.id); },
+    membership: (r: OwnedRecord) => { if (r.createdByThisSuite) this.ids.memberships.add(r.id); },
+  };
+
+  // Direct track (for IDs obtained from service calls that we know created the record)
   track = {
     alert: (id: string) => this.ids.alerts.add(id),
     varianceRecord: (id: string) => this.ids.varianceRecords.add(id),
@@ -39,25 +66,28 @@ export class FixtureTracker {
     return Object.values(this.ids).reduce((s, set) => s + set.size, 0);
   }
 
+  /**
+   * Delete only tracked records in FK-safe order.
+   * FIX A: Caller must run this BEFORE disconnecting Prisma clients.
+   * Caller should wrap disconnect in finally block.
+   */
   async cleanup(client: PrismaClient): Promise<void> {
     const errors: string[] = [];
     const del = async (set: Set<string>, model: string, fn: (id: string) => Promise<{ count: number }>) => {
       for (const id of set) {
         try {
-          const result = await fn(id);
+          await fn(id);
           // deleteMany returns { count: 0 } if already cascade-deleted — that's OK
-          // Real database errors throw and are caught below
         } catch (e) {
           const msg = (e as Error).message;
-          // "No record found" is expected for cascade-deleted records — not an error
           if (msg.includes("No record was found") || msg.includes("not found")) {
-            continue;
+            continue; // expected for cascade-deleted records
           }
           errors.push(`${model} ${id}: ${msg}`);
         }
       }
     };
-    // FK-safe order — using deleteMany (idempotent, doesn't throw if already deleted)
+    // FK-safe order
     await del(this.ids.alerts, "alert", (id) => client.alert.deleteMany({ where: { id } }));
     await del(this.ids.varianceRecords, "varianceRecord", (id) => client.varianceRecord.deleteMany({ where: { id } }));
     await del(this.ids.observations, "observation", (id) => client.observation.deleteMany({ where: { id } }));

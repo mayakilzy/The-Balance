@@ -122,11 +122,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient?.$disconnect();
-    await appClient?.$disconnect();
+    try {
+      await testFixtures.cleanup(adminClient);
+      await sharedFixtures.cleanup(adminClient);
+    } finally {
+      await adminClient?.$disconnect();
+      await appClient?.$disconnect();
+    }
   }
-  await testFixtures.cleanup(adminClient);
-    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
@@ -139,7 +142,11 @@ afterEach(async () => {
   }
 });
 
-async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+async function ensureQuarterOwned(
+  tenantId: string,
+  year: number,
+  quarter: 1 | 2 | 3 | 4
+): Promise<{ id: string; createdByThisSuite: boolean }> {
   const periodValue = `${year}-Q${quarter}`;
   const startMonth = (quarter - 1) * 3;
   const startAt = new Date(Date.UTC(year, startMonth, 1));
@@ -147,11 +154,13 @@ async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 
   const existing = await adminClient.observationPeriod.findFirst({
     where: { tenantId, periodType: "quarterly", periodValue },
   });
-  if (existing) return existing.id;
-  return (await adminClient.observationPeriod.create({
+  if (existing) return { id: existing.id, createdByThisSuite: false };
+  const created = await adminClient.observationPeriod.create({
     data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt },
-  })).id;
+  });
+  return { id: created.id, createdByThisSuite: true };
 }
+
 
 // H-01: Subnational spread never creates FULL
 describeIntegration("H-01: subnational spread → PARTIAL (not FULL)", () => {
@@ -163,7 +172,9 @@ describeIntegration("H-01: subnational spread → PARTIAL (not FULL)", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -230,7 +241,9 @@ describeIntegration("H-02/H-03: FULL via national obs + 2 independent verified e
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -313,7 +326,9 @@ describeIntegration("H-04: 1 national source + 1 verified evidence → PARTIAL",
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -376,7 +391,9 @@ describeIntegration("H-05: coverage vs independence separation", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {

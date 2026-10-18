@@ -119,11 +119,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient?.$disconnect();
-    await appClient?.$disconnect();
+    try {
+      await testFixtures.cleanup(adminClient);
+      await sharedFixtures.cleanup(adminClient);
+    } finally {
+      await adminClient?.$disconnect();
+      await appClient?.$disconnect();
+    }
   }
-  await testFixtures.cleanup(adminClient);
-    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
@@ -136,14 +139,15 @@ afterEach(async () => {
   }
 });
 
-async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+async function ensureQuarterOwned(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4): Promise<{ id: string; createdByThisSuite: boolean }> {
   const periodValue = `${year}-Q${quarter}`;
   const startMonth = (quarter - 1) * 3;
   const startAt = new Date(Date.UTC(year, startMonth, 1));
   const endAt = new Date(Date.UTC(year, startMonth + 3, 0, 23, 59, 59));
   const existing = await adminClient.observationPeriod.findFirst({ where: { tenantId, periodType: "quarterly", periodValue } });
-  if (existing) return existing.id;
-  return (await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } })).id;
+  if (existing) return { id: existing.id, createdByThisSuite: false };
+  const created = await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } });
+  return { id: created.id, createdByThisSuite: true };
 }
 
 // H-06: Snapshot 4-layer structure
@@ -158,7 +162,9 @@ describeIntegration("H-06: snapshot structure", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -215,7 +221,9 @@ describeIntegration("H-07: refuted evidence preserved in snapshot", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -266,7 +274,9 @@ describeIntegration("H-08: disputed evidence preserved", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -313,7 +323,9 @@ describeIntegration("H-09: cross-tenant snapshot denied", () => {
 
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -364,7 +376,9 @@ describeIntegration("H-10: country-scope UNKNOWN warning in provenanceWarnings",
 
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -410,7 +424,9 @@ describeIntegration("H-11: source mismatch warning explanatory", () => {
 
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -471,7 +487,9 @@ describeIntegration("H-12: snapshot honesty block", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {

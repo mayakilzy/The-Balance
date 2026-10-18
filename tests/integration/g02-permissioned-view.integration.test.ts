@@ -99,11 +99,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient?.$disconnect();
-    await appClient?.$disconnect();
+    try {
+      await testFixtures.cleanup(adminClient);
+      await sharedFixtures.cleanup(adminClient);
+    } finally {
+      await adminClient?.$disconnect();
+      await appClient?.$disconnect();
+    }
   }
-  await testFixtures.cleanup(adminClient);
-    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
@@ -117,14 +120,15 @@ afterEach(async () => {
   }
 });
 
-async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+async function ensureQuarterOwned(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4): Promise<{ id: string; createdByThisSuite: boolean }> {
   const periodValue = `${year}-Q${quarter}`;
   const startMonth = (quarter - 1) * 3;
   const startAt = new Date(Date.UTC(year, startMonth, 1));
   const endAt = new Date(Date.UTC(year, startMonth + 3, 0, 23, 59, 59));
   const existing = await adminClient.observationPeriod.findFirst({ where: { tenantId, periodType: "quarterly", periodValue } });
-  if (existing) return existing.id;
-  return (await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } })).id;
+  if (existing) return { id: existing.id, createdByThisSuite: false };
+  const created = await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } });
+  return { id: created.id, createdByThisSuite: true };
 }
 
 // P-09: government tier (admin) returns data
@@ -137,7 +141,9 @@ describeIntegration("P-09: government tier returns indicators", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const adminSession = makeSession({ id: adminUserId, tenantId: tenantAId, roleCode: "admin", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -167,7 +173,9 @@ describeIntegration("P-10: restricted evidence excluded from government projecti
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const adminSession = makeSession({ id: adminUserId, tenantId: tenantAId, roleCode: "admin", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -201,7 +209,9 @@ describeIntegration("P-11: research tier fail-closed", () => {
   it("observer gets publication_unavailable", async () => {
     const { getPermissionedView } = await import("@/lib/state-observatory/permissioned-view-service");
     const observerSession = makeSession({ id: observerUserId, tenantId: tenantAId, roleCode: "observer", membershipStatus: "active" });
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
 
@@ -244,7 +254,9 @@ describeIntegration("P-16: no indirect disclosure", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const adminSession = makeSession({ id: adminUserId, tenantId: tenantAId, roleCode: "admin", membershipStatus: "active" });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
     testFixtures.track.observationPeriod(periodId);
     testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
@@ -311,7 +323,9 @@ describeIntegration("P-17: G02-L21 sentinel survives cleanup", () => {
       },
     });
 
-    const periodId = await ensureQuarter(tenantAId, 2026, 2);
+    const _periodId_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const periodId = _periodId_owned.id;
+    testFixtures.trackOwned.observationPeriod(_periodId_owned);
 
     // Create a tracked indicator (this one should be cleaned up)
     const tracked = await defineIndicator(analystSession, {

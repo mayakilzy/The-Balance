@@ -75,11 +75,14 @@ beforeAll(async () => {
 
 afterAll(async () => {
   if (RUN_INTEGRATION) {
-    await adminClient?.$disconnect();
-    await appClient?.$disconnect();
+    try {
+      await testFixtures.cleanup(adminClient);
+      await sharedFixtures.cleanup(adminClient);
+    } finally {
+      await adminClient?.$disconnect();
+      await appClient?.$disconnect();
+    }
   }
-  await testFixtures.cleanup(adminClient);
-    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
@@ -92,14 +95,15 @@ afterEach(async () => {
   }
 });
 
-async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
+async function ensureQuarterOwned(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4): Promise<{ id: string; createdByThisSuite: boolean }> {
   const periodValue = `${year}-Q${quarter}`;
   const startMonth = (quarter - 1) * 3;
   const startAt = new Date(Date.UTC(year, startMonth, 1));
   const endAt = new Date(Date.UTC(year, startMonth + 3, 0, 23, 59, 59));
   const existing = await adminClient.observationPeriod.findFirst({ where: { tenantId, periodType: "quarterly", periodValue } });
-  if (existing) return existing.id;
-  return (await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } })).id;
+  if (existing) return { id: existing.id, createdByThisSuite: false };
+  const created = await adminClient.observationPeriod.create({ data: { tenantId, periodType: "quarterly", periodValue, startAt, endAt } });
+  return { id: created.id, createdByThisSuite: true };
 }
 
 describeIntegration("T-01: 4 comparable quarterly periods with improving trend", () => {
@@ -112,16 +116,24 @@ describeIntegration("T-01: 4 comparable quarterly periods with improving trend",
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     // Create 4 periods: Q3-2025, Q4-2025, Q1-2026, Q2-2026
-    const p1 = await ensureQuarter(tenantAId, 2025, 3);
+    const _p1_owned = await ensureQuarterOwned(tenantAId, 2025, 3);
+    const p1 = _p1_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p1_owned);
     testFixtures.track.observationPeriod(p1);
     testFixtures.track.observationPeriod(p1);
-    const p2 = await ensureQuarter(tenantAId, 2025, 4);
+    const _p2_owned = await ensureQuarterOwned(tenantAId, 2025, 4);
+    const p2 = _p2_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p2_owned);
     testFixtures.track.observationPeriod(p2);
     testFixtures.track.observationPeriod(p2);
-    const p3 = await ensureQuarter(tenantAId, 2026, 1);
+    const _p3_owned = await ensureQuarterOwned(tenantAId, 2026, 1);
+    const p3 = _p3_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p3_owned);
     testFixtures.track.observationPeriod(p3);
     testFixtures.track.observationPeriod(p3);
-    const p4 = await ensureQuarter(tenantAId, 2026, 2);
+    const _p4_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const p4 = _p4_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p4_owned);
     testFixtures.track.observationPeriod(p4);
     testFixtures.track.observationPeriod(p4); // this is the "current" period
 
@@ -159,16 +171,24 @@ describeIntegration("T-02: temporal gap detection", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const p1 = await ensureQuarter(tenantAId, 2025, 3);
+    const _p1_owned = await ensureQuarterOwned(tenantAId, 2025, 3);
+    const p1 = _p1_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p1_owned);
     testFixtures.track.observationPeriod(p1);
     testFixtures.track.observationPeriod(p1);
-    const p2 = await ensureQuarter(tenantAId, 2025, 4);
+    const _p2_owned = await ensureQuarterOwned(tenantAId, 2025, 4);
+    const p2 = _p2_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p2_owned);
     testFixtures.track.observationPeriod(p2);
     testFixtures.track.observationPeriod(p2); // will have NO observation
-    const p3 = await ensureQuarter(tenantAId, 2026, 1);
+    const _p3_owned = await ensureQuarterOwned(tenantAId, 2026, 1);
+    const p3 = _p3_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p3_owned);
     testFixtures.track.observationPeriod(p3);
     testFixtures.track.observationPeriod(p3);
-    const p4 = await ensureQuarter(tenantAId, 2026, 2);
+    const _p4_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const p4 = _p4_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p4_owned);
     testFixtures.track.observationPeriod(p4);
     testFixtures.track.observationPeriod(p4);
 
@@ -199,13 +219,19 @@ describeIntegration("T-04: null measurements → insufficient", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
-    const p1 = await ensureQuarter(tenantAId, 2025, 4);
+    const _p1_owned = await ensureQuarterOwned(tenantAId, 2025, 4);
+    const p1 = _p1_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p1_owned);
     testFixtures.track.observationPeriod(p1);
     testFixtures.track.observationPeriod(p1);
-    const p2 = await ensureQuarter(tenantAId, 2026, 1);
+    const _p2_owned = await ensureQuarterOwned(tenantAId, 2026, 1);
+    const p2 = _p2_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p2_owned);
     testFixtures.track.observationPeriod(p2);
     testFixtures.track.observationPeriod(p2);
-    const p3 = await ensureQuarter(tenantAId, 2026, 2);
+    const _p3_owned = await ensureQuarterOwned(tenantAId, 2026, 2);
+    const p3 = _p3_owned.id;
+    testFixtures.trackOwned.observationPeriod(_p3_owned);
     testFixtures.track.observationPeriod(p3);
     testFixtures.track.observationPeriod(p3);
 
