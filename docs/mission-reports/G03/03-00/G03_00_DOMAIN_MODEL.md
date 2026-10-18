@@ -31,26 +31,40 @@
 GROUP 03's domain model follows the same principles that governed G01 and G02:
 
 1. **Additive only** — no modifications to existing G00/G01/G02 tables.
-2. **Tenant-scoped (PRIVATE)** — all 7 new tables have `tenantId` and RLS ENABLE + FORCE.
+2. **Tenant-scoped (PRIVATE)** — all 12 new tables have `tenantId` and RLS ENABLE + FORCE.
 3. **Read-only FK to approved G01 entities** — `strategyVersionId`, `programId`, `projectId` are nullable references; G03 never writes to these tables.
-4. **Append-only where history matters** — `reform_action_updates` blocks UPDATE/DELETE via RLS.
+4. **Append-only where history matters** — `reform_action_updates`, `reform_coordination_shared_snapshots`, `reform_coordination_shared_snapshot_revocations`, `reform_coordination_invitations` block UPDATE/DELETE via RLS.
 5. **Immutable post-approval** — `reform_approvals` and `reform_feedback_loops` block UPDATE/DELETE via RLS.
 6. **DB-level enforcement of invariants** — F6 pattern (verifiedAction + evidenceSource) enforced by trigger, not just service layer.
-7. **Same naming conventions** — snake_case tables (`reform_proposals`), camelCase Prisma fields, `@@map` + `@@index` pattern from G01/G02.
+7. **Coordination-aware RLS** — coordination tables use a `SECURITY INVOKER` helper function `is_coordination_participant(text)` for cross-participant visibility (see `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md`).
+8. **Same naming conventions** — snake_case tables (`reform_proposals`), camelCase Prisma fields, `@@map` + `@@index` pattern from G01/G02.
+9. **Historical preservation on supersession** — supersession is a documented historical link, NOT a silent rewrite of old proposals' `coordinationId`. See §3.8.
 
-### 1.2 New Tables Summary
+### 1.2 New Tables Summary (12 tables — 7 core + 5 coordination)
+
+#### Core Reform Tables (7)
 
 | # | Table (Prisma model) | DB table | Purpose | Lifecycle |
 |---|---------------------|----------|---------|-----------|
-| 1 | `ReformProposal` | `reform_proposals` | Top-level reform container | draft → under_review → approved/rejected/superseded |
+| 1 | `ReformProposal` | `reform_proposals` | Top-level reform container (with optional `coordinationId`) | draft → under_review → approved/rejected/superseded |
 | 2 | `ReformAlternative` | `reform_alternatives` | Multiple options per proposal | draft → selected/withdrawn |
 | 3 | `ReformApproval` | `reform_approvals` | Atomic approval + evidence snapshot | One-shot, immutable |
 | 4 | `ReformAction` | `reform_actions` | Implementation tracking | planned → in_progress → completed/blocked/cancelled |
 | 5 | `ReformActionUpdate` | `reform_action_updates` | Append-only progress log | Append-only (no UPDATE/DELETE) |
-| 6 | `ReformVerification` | `reform_verifications` | F6-pattern verification | pending → verified/disputed |
-| 7 | `ReformFeedbackLoop` | `reform_feedback_loops` | Descriptive before/after link | One-shot, immutable |
+| 6 | `ReformVerification` | `reform_verifications` | F6-pattern verification (execution verification — separate from outcome measurement) | pending → verified/disputed |
+| 7 | `ReformFeedbackLoop` | `reform_feedback_loops` | Descriptive outcome measurement (separate from execution verification) | One-shot, immutable |
 
-**Total**: 7 new PRIVATE tables, all RLS ENABLE + FORCE.
+#### Coordination Tables (5 — per D6, multi-institution coordination is core)
+
+| # | Table (Prisma model) | DB table | Purpose | Lifecycle |
+|---|---------------------|----------|---------|-----------|
+| 8 | `ReformCoordination` | `reform_coordinations` | Coordination metadata (title, lead tenant, policy, status) | draft → plan_submitted → plan_approved → active → closed/superseded |
+| 9 | `ReformCoordinationParticipant` | `reform_coordination_participants` | M:N coordination↔tenant (with optional institutionId) | pending_invitation → active → removed/withdrawn |
+| 10 | `ReformCoordinationInvitation` | `reform_coordination_invitations` | Pending invitations (with expiry) | pending → accepted/declined/expired/revoked (append-only) |
+| 11 | `ReformCoordinationSharedSnapshot` | `reform_coordination_shared_snapshots` | Explicitly shared, reviewer-approved snapshots | draft → under_review → approved → (revoked via separate table) |
+| 12 | `ReformCoordinationSharedSnapshotRevocation` | `reform_coordination_shared_snapshot_revocations` | Append-only revocations (no UPDATE on snapshots) | One-shot, append-only |
+
+**Total**: 12 new PRIVATE tables, all RLS ENABLE + FORCE.
 
 ### 1.3 New Enums
 
@@ -60,10 +74,19 @@ GROUP 03's domain model follows the same principles that governed G01 and G02:
 | `ReformAlternativeStatus` | `draft` \| `selected` \| `withdrawn` | ReformAlternative.status |
 | `ReformActionStatus` | `planned` \| `in_progress` \| `completed` \| `blocked` \| `cancelled` | ReformAction.status |
 | `ReformActionUpdateType` | `progress` \| `blocker` \| `milestone` \| `evidence` \| `note` | ReformActionUpdate.updateType |
-| `ReformVerificationStatus` | `pending` \| `verified` \| `disputed` | ReformVerification.verificationStatus |
-| `ReformFeedbackComparisonType` | `before_after` \| `parallel` \| `none` | ReformFeedbackLoop.comparisonType |
+| `ReformVerificationStatus` | `pending` \| `verified` \| `disputed` | ReformVerification.verificationStatus (execution verification — separate from outcome measurement) |
+| `ReformFeedbackComparisonType` | `before_after` \| `parallel` \| `none` | ReformFeedbackLoop.comparisonType (outcome measurement — descriptive, never causal) |
 | `ReformRiskLevel` | `low` \| `medium` \| `high` \| `critical` | ReformAlternative.riskLevel |
 | `ReformFeasibilityScore` | `high` \| `medium` \| `low` \| `unknown` | ReformAlternative.feasibilityScore |
+| `ReformCoordinationStatus` | `draft` \| `plan_submitted` \| `plan_approved` \| `active` \| `closed` \| `superseded` | ReformCoordination.status |
+| `ReformCoordinationParticipantStatus` | `pending_invitation` \| `active` \| `removed` \| `withdrawn` | ReformCoordinationParticipant.status |
+| `ReformCoordinationInvitationStatus` | `pending` \| `accepted` \| `declined` \| `expired` \| `revoked` | ReformCoordinationInvitation.status |
+| `ReformCoordinationApprovalPolicy` | `unanimous` \| `lead_with_no_objection` \| `lead_only` | ReformCoordination.approvalPolicy (immutable post-creation) |
+| `ReformSharedSnapshotStatus` | `draft` \| `under_review` \| `approved` \| `revoked` | ReformCoordinationSharedSnapshot.status (revoked via separate revocation table) |
+| `ReformSharedSnapshotType` | `commitment` \| `milestone` \| `progress` \| `outcome` \| `constraint` | ReformCoordinationSharedSnapshot.snapshotType |
+| `HypothesisReviewStatus` | `proposed` \| `under_review` \| `validated` \| `invalidated` \| `inconclusive` \| `superseded` | HypothesizedCause.reviewStatus (D3 expansion) |
+| `HypothesisConfidenceLevel` | `unknown` \| `low` \| `medium` \| `high` | HypothesizedCause.confidenceLevel (descriptive, not probabilistic) |
+| `HypothesisConfidenceBasis` | `analyst_judgment` \| `historical_pattern` \| `statistical_correlation` \| `expert_consultation` \| `literature_review` \| `international_comparison` \| `unknown` | HypothesizedCause.confidenceBasis (D3 expansion) |
 
 ---
 
@@ -86,7 +109,14 @@ model ReformProposal {
   // Content
   title                       String
   problemStatement            String   // descriptive, no causal claims
-  hypothesizedCauses          Json     @default("[]") // [{ cause, confidenceLevel: "low"|"medium"|"high", supportingEvidenceIds: [] }]
+  // D3 (revised per owner directive): expanded hypothesis schema with epistemic structure
+  // Schema: [{ cause, confidenceLevel, confidenceBasis, supportingEvidenceIds, 
+  //            contradictingEvidenceIds, reviewStatus, reviewedBy, reviewedAt, reviewNotes,
+  //            proposedBy, proposedAt, lastModifiedAt, lastModifiedBy }]
+  // See G03_00_OPEN_DECISIONS.md §4.2 for full Zod schema
+  hypothesizedCauses          Json     @default("[]")
+  // Optional coordination link (per D6 — multi-institution coordination is core)
+  coordinationId              String?  // FK to ReformCoordination (optional, nullable)
   context                     Json     @default("{}") // free-form metadata
   // Lifecycle
   status                      String   @default("draft") // draft|under_review|approved|rejected|superseded
@@ -445,11 +475,259 @@ model ReformFeedbackLoop {
 
 ---
 
+### 2.8 ReformCoordination (NEW — per D6)
+
+**Purpose**: Top-level coordination metadata for multi-institution reforms. Created by a lead tenant; participants join via invitation.
+
+```prisma
+model ReformCoordination {
+  id              String   @id @default(cuid())
+  // Lead tenant owns the coordination
+  leadTenantId    String
+  // Country scope (for cross-tenant same-country coordination validation)
+  countryId       String
+  // Content
+  title           String
+  description     String
+  // Coordination context (originating alert/variance if shared signal)
+  originatingAlertId          String?  // optional shared signal
+  originatingVarianceRecordId String?  // optional shared signal
+  // Approval policy — IMMUTABLE post-creation (trigger enforces)
+  approvalPolicy   String   // "unanimous" | "lead_with_no_objection" | "lead_only"
+  // Lifecycle
+  status           String   @default("draft")
+  // draft | plan_submitted | plan_approved | active | closed | superseded
+  planSubmittedAt   DateTime?
+  planApprovedAt    DateTime?
+  planApprovedBy    String?
+  activatedAt       DateTime?  // when ALL linked proposals approved
+  closedAt          DateTime?
+  closedBy          String?
+  closureReason     String?
+  // Supersession (historical link — see §3.8)
+  supersededAt      DateTime?
+  supersededById    String?   // FK self — the coordination that superseded this one
+  // Soft archive (no hard delete)
+  archivedAt        DateTime?
+  // Provenance
+  createdBy         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  metadata          Json     @default("{}")
+
+  leadTenant        Tenant              @relation(fields: [leadTenantId], references: [id], onDelete: Cascade)
+  country           Country             @relation(fields: [countryId], references: [id])
+  originatingAlert  Alert?              @relation(fields: [originatingAlertId], references: [id])
+  originatingVariance VarianceRecord?  @relation(fields: [originatingVarianceRecordId], references: [id])
+  participants      ReformCoordinationParticipant[]
+  invitations       ReformCoordinationInvitation[]
+  sharedSnapshots   ReformCoordinationSharedSnapshot[]
+  proposals         ReformProposal[]    // via coordinationId
+  supersededBy      ReformCoordination? @relation("CoordinationSupersession", fields: [supersededById], references: [id])
+  supersedes        ReformCoordination[] @relation("CoordinationSupersession")
+
+  @@index([leadTenantId, status])
+  @@index([countryId, status])
+  @@index([originatingAlertId])
+  @@map("reform_coordinations")
+}
+```
+
+**Key design decisions**:
+1. **`leadTenantId` (not `tenantId`)**: The coordination is owned by the lead tenant. RLS uses `leadTenantId` for write access; the `is_coordination_participant` helper for read access.
+2. **`countryId` required**: For cross-tenant same-country coordination validation. Cross-country coordination is G03-L11 (deferred).
+3. **`approvalPolicy` immutable post-creation**: A trigger blocks UPDATE on this field. Changing the policy requires superseding the coordination.
+4. **Two-level approval reflected in `status`**: `plan_approved` (lead approved the plan) → `active` (ALL linked proposals approved — auto-triggered).
+5. **Supersession is a historical link** (see §3.8) — does NOT rewrite old proposals' `coordinationId`.
+
+---
+
+### 2.9 ReformCoordinationParticipant (NEW — per D6)
+
+**Purpose**: M:N relationship between coordination and tenant. Each participant has a role + status. Optional `institutionId` documents which institution the tenant represents.
+
+```prisma
+model ReformCoordinationParticipant {
+  id              String   @id @default(cuid())
+  coordinationId  String
+  tenantId        String
+  // Optional institution the tenant represents in this coordination
+  // (documentation field — NOT authorization field; see Security Contract §5.4)
+  institutionId   String?
+  // Role within coordination
+  role            String   @default("contributor")  // "lead" | "contributor" | "observer"
+  // Lifecycle
+  status          String   @default("pending_invitation")
+  // pending_invitation | active | removed | withdrawn
+  joinedAt        DateTime?  // when status moved to active
+  removedAt       DateTime?  // when status moved to removed
+  removedBy       String?    // who removed (lead userId or self)
+  removalReason   String?
+  withdrawnAt     DateTime?
+  withdrawalReason String?
+  // Provenance
+  addedBy         String   // lead userId who added this participant
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  metadata        Json     @default("{}")
+
+  coordination   ReformCoordination @relation(fields: [coordinationId], references: [id], onDelete: Cascade)
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([coordinationId, tenantId])
+  @@index([tenantId, status])
+  @@map("reform_coordination_participants")
+}
+```
+
+**Key design decisions**:
+1. **`institutionId` optional**: Per ADR-0004, the Institution-Tenant relationship is not 1:1. The lead is responsible for verifying institutional representation (governance process, not system-enforced — G03-L12).
+2. **`role` enum**: `lead` (only the lead tenant's participant row), `contributor` (can create proposals + share snapshots), `observer` (read-only on shared snapshots).
+3. **`status` lifecycle**: `pending_invitation` → `active` (on accept) → `removed` (by lead) or `withdrawn` (by self).
+4. **Soft delete only**: Hard DELETE blocked by RLS. Status changes preserve history.
+
+---
+
+### 2.10 ReformCoordinationInvitation (NEW — per D6)
+
+**Purpose**: Pending invitations with expiry. Append-only (status changes, never deleted).
+
+```prisma
+model ReformCoordinationInvitation {
+  id              String   @id @default(cuid())
+  coordinationId  String
+  invitedTenantId String   // the invited tenant
+  invitedInstitutionId String?  // optional institution the tenant is invited to represent
+  invitedRole     String   @default("contributor")  // "contributor" | "observer"
+  // Lifecycle (append-only — status changes, never deleted)
+  status          String   @default("pending")
+  // pending | accepted | declined | expired | revoked
+  expiresAt       DateTime  // default: 7 days from creation
+  acceptedAt      DateTime?
+  acceptedBy      String?   // userId in invited tenant who accepted
+  declinedAt      DateTime?
+  declinedBy      String?
+  declinedReason  String?
+  revokedAt       DateTime?
+  revokedBy       String?    // lead userId who revoked
+  revocationReason String?
+  // Provenance
+  createdBy       String   // lead userId who sent invitation
+  createdAt       DateTime @default(now())
+  metadata        Json     @default("{}")
+
+  coordination    ReformCoordination @relation(fields: [coordinationId], references: [id], onDelete: Cascade)
+  invitedTenant   Tenant             @relation(fields: [invitedTenantId], references: [id], onDelete: Cascade)
+
+  @@index([coordinationId, status])
+  @@index([invitedTenantId, status])
+  @@index([expiresAt])
+  @@map("reform_coordination_invitations")
+}
+```
+
+**Key design decisions**:
+1. **`expiresAt` required**: Default 7 days. Expired invitations cannot be accepted.
+2. **`invitedTenantId` verified on accept**: The accept service checks `session.tenantId === invitation.invitedTenantId` (T8 mitigation).
+3. **Append-only**: RLS blocks UPDATE on most fields; only `status` + acceptance/decline/revocation fields can be updated. DELETE blocked entirely.
+4. **`invitedInstitutionId` optional**: Documents which institution the lead expects the tenant to represent.
+
+---
+
+### 2.11 ReformCoordinationSharedSnapshot (NEW — per D6)
+
+**Purpose**: Explicitly shared, reviewer-approved, immutable snapshots. Supports draft mode (private to owner) before approval.
+
+```prisma
+model ReformCoordinationSharedSnapshot {
+  id              String   @id @default(cuid())
+  coordinationId  String
+  ownerTenantId   String   // the sharing tenant
+  // Content (reviewed before sharing — no classified content)
+  snapshotType    String   // "commitment" | "milestone" | "progress" | "outcome" | "constraint"
+  title           String   // human-readable (reviewed)
+  summary         String   // human-written (reviewed, no classified content)
+  // Lifecycle (draft mode supported per owner decision)
+  status          String   @default("draft")
+  // draft | under_review | approved | revoked
+  // draft: private to owner (per owner decision on shared snapshots)
+  // under_review: submitted for reviewer approval
+  // approved: visible to coordination participants
+  // revoked: revoked via revocation table (no UPDATE)
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  approvedBy      String?   // reviewer userId (required before visible to participants)
+  // Classification (always "shared_within_coordination" — never "public")
+  classification  String   @default("shared_within_coordination")
+  // Linked proposal/action (optional — owner may share context)
+  proposalId      String?   // FK to owner's ReformProposal (optional)
+  actionId        String?   // FK to owner's ReformAction (optional)
+  // Provenance
+  createdBy       String   // analyst userId who created
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  metadata        Json     @default("{}")
+
+  coordination   ReformCoordination @relation(fields: [coordinationId], references: [id], onDelete: Cascade)
+  ownerTenant    Tenant             @relation(fields: [ownerTenantId], references: [id], onDelete: Cascade)
+  proposal       ReformProposal?    @relation(fields: [proposalId], references: [id])
+  action         ReformAction?      @relation(fields: [actionId], references: [id])
+  revocations    ReformCoordinationSharedSnapshotRevocation[]
+
+  @@index([coordinationId, status])
+  @@index([ownerTenantId, status])
+  @@map("reform_coordination_shared_snapshots")
+}
+```
+
+**Key design decisions**:
+1. **Draft mode supported** (per owner decision): Snapshots start as `draft` (private to owner). The owner can submit for review (`under_review`), then the reviewer approves (`approved`). Only `approved` snapshots are visible to other participants.
+2. **`classification` always `"shared_within_coordination"`**: Never `"public"` — these snapshots are for coordination participants only, not for the public/research tiers (G02-L25 inheritance).
+3. **Reviewer approval required**: `approvedBy` + `approvedAt` must be set before the snapshot appears in other participants' shared view.
+4. **Revocation via separate table**: To revoke, the owner's reviewer creates a row in `ReformCoordinationSharedSnapshotRevocation` (append-only). The shared view service filters out revoked snapshots.
+
+---
+
+### 2.12 ReformCoordinationSharedSnapshotRevocation (NEW — per D6)
+
+**Purpose**: Append-only revocation records. Allows revoking a shared snapshot without UPDATE on the snapshot table.
+
+```prisma
+model ReformCoordinationSharedSnapshotRevocation {
+  id              String   @id @default(cuid())
+  tenantId        String   // the revoking tenant (must match snapshot's ownerTenantId)
+  coordinationId  String
+  snapshotId      String
+  // Revocation details
+  revokedBy       String   // reviewer userId
+  revokedAt       DateTime @default(now())
+  reason          String   // min 10 chars
+  // Provenance
+  metadata        Json     @default("{}")
+
+  snapshot        ReformCoordinationSharedSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId])  // one revocation per snapshot
+  @@index([coordinationId])
+  @@map("reform_coordination_shared_snapshot_revocations")
+}
+```
+
+**Key design decisions**:
+1. **Append-only**: RLS blocks UPDATE + DELETE. Once a revocation is recorded, it cannot be undone (the snapshot stays revoked). To "un-revoke", create a NEW shared snapshot with the same content.
+2. **`@@unique([snapshotId])`**: One revocation per snapshot. Attempting to revoke an already-revoked snapshot fails.
+3. **`tenantId` must match `snapshot.ownerTenantId`**: Enforced by RLS (only the owner tenant can INSERT into this table for their snapshots).
+
+---
+
 ## 3. Database-Level Enforcement
 
-### 3.1 RLS Policies (all 7 tables)
+### 3.1 RLS Policies (all 12 tables)
 
-Each of the 7 new tables gets the same RLS policy pattern as G01/G02:
+Each of the 12 new tables gets the appropriate RLS policy pattern:
+
+- **7 core tables**: Standard tenant-isolation RLS (same as G01/G02 pattern)
+- **5 coordination tables**: Coordination-aware RLS using `is_coordination_participant()` helper (see `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md` for full policy specifications)
 
 ```sql
 -- Enable + Force RLS
@@ -575,10 +853,17 @@ CREATE TRIGGER enforce_reform_feedback_attribution_descriptive
   FOR EACH ROW EXECUTE FUNCTION enforce_reform_feedback_attribution_descriptive();
 ```
 
-### 3.7 Supersession Trigger (ReformProposal)
+### 3.7 Supersession Trigger (ReformProposal) — Historical Preservation
+
+**Owner directive (REV 3)**: "لا تنقل الروابط التاريخية للمقترحات أو الموافقات القديمة إلى تنسيق بديل بصمت. يجب أن يدعم supersession تاريخاً واضحاً وروابط ثابتة، مع سجلات تدقيق تشرح الإحلال."
+
+The supersession trigger enforces **historical preservation** — it does NOT rewrite old proposals' `coordinationId` or any other historical link.
 
 ```sql
 -- When a proposal is superseded, set supersededAt + status
+-- CRITICAL: This trigger does NOT modify the old proposal's coordinationId, 
+-- strategyVersionId, or any other historical link. The old proposal's 
+-- context is preserved exactly as it was when it was approved.
 CREATE OR REPLACE FUNCTION enforce_reform_proposal_supersession()
 RETURNS TRIGGER AS $$
 BEGIN
@@ -589,6 +874,9 @@ BEGIN
     IF NEW."supersededAt" IS NULL THEN
       NEW."supersededAt" := NOW();
     END IF;
+    -- CRITICAL: Do NOT modify coordinationId, strategyVersionId, or other historical links.
+    -- The old proposal's context stays as it was when approved.
+    -- The supersession is a documented historical link, NOT a rewrite.
   END IF;
   RETURN NEW;
 END;
@@ -598,6 +886,66 @@ CREATE TRIGGER enforce_reform_proposal_supersession
   BEFORE UPDATE ON reform_proposals
   FOR EACH ROW EXECUTE FUNCTION enforce_reform_proposal_supersession();
 ```
+
+#### 3.7.1 Coordination Supersession (Historical Link)
+
+```sql
+-- When a coordination is superseded, the same historical-preservation rule applies:
+-- do NOT rewrite old proposals' coordinationId to the new coordination.
+-- The new coordination must explicitly link its own proposals.
+CREATE OR REPLACE FUNCTION enforce_reform_coordination_supersession()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF NEW.status = 'superseded' AND OLD.status != 'superseded' THEN
+    IF NEW."supersededById" IS NULL THEN
+      RAISE EXCEPTION 'supersededById is required when coordination status = superseded';
+    END IF;
+    IF NEW."supersededAt" IS NULL THEN
+      NEW."supersededAt" := NOW();
+    END IF;
+    -- CRITICAL: Do NOT update reform_proposals.coordinationId for old proposals.
+    -- Old proposals retain their original coordinationId (pointing to this superseded coordination).
+    -- New proposals are created with the new coordinationId (pointing to the superseding coordination).
+    -- This preserves the historical context of each proposal.
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER enforce_reform_coordination_supersession
+  BEFORE UPDATE ON reform_coordinations
+  FOR EACH ROW EXECUTE FUNCTION enforce_reform_coordination_supersession();
+```
+
+#### 3.7.2 Audit Trail for Supersession
+
+Every supersession is atomically audited via `writeAuditTx`:
+
+```typescript
+// Service-layer audit (inside the supersession transaction)
+await writeAuditTx(tx, {
+  tenantId,
+  actor: userId,
+  action: "reform.proposal_superseded",  // or "reform.coordination_superseded"
+  status: "ok",
+  details: {
+    supersededProposalId: oldProposalId,
+    supersedingProposalId: newProposalId,
+    reason: "New proposal approved for same originating alert",
+    // CRITICAL: historical context preserved
+    oldProposalCoordinationId: oldProposal.coordinationId,  // unchanged
+    oldProposalStrategyVersionId: oldProposal.strategyVersionId,  // unchanged
+  },
+});
+```
+
+The audit entry records:
+- **What was superseded** (old proposal ID)
+- **What superseded it** (new proposal ID)
+- **Why** (reason)
+- **Historical context preserved** (old proposal's coordinationId, strategyVersionId — NOT modified)
+
+This ensures the audit trail explains the supersession without rewriting history.
 
 ---
 
@@ -997,46 +1345,77 @@ await upsertReformProposal(tx, {
 
 ```
 prisma/migrations/20261018000022_g03_reform_bootstrap/
-├── migration.sql    # ~400 lines
+├── migration.sql    # ~600 lines (was ~400 — added coordination tables + helper function)
 └── migration_lock.toml
 ```
 
 **migration.sql contents (in order)**:
 
-1. `CREATE TABLE reform_proposals (...)`
+1. `CREATE TABLE reform_proposals (...)` (with `coordinationId` field per D6)
 2. `CREATE TABLE reform_alternatives (...)`
 3. `CREATE TABLE reform_approvals (...)`
 4. `CREATE TABLE reform_actions (...)`
 5. `CREATE TABLE reform_action_updates (...)`
 6. `CREATE TABLE reform_verifications (...)`
 7. `CREATE TABLE reform_feedback_loops (...)`
-8. `CREATE INDEX ...` (all indexes from §6.1)
-9. `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` (all 7 tables)
-10. `ALTER TABLE ... FORCE ROW LEVEL SECURITY` (all 7 tables)
-11. `CREATE POLICY ... FOR balance_app` (all 7 tables)
-12. `CREATE POLICY ... FOR balance_admin` (all 7 tables)
-13. `GRANT SELECT, INSERT, UPDATE, DELETE ON ... TO balance_app` (all 7 tables)
-14. `REVOKE UPDATE, DELETE ON reform_action_updates FROM balance_app`
-15. `REVOKE UPDATE, DELETE ON reform_approvals FROM balance_app`
-16. `REVOKE UPDATE, DELETE ON reform_feedback_loops FROM balance_app`
-17. `CREATE UNIQUE INDEX reform_alternatives_one_selected_per_proposal ...`
-18. `CREATE FUNCTION enforce_reform_alternative_same_tenant() ...`
-19. `CREATE TRIGGER enforce_reform_alternative_same_tenant ...`
-20. (repeat cross-tenant triggers for approvals, actions, action_updates, verifications, feedback_loops)
-21. `CREATE FUNCTION enforce_reform_verification_f6() ...`
-22. `CREATE TRIGGER enforce_reform_verification_f6 ...`
-23. `CREATE FUNCTION enforce_reform_feedback_attribution_descriptive() ...`
-24. `CREATE TRIGGER enforce_reform_feedback_attribution_descriptive ...`
-25. `CREATE FUNCTION enforce_reform_proposal_supersession() ...`
-26. `CREATE TRIGGER enforce_reform_proposal_supersession ...`
+8. `CREATE TABLE reform_coordinations (...)` (per D6)
+9. `CREATE TABLE reform_coordination_participants (...)` (per D6)
+10. `CREATE TABLE reform_coordination_invitations (...)` (per D6)
+11. `CREATE TABLE reform_coordination_shared_snapshots (...)` (per D6)
+12. `CREATE TABLE reform_coordination_shared_snapshot_revocations (...)` (per D6)
+13. `CREATE INDEX ...` (all indexes)
+14. `ALTER TABLE ... ENABLE ROW LEVEL SECURITY` (all 12 tables)
+15. `ALTER TABLE ... FORCE ROW LEVEL SECURITY` (all 12 tables)
+16. `CREATE POLICY ... FOR balance_app` (7 core tables — standard tenant isolation)
+17. `CREATE POLICY ... FOR balance_admin` (all 12 tables)
+18. `CREATE FUNCTION public.is_coordination_participant(TEXT) RETURNS BOOLEAN ...` (SECURITY INVOKER, per Security Contract §2)
+19. `GRANT EXECUTE ON FUNCTION ... TO balance_app, balance_admin`
+20. `CREATE POLICY reform_coordinations_select ... USING (leadTenantId = ... OR is_coordination_participant(...))` (coordination-aware RLS — see Security Contract §3)
+21. `CREATE POLICY reform_coordination_participants_*` (coordination RLS)
+22. `CREATE POLICY reform_coordination_invitations_*` (coordination RLS)
+23. `CREATE POLICY reform_coordination_shared_snapshots_*` (coordination RLS)
+24. `CREATE POLICY reform_coordination_shared_snapshot_revocations_*` (coordination RLS)
+25. `GRANT SELECT, INSERT, UPDATE, DELETE ON 7 core tables TO balance_app` (with appropriate restrictions)
+26. `GRANT SELECT, INSERT, UPDATE ON coordination tables TO balance_app` (with restrictions per Security Contract §6.1)
+27. `REVOKE UPDATE, DELETE ON reform_action_updates FROM balance_app`
+28. `REVOKE UPDATE, DELETE ON reform_approvals FROM balance_app`
+29. `REVOKE UPDATE, DELETE ON reform_feedback_loops FROM balance_app`
+30. `REVOKE UPDATE, DELETE ON reform_coordination_shared_snapshots FROM balance_app`
+31. `REVOKE UPDATE, DELETE ON reform_coordination_shared_snapshot_revocations FROM balance_app`
+32. `REVOKE DELETE ON reform_coordination_invitations FROM balance_app`
+33. `CREATE UNIQUE INDEX reform_alternatives_one_selected_per_proposal ...`
+34. `CREATE UNIQUE INDEX reform_coordination_shared_snapshot_revocations_one_per_snapshot ...`
+35. `CREATE FUNCTION enforce_reform_alternative_same_tenant() ...` (cross-tenant trigger)
+36. `CREATE TRIGGER enforce_reform_alternative_same_tenant ...`
+37. (repeat cross-tenant triggers for approvals, actions, action_updates, verifications, feedback_loops)
+38. `CREATE FUNCTION enforce_reform_verification_f6() ...`
+39. `CREATE TRIGGER enforce_reform_verification_f6 ...`
+40. `CREATE FUNCTION enforce_reform_feedback_attribution_descriptive() ...`
+41. `CREATE TRIGGER enforce_reform_feedback_attribution_descriptive ...`
+42. `CREATE FUNCTION enforce_reform_proposal_supersession() ...` (preserves historical links — see §3.8)
+43. `CREATE TRIGGER enforce_reform_proposal_supersession ...`
+44. `CREATE FUNCTION enforce_reform_coordination_supersession() ...` (preserves historical links)
+45. `CREATE TRIGGER enforce_reform_coordination_supersession ...`
+46. `CREATE FUNCTION enforce_coordination_approval_policy_immutable() ...` (blocks UPDATE on approvalPolicy)
+47. `CREATE TRIGGER enforce_coordination_approval_policy_immutable ...`
+48. `CREATE FUNCTION enforce_coordination_activation() ...` (sets status=active when ALL linked proposals approved)
+49. `CREATE TRIGGER enforce_coordination_activation ...` (fires on ReformProposal status change)
 
 ---
 
 ## 10. Conclusion
 
-The domain model proposed here introduces **7 new PRIVATE tables** with **35+ fields**, **20+ indexes**, **7 RLS policies**, **6 cross-tenant triggers**, **1 F6 enforcement trigger**, **1 attribution-level trigger**, and **1 supersession trigger**. All tables follow the proven G01/G02 pattern: tenant-scoped, RLS-enforced, append-only where history matters, immutable where sovereignty matters.
+The domain model proposed here introduces **12 new PRIVATE tables** (7 core + 5 coordination) with **50+ fields**, **25+ indexes**, **12 RLS policies** (7 standard + 5 coordination-aware), **1 SECURITY INVOKER helper function**, **8 cross-tenant triggers**, **1 F6 enforcement trigger**, **1 attribution-level trigger**, **2 supersession triggers** (proposal + coordination), **1 coordination approval policy immutability trigger**, and **1 coordination activation trigger**. All tables follow the proven G01/G02 pattern: tenant-scoped, RLS-enforced, append-only where history matters, immutable where sovereignty matters.
 
-The model honors all 14 inherited invariants and introduces **10 new G03 invariants** that become frozen after owner approval. The DB-level enforcement (triggers + RLS) ensures that invariants cannot be bypassed by application bugs — the database itself rejects violations.
+The model honors all 14 inherited invariants and introduces **10 new G03 invariants** that become frozen after owner approval. The DB-level enforcement (triggers + RLS + SECURITY INVOKER function) ensures that invariants cannot be bypassed by application bugs — the database itself rejects violations.
+
+**Coordination-specific guarantees** (per `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md`):
+- No cross-tenant data leak via coordination system (RLS + SECURITY INVOKER)
+- No RLS bypass (function uses caller's privileges)
+- No data exfiltration via helper function (returns BOOLEAN only)
+- Append-only history (snapshots, revocations, invitations)
+- Audit trail completeness (every coordination action atomically audited)
+- 20 negative tests verify the contract on real PostgreSQL 16
 
 ---
 

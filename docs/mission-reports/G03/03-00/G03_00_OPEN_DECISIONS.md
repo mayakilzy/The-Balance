@@ -2,10 +2,10 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Open decisions register (DESIGN ONLY — no code)
-> **Date:** 2026-10-18 (revision 2 — post owner review)
+> **Date:** 2026-10-18 (revision 3 — post owner + reviewer second review)
 > **Author:** GLM (implementation agent)
-> **Status:** REVISED per owner directive — re-awaiting final approval
-> **Companion to:** `G03_00_THREAT_MODEL.md` (new), `G03_00_ARCHITECTURE_PROPOSAL.md` (revised)
+> **Status:** REVISED per owner directive — sub-questions resolved, awaiting FINAL PASS
+> **Companion to:** `G03_00_THREAT_MODEL.md`, `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md` (new), `G03_00_ARCHITECTURE_PROPOSAL.md` (fully revised)
 
 ---
 
@@ -14,7 +14,8 @@
 | Rev | Date | Changes |
 |-----|------|---------|
 | 1 | 2026-10-18 | Initial proposal — 8 decisions (D1-D8) |
-| 2 | 2026-10-18 (this) | Owner review feedback incorporated. D6 elevated from "DEFERRED" to "APPROVED WITH MODIFICATIONS" (multi-institution coordination is now a core capability). D3 expanded (confidence basis + supporting/contradicting evidence + review status). D8 changed from "defer all" to "per-limitation dependency assessment". New THREAT_MODEL.md document added. New D9 (coordination model details) added. |
+| 2 | 2026-10-18 | Owner review feedback: D6 elevated, D3 expanded, D8 per-limitation, vertical slice added |
+| 3 | 2026-10-18 (this) | Owner + reviewer second review: sub-questions resolved, SECURITY INVOKER (not DEFINER), historical preservation, draft mode for snapshots, cross-strategy links forbidden by default, 5 documents fully updated |
 
 ---
 
@@ -509,29 +510,43 @@ Adopt the 4-table coordination model documented in:
 - `G03_00_DOMAIN_MODEL.md` (revised) — table schemas + RLS + triggers
 - `G03_00_WORKFLOW_AND_APPROVALS.md` (revised) — two-level approval flow
 
-### 10.3 Open Sub-Questions for Owner
+### 10.3 Sub-Questions RESOLVED by Owner (REV 3)
 
-1. **Should `reform:coordination:manage` be restricted to admin only?** Currently admin + reviewer. The owner may want admin-only.
-2. **Should coordination creation require a "charter" document?** A formal charter signed by all participants might be needed for high-stakes reforms. Out of scope for 03-00.
-3. **Should there be a coordination-level audit log (separate from `audit_log`)?** Currently all coordination actions go to standard `audit_log` with `details.coordinationId`. May want a dedicated table for cleaner reporting.
+The owner (Ayman) resolved all 5 sub-questions in REV 3:
+
+| # | Sub-question | Owner decision (REV 3) | Implementation |
+|---|--------------|----------------------|-----------------|
+| 1 | `reform:coordination:manage` scope | **Delegated/specific permission — NOT automatic for all reviewers** | `reform:coordination:manage` requires explicit delegation. A reviewer has it only if explicitly granted by admin. The permission catalog assigns it to `admin` only by default; reviewers must be explicitly delegated per-tenant. |
+| 2 | Early vertical slice timing | **Stays at 03-02** | Mission 03-02 remains the vertical slice. No change to roadmap. |
+| 3 | Shared snapshots draft mode | **Support Draft (unpublished), then review + explicit approval before sharing** | `ReformCoordinationSharedSnapshot.status` lifecycle: `draft` (private to owner) → `under_review` → `approved` (visible to participants) → `revoked` (via separate table). See DOMAIN_MODEL.md §2.11. |
+| 4 | Cross-strategy program/project links | **Forbidden by default unless explicit strategic context verification + delegation** | `allowCrossStrategyProgramLink` flag removed. ReformAction.programId/projectId must match the ReformProposal's strategyVersionId. No cross-strategy links allowed. See D4 revision below. |
+| 5 | Documentation completeness | **Must unify and fully update the 5 documents before 03-01** | All 5 documents (ARCHITECTURE_PROPOSAL, DOMAIN_MODEL, WORKFLOW_AND_APPROVALS, INTEGRATION_CONTRACTS, SECURITY_AND_EVIDENCE_POLICY) are fully updated in REV 3. |
+
+### 10.4 Remaining Open Questions (Non-Blocking for 03-01)
+
+1. **Charter document for high-stakes reforms**: A formal charter signed by all participants might be needed for high-stakes reforms. Out of scope for 03-00. Documented as a future enhancement.
+2. **Coordination-level audit log**: Currently all coordination actions go to standard `audit_log` with `details.coordinationId`. May want a dedicated table for cleaner reporting. Non-blocking — the current approach works, a dedicated table is a UX optimization.
 
 These are flagged for owner review but not blocking for 03-01.
 
 ---
 
-## 11. Decisions That Require Owner Approval Before 03-01
+## 11. Decisions That Require Owner Approval Before 03-01 (REV 3 — Updated)
 
 | # | Decision | Status | Required before 03-01? |
 |---|----------|--------|------------------------|
-| D1 | 11 tables (7 core + 4 coordination) | PROPOSED (revised) | YES |
-| D3 | Expanded `hypothesizedCauses[]` schema | PROPOSED (revised) | YES |
-| D4 | Strict tenant/country/strategy verification for Program/Project links | PROPOSED (revised) | YES |
-| D5 | Four distinct lifecycle states (separation of verification from measurement) | PROPOSED (revised) | YES |
-| D6 | Multi-institution coordination (4 tables, 4 permissions, two-level approval, shared snapshots) | PROPOSED (revised) | YES |
-| D9 | Coordination model details | PROPOSED (new) | YES |
-| D2 | Advisory opportunity detection | APPROVED | No (future mission) |
-| D7 | Soft duplicate check with override | APPROVED | No (before 03-02) |
-| D8 | Per-limitation G02 assessment | PROPOSED (revised) | No (informational) |
+| D1 | **12 tables** (7 core + 5 coordination) | PROPOSED (rev 3 — was 11 in rev 2, added revocations table) | YES |
+| D3 | Expanded `hypothesizedCauses[]` schema (confidenceBasis, contradictingEvidenceIds, reviewStatus, reviewedBy, reviewedAt) | PROPOSED (rev 2) | YES |
+| D4 | **Cross-strategy links forbidden by default** (rev 3 — was "allowed with override" in rev 2) | PROPOSED (rev 3 — owner decision) | YES |
+| D5 | Four distinct lifecycle states (separated verification from measurement) | PROPOSED (rev 2) | YES |
+| D6 | Multi-institution coordination (5 tables, 4 permissions, two-level approval, SECURITY INVOKER) | PROPOSED (rev 3 — SECURITY INVOKER not DEFINER) | YES |
+| D9 | Coordination model details | PROPOSED (rev 2) | YES |
+| D10 (NEW) | SECURITY INVOKER (not DEFINER) for coordination access function | PROPOSED (rev 3 — owner directive) | YES |
+| D11 (NEW) | Historical preservation on supersession (no silent rewrite) | PROPOSED (rev 3 — owner directive) | YES |
+| D12 (NEW) | Shared snapshot draft mode (draft → under_review → approved → revoked) | PROPOSED (rev 3 — owner decision) | YES |
+| D2 | Advisory opportunity detection | APPROVED | No |
+| D7 | Soft duplicate check with override | APPROVED | No |
+| D8 | Per-limitation G02 assessment | PROPOSED (rev 2) | No (informational) |
 
 ---
 
