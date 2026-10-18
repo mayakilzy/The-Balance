@@ -289,16 +289,21 @@ export async function analyzeAggregateIndependence(
         // Collect all evidence linked to the national observation's claim:
         // (a) the direct evidence itself
         // (b) evidence related to it via relatedEvidenceId (relatedBy direction)
+        // FIX 1 (02-02 corrective): include `type` so we can distinguish
+        // supporting evidence from counter-evidence. Verified counter-evidence
+        // does NOT count toward positive national claim support.
         const linkedToNationalClaim: Array<{
           id: string;
           sourceId: string | null;
           verificationStatus: string;
+          type: string;
         }> = [];
         if (directNatEvidence) {
           linkedToNationalClaim.push({
             id: directNatEvidence.id,
             sourceId: directNatEvidence.sourceId,
             verificationStatus: directNatEvidence.verificationStatus,
+            type: directNatEvidence.type,
           });
         }
         for (const rel of relatedByEvidenceRows) {
@@ -307,27 +312,36 @@ export async function analyzeAggregateIndependence(
               id: rel.id,
               sourceId: rel.sourceId,
               verificationStatus: rel.verificationStatus,
+              type: rel.type,
             });
           }
         }
 
-        // Filter to VERIFIED only, then deduplicate by independence group
-        const verifiedLinked = linkedToNationalClaim.filter(
-          (e) => e.verificationStatus === "verified" && e.sourceId !== null
+        // FIX 1 (02-02 corrective): Only VERIFIED SUPPORTING evidence counts
+        // toward positive national claim corroboration. Verified counter-evidence
+        // is NOT positive support — it's contradiction. It must remain visible
+        // (A13) but must NOT inflate the independent support count.
+        const verifiedSupportingLinked = linkedToNationalClaim.filter(
+          (e) =>
+            e.verificationStatus === "verified" &&
+            e.sourceId !== null &&
+            e.type !== "counter" // FIX 1: exclude counter-evidence from positive support
         );
-        const verifiedLinkedSourceIds = verifiedLinked.map((e) => e.sourceId as string);
-        const verifiedLinkedSources = await tx.source.findMany({
-          where: { id: { in: verifiedLinkedSourceIds } },
+        const verifiedSupportingSourceIds = verifiedSupportingLinked.map(
+          (e) => e.sourceId as string
+        );
+        const verifiedSupportingSources = await tx.source.findMany({
+          where: { id: { in: verifiedSupportingSourceIds } },
           select: { id: true, independenceGroup: true },
         });
-        const verifiedIndependentGroupKeys = new Set<string>();
-        for (const s of verifiedLinkedSources) {
-          verifiedIndependentGroupKeys.add(
+        const verifiedSupportingIndependentGroupKeys = new Set<string>();
+        for (const s of verifiedSupportingSources) {
+          verifiedSupportingIndependentGroupKeys.add(
             s.independenceGroup !== null ? s.independenceGroup : s.id
           );
         }
         nationalObsLinkedIndependentVerifiedEvidenceCount =
-          verifiedIndependentGroupKeys.size;
+          verifiedSupportingIndependentGroupKeys.size;
       }
     }
 

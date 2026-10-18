@@ -29,7 +29,7 @@ const mockTx = {
   observationPeriod: { findFirst: vi.fn() },
   indicatorDefinition: { findMany: vi.fn() },
   observation: { findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
-  varianceRecord: { findFirst: vi.fn() },
+  varianceRecord: { findFirst: vi.fn(), findMany: vi.fn() },
   alert: { findMany: vi.fn() },
   evidence: { findFirst: vi.fn(), findMany: vi.fn() },
   source: { findUnique: vi.fn() },
@@ -88,6 +88,8 @@ beforeEach(() => {
     periodValue: "2026-Q2",
   });
   mockTx.indicatorDefinition.findMany.mockResolvedValue([]); // no indicators by default
+  // FIX 2 mock: varianceRecord.findMany returns empty by default (no variance records)
+  mockTx.varianceRecord.findMany.mockResolvedValue([]);
 });
 
 afterEach(() => {

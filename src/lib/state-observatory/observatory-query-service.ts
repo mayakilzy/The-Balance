@@ -225,12 +225,16 @@ export async function getObservatorySnapshot(
 
       if (currentObs?.isSynthetic) anySimulated = true;
 
-      // Correction history (ALL observations for this indicator+period, including superseded)
+      // Correction history — FIX 2 (02-02 corrective): restrict to national
+      // geographic tuple only. The currentObservation is national-level, so
+      // the correction chain must match that scope. Including subnational
+      // observations here would mix unrelated histories.
       const allObsHistory = await tx.observation.findMany({
         where: {
           tenantId,
           indicatorDefinitionId: indicator.id,
           observationPeriodId: params.observationPeriodId,
+          geoLevel: "national", // FIX 2: match the currentObservation's geo scope
         },
         select: {
           id: true,
@@ -264,12 +268,31 @@ export async function getObservatorySnapshot(
       });
 
       // Layer 4: interpretations — alerts
-      // B10 correction: only alerts for THIS indicator + strategy version
+      // FIX 2 (02-02 corrective): restrict alerts to the requested observation
+      // period through their variance-record relationship. Alerts without a
+      // varianceRecordId, or whose variance record belongs to a DIFFERENT
+      // period, must NOT appear in this period's snapshot.
+      //
+      // Approach: find variance record IDs for this (indicator, period), then
+      // filter alerts by varianceRecordId IN that set. This prevents alerts
+      // from a previous period leaking into the current period's snapshot.
+      const periodVarianceRecordIds = await tx.varianceRecord.findMany({
+        where: {
+          tenantId,
+          indicatorDefinitionId: indicator.id,
+          observationPeriodId: params.observationPeriodId,
+        },
+        select: { id: true },
+      });
+      const periodVRIds = periodVarianceRecordIds.map((vr) => vr.id);
+
       const alerts = await tx.alert.findMany({
         where: {
           tenantId,
           indicatorDefinitionId: indicator.id,
           strategyVersionId: params.strategyVersionId,
+          // FIX 2: only alerts linked to a variance record from THIS period
+          varianceRecordId: { in: periodVRIds.length > 0 ? periodVRIds : ["__none__"] },
         },
         select: {
           id: true,
