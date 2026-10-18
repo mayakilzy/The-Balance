@@ -4,14 +4,15 @@
 // Integration tests for getObservatorySnapshot on real PostgreSQL 16.
 // Covers H-06..H-12 per Mission 02-02 spec + owner corrections.
 // ============================================================
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
 import { FixtureTracker } from "./helpers/fixture-tracker";
 
 
-const fixtures = new FixtureTracker();
+const sharedFixtures = new FixtureTracker();
+const testFixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -88,7 +89,7 @@ beforeAll(async () => {
     const strategy = await adminClient.strategy.create({
       data: { tenantId: tenantAId, title: "G02-02 Snap Strategy", createdBy: analystUserId },
     });
-    fixtures.track.strategy(strategy.id);
+    sharedFixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}",
@@ -121,11 +122,18 @@ afterAll(async () => {
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
-  await fixtures.cleanup(adminClient);
+  await testFixtures.cleanup(adminClient);
+    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
+});
+
+afterEach(async () => {
+  if (testFixtures.trackedCount > 0) {
+    await testFixtures.cleanup(adminClient);
+  }
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -151,8 +159,8 @@ describeIntegration("H-06: snapshot structure", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H06",
       displayName: "Indicator H-06",
@@ -165,7 +173,7 @@ describeIntegration("H-06: snapshot structure", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
@@ -208,8 +216,8 @@ describeIntegration("H-07: refuted evidence preserved in snapshot", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H07",
       displayName: "Indicator H-07",
@@ -219,13 +227,13 @@ describeIntegration("H-07: refuted evidence preserved in snapshot", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Verified direct evidence
     const directEv = await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "Direct verified", type: "supporting", verificationStatus: "verified", metadata: { countryId } },
     });
-    fixtures.track.evidence(directEv.id);
+    testFixtures.track.evidence(directEv.id);
     // Refuted related evidence
     await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "Refuted related", type: "counter", verificationStatus: "refuted", relatedEvidenceId: directEv.id, metadata: { countryId } },
@@ -259,8 +267,8 @@ describeIntegration("H-08: disputed evidence preserved", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H08",
       displayName: "Indicator H-08",
@@ -270,12 +278,12 @@ describeIntegration("H-08: disputed evidence preserved", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     const directEv = await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "Direct", type: "supporting", verificationStatus: "verified", metadata: { countryId } },
     });
-    fixtures.track.evidence(directEv.id);
+    testFixtures.track.evidence(directEv.id);
     await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "Disputed related", type: "supporting", verificationStatus: "disputed", relatedEvidenceId: directEv.id, metadata: { countryId } },
     });
@@ -306,8 +314,8 @@ describeIntegration("H-09: cross-tenant snapshot denied", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H09",
       displayName: "Indicator H-09",
@@ -317,7 +325,7 @@ describeIntegration("H-09: cross-tenant snapshot denied", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
       observationPeriodId: periodId,
@@ -357,8 +365,8 @@ describeIntegration("H-10: country-scope UNKNOWN warning in provenanceWarnings",
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H10",
       displayName: "Indicator H-10",
@@ -368,13 +376,13 @@ describeIntegration("H-10: country-scope UNKNOWN warning in provenanceWarnings",
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Evidence with NO countryId
     const evNoCountry = await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "No country", type: "supporting", verificationStatus: "verified", metadata: { someOther: "value" } },
     });
-    fixtures.track.evidence(evNoCountry.id);
+    testFixtures.track.evidence(evNoCountry.id);
 
     const obs = await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
@@ -385,7 +393,7 @@ describeIntegration("H-10: country-scope UNKNOWN warning in provenanceWarnings",
       evidenceId: evNoCountry.id,
       isSynthetic: true,
     });
-    fixtures.track.observation(obs.id);
+    testFixtures.track.observation(obs.id);
 
     const qn = obs.qualityNotes as unknown as Record<string, unknown>;
     const warnings = qn.provenanceWarnings as string[];
@@ -403,8 +411,8 @@ describeIntegration("H-11: source mismatch warning explanatory", () => {
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H11",
       displayName: "Indicator H-11",
@@ -414,23 +422,23 @@ describeIntegration("H-11: source mismatch warning explanatory", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Two different sources
     const src1 = await adminClient.source.create({
       data: { code: "SRC_H11_A", displayName: "Source A", type: "government", reviewStatus: "approved", metadata: { synthetic: true, country: "DML" } },
     });
-    fixtures.track.source(src1.id);
+    testFixtures.track.source(src1.id);
     const src2 = await adminClient.source.create({
       data: { code: "SRC_H11_B", displayName: "Source B", type: "government", reviewStatus: "approved", metadata: { synthetic: true, country: "DML" } },
     });
-    fixtures.track.source(src2.id);
+    testFixtures.track.source(src2.id);
 
     // Evidence citing src2, but observation cites src1 (mismatch)
     const ev = await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: src2.id, claim: "Evidence from src2", type: "supporting", verificationStatus: "verified", metadata: { countryId } },
     });
-    fixtures.track.evidence(ev.id);
+    testFixtures.track.evidence(ev.id);
 
     const obs = await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
@@ -441,7 +449,7 @@ describeIntegration("H-11: source mismatch warning explanatory", () => {
       evidenceId: ev.id, // evidence cites src2
       isSynthetic: true,
     });
-    fixtures.track.observation(obs.id);
+    testFixtures.track.observation(obs.id);
 
     const qn = obs.qualityNotes as unknown as Record<string, unknown>;
     const warnings = qn.provenanceWarnings as string[];
@@ -464,8 +472,8 @@ describeIntegration("H-12: snapshot honesty block", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_SNAP_H12",
       displayName: "Indicator H-12",
@@ -475,7 +483,7 @@ describeIntegration("H-12: snapshot honesty block", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,

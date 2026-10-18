@@ -10,14 +10,15 @@
 // sources, we use DISTINCT geo tuples (geoLevel="subnational" with different
 // geoRefId values) so each observation has its own uniqueness slot.
 // ============================================================
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
 import { FixtureTracker } from "./helpers/fixture-tracker";
 
 
-const fixtures = new FixtureTracker();
+const sharedFixtures = new FixtureTracker();
+const testFixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -110,7 +111,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
-    fixtures.track.strategy(strategy.id);
+    sharedFixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -152,11 +153,18 @@ afterAll(async () => {
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
-  await fixtures.cleanup(adminClient);
+  await testFixtures.cleanup(adminClient);
+    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
+});
+
+afterEach(async () => {
+  if (testFixtures.trackedCount > 0) {
+    await testFixtures.cleanup(adminClient);
+  }
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -204,8 +212,8 @@ describeIntegration("H-05: Independence dedup by independenceGroup", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H05",
@@ -216,7 +224,7 @@ describeIntegration("H-05: Independence dedup by independenceGroup", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Create 3 sources: src_A + src_B share independenceGroup="group-A"; src_C independent
     const srcA = await adminClient.source.create({
@@ -229,7 +237,7 @@ describeIntegration("H-05: Independence dedup by independenceGroup", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(srcA.id);
+    testFixtures.track.source(srcA.id);
     const srcB = await adminClient.source.create({
       data: {
         code: "SRC_H05_B",
@@ -240,7 +248,7 @@ describeIntegration("H-05: Independence dedup by independenceGroup", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(srcB.id);
+    testFixtures.track.source(srcB.id);
     const srcC = await adminClient.source.create({
       data: {
         code: "SRC_H05_C",
@@ -251,7 +259,7 @@ describeIntegration("H-05: Independence dedup by independenceGroup", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(srcC.id);
+    testFixtures.track.source(srcC.id);
 
     // CRITICAL: use distinct geoRefId for each observation to respect F1
     // (observations_one_current_idx)
@@ -367,8 +375,8 @@ describeIntegration("H-06: Multiple obs from same source = 1 source", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H06",
@@ -379,7 +387,7 @@ describeIntegration("H-06: Multiple obs from same source = 1 source", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     const src = await adminClient.source.create({
       data: {
@@ -391,7 +399,7 @@ describeIntegration("H-06: Multiple obs from same source = 1 source", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(src.id);
+    testFixtures.track.source(src.id);
 
     // 2 observations from same source but different geo tuples
     await ingestObservation(analystSession, {
@@ -468,8 +476,8 @@ describeIntegration("H-07: Corrections don't inflate independence", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H07",
@@ -480,7 +488,7 @@ describeIntegration("H-07: Corrections don't inflate independence", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     const src = await adminClient.source.create({
       data: {
@@ -492,7 +500,7 @@ describeIntegration("H-07: Corrections don't inflate independence", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(src.id);
+    testFixtures.track.source(src.id);
 
     // Ingest original
     const original = await ingestObservation(analystSession, {
@@ -503,7 +511,7 @@ describeIntegration("H-07: Corrections don't inflate independence", () => {
       sourceId: src.id,
       isSynthetic: true,
     });
-    fixtures.track.observation(original.id);
+    testFixtures.track.observation(original.id);
 
     // Correct twice
     const corrected1 = await correctObservation(analystSession, original.id, {
@@ -563,8 +571,8 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H08_LOW",
@@ -575,7 +583,7 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // No observations ingested
     const result = await analyzeIndependence(reviewerSession, {
@@ -613,8 +621,8 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H08_PARTIAL",
@@ -625,7 +633,7 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     const src = await adminClient.source.create({
       data: {
@@ -636,7 +644,7 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(src.id);
+    testFixtures.track.source(src.id);
 
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
@@ -682,8 +690,8 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INDEP_H08_FULL",
@@ -694,7 +702,7 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // 2 sources, independent
     const src1 = await adminClient.source.create({
@@ -707,7 +715,7 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(src1.id);
+    testFixtures.track.source(src1.id);
     const src2 = await adminClient.source.create({
       data: {
         code: "SRC_H08_FULL_2",
@@ -718,7 +726,7 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(src2.id);
+    testFixtures.track.source(src2.id);
 
     // 1 verified evidence linked to obs_1
     const evidence = await adminClient.evidence.create({
@@ -731,7 +739,7 @@ describeIntegration("H-08: FULL/PARTIAL/LOW classification", () => {
         metadata: { countryId },
       },
     });
-    fixtures.track.evidence(evidence.id);
+    testFixtures.track.evidence(evidence.id);
 
     // 2 observations from 2 different sources (different geos to respect F1)
     await ingestObservation(analystSession, {
@@ -802,8 +810,8 @@ describeIntegration("H-12: Counter-evidence preserved", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_COUNTER_H12",
@@ -814,7 +822,7 @@ describeIntegration("H-12: Counter-evidence preserved", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     const src = await adminClient.source.create({
       data: {
@@ -825,7 +833,7 @@ describeIntegration("H-12: Counter-evidence preserved", () => {
         metadata: { synthetic: true, country: "DML" },
       },
     });
-    fixtures.track.source(src.id);
+    testFixtures.track.source(src.id);
 
     // Create disputed counter-evidence
     const counterEvidence = await adminClient.evidence.create({
@@ -838,7 +846,7 @@ describeIntegration("H-12: Counter-evidence preserved", () => {
         metadata: { countryId },
       },
     });
-    fixtures.track.evidence(counterEvidence.id);
+    testFixtures.track.evidence(counterEvidence.id);
 
     // Ingest observation linked to the disputed counter-evidence
     // Should succeed (warning, not rejection) per A13
@@ -851,7 +859,7 @@ describeIntegration("H-12: Counter-evidence preserved", () => {
       evidenceId: counterEvidence.id,
       isSynthetic: true,
     });
-    fixtures.track.observation(obs.id);
+    testFixtures.track.observation(obs.id);
 
     expect(obs).toBeDefined();
     expect(obs.evidenceId).toBe(counterEvidence.id);

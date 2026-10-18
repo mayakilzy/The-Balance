@@ -1,12 +1,13 @@
 // Integration tests for 02-05 permissioned view on real PostgreSQL 16.
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
 import { FixtureTracker } from "./helpers/fixture-tracker";
 
 
-const fixtures = new FixtureTracker();
+const sharedFixtures = new FixtureTracker();
+const testFixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -78,7 +79,7 @@ beforeAll(async () => {
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
   if (!sv) {
     const strategy = await adminClient.strategy.create({ data: { tenantId: tenantAId, title: "G02-05 Strategy", createdBy: analystUserId } });
-    fixtures.track.strategy(strategy.id);
+    sharedFixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({ data: { strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}", status: "approved", approvedBy: adminUserId, approvedAt: new Date(), metadata: { simulated: true }, createdBy: analystUserId } });
   }
   strategyVersionId = sv.id;
@@ -101,12 +102,19 @@ afterAll(async () => {
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
-  await fixtures.cleanup(adminClient);
+  await testFixtures.cleanup(adminClient);
+    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
   // CORRECTION 4: scoped by tenantId, not unrestricted
+});
+
+afterEach(async () => {
+  if (testFixtures.trackedCount > 0) {
+    await testFixtures.cleanup(adminClient);
+  }
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -130,13 +138,13 @@ describeIntegration("P-09: government tier returns indicators", () => {
     const adminSession = makeSession({ id: adminUserId, tenantId: tenantAId, roleCode: "admin", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_PERM_P09", displayName: "P-09", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
       observedValue: 9.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
@@ -160,19 +168,19 @@ describeIntegration("P-10: restricted evidence excluded from government projecti
     const adminSession = makeSession({ id: adminUserId, tenantId: tenantAId, roleCode: "admin", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_PERM_P10", displayName: "P-10", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Create RESTRICTED evidence
     const restrictedEv = await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "Restricted claim", type: "supporting", verificationStatus: "verified", classification: "restricted", metadata: { countryId } },
     });
-    fixtures.track.evidence(restrictedEv.id);
+    testFixtures.track.evidence(restrictedEv.id);
 
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
@@ -194,8 +202,8 @@ describeIntegration("P-11: research tier fail-closed", () => {
     const { getPermissionedView } = await import("@/lib/state-observatory/permissioned-view-service");
     const observerSession = makeSession({ id: observerUserId, tenantId: tenantAId, roleCode: "observer", membershipStatus: "active" });
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const result = await getPermissionedView(observerSession, { strategyVersionId, observationPeriodId: periodId });
     expect(result.tier).toBe("research");
@@ -237,23 +245,23 @@ describeIntegration("P-16: no indirect disclosure", () => {
     const adminSession = makeSession({ id: adminUserId, tenantId: tenantAId, roleCode: "admin", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_PERM_P16", displayName: "P-16", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Create 1 public + 1 restricted evidence
     const publicEv = await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "Public claim", type: "supporting", verificationStatus: "verified", classification: "public", metadata: { countryId } },
     });
-    fixtures.track.evidence(publicEv.id);
+    testFixtures.track.evidence(publicEv.id);
     const restrictedEv = await adminClient.evidence.create({
       data: { tenantId: tenantAId, sourceId: centralBankSourceId, claim: "Secret claim", type: "supporting", verificationStatus: "verified", classification: "restricted", metadata: { countryId } },
     });
-    fixtures.track.evidence(restrictedEv.id);
+    testFixtures.track.evidence(restrictedEv.id);
 
     // Link both to observation via direct + related
     await ingestObservation(analystSession, {
@@ -310,14 +318,14 @@ describeIntegration("P-17: G02-L21 sentinel survives cleanup", () => {
       code: "IND_PERM_P17", displayName: "P-17", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId,
     });
-    fixtures.track.indicator(tracked.id);
+    testFixtures.track.indicator(tracked.id);
 
     // Run the view
     const result = await getPermissionedView(adminSession, { strategyVersionId, observationPeriodId: periodId });
     expect(result.tier).toBe("government");
 
     // Cleanup tracked fixtures
-    await fixtures.cleanup(adminClient);
+    await testFixtures.cleanup(adminClient);
 
     // SENTINEL must still exist — it was NOT tracked
     const sentinelAfter = await adminClient.indicatorDefinition.findUnique({ where: { id: sentinel.id } });

@@ -5,14 +5,15 @@
 // Covers V-09..V-18 + CORRECTION 4 requirements.
 // Runs in CI against real PostgreSQL 16 (RUN_INTEGRATION_TESTS=1).
 // ============================================================
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
 import { FixtureTracker } from "./helpers/fixture-tracker";
 
 
-const fixtures = new FixtureTracker();
+const sharedFixtures = new FixtureTracker();
+const testFixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -79,7 +80,7 @@ beforeAll(async () => {
   let sv = await adminClient.strategyVersion.findFirst({ where: { tenantId: tenantAId, status: "approved" } });
   if (!sv) {
     const strategy = await adminClient.strategy.create({ data: { tenantId: tenantAId, title: "G02-04 Strategy", createdBy: analystUserId } });
-    fixtures.track.strategy(strategy.id);
+    sharedFixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({ data: { strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}", status: "approved", approvedBy: analystUserId, approvedAt: new Date(), metadata: { simulated: true }, createdBy: analystUserId } });
   }
   strategyVersionId = sv.id;
@@ -121,12 +122,19 @@ afterAll(async () => {
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
-  await fixtures.cleanup(adminClient);
+  await testFixtures.cleanup(adminClient);
+    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
   // FIX: also clean up programs to prevent cross-test interference
+});
+
+afterEach(async () => {
+  if (testFixtures.trackedCount > 0) {
+    await testFixtures.cleanup(adminClient);
+  }
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -149,14 +157,14 @@ describeIntegration("V-09: program ownership + institutional linkage", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     // Create a program owned by Ministry of Education
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "Edu Reform", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(program.id);
+    testFixtures.track.program(program.id);
     await defineIndicator(analystSession, {
       code: "IND_INST_V09", displayName: "Indicator V-09", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
@@ -184,17 +192,17 @@ describeIntegration("V-10: exact institutional geoRefId", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V10 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(program.id);
+    testFixtures.track.program(program.id);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INST_V10", displayName: "V-10", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Ingest national observation
     await ingestObservation(analystSession, {
@@ -230,17 +238,17 @@ describeIntegration("V-11: national labeled 'linked'", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V11 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(program.id);
+    testFixtures.track.program(program.id);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INST_V11", displayName: "V-11", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
       observedValue: 9.0, originType: "observed", sourceId: centralBankSourceId, isSynthetic: true,
@@ -266,17 +274,17 @@ describeIntegration("V-12: no automatic national attribution", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V12 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(program.id);
+    testFixtures.track.program(program.id);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INST_V12", displayName: "V-12", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
     // Only national observation — NO institutional observation
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
@@ -315,17 +323,17 @@ describeIntegration("V-13: parent/child institution separation", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V13 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(program.id);
+    testFixtures.track.program(program.id);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INST_V13", displayName: "V-13", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
     // Ingest institutional observation with geoRefId = CHILD institution
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
@@ -352,8 +360,8 @@ describeIntegration("V-14: cross-country institution rejection", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     await expect(
       getInstitutionalView(reviewerSession, {
@@ -381,7 +389,7 @@ describeIntegration("V-15: cross-tenant isolation with shared institution", () =
     const strategyB = await adminClient.strategy.create({
       data: { tenantId: tenantBId, title: "Tenant B Strategy V15", createdBy: analystUserId },
     });
-    fixtures.track.strategy(strategyB.id);
+    testFixtures.track.strategy(strategyB.id);
     const svB = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategyB.id, tenantId: tenantBId, versionNumber: 1, content: "{}",
@@ -408,36 +416,36 @@ describeIntegration("V-15: cross-tenant isolation with shared institution", () =
     const objB = await adminClient.objective.create({
       data: { tenantId: tenantBId, countryId, title: "V15 Obj B", targetMetric: "test", targetValue: "5.0", horizon: 5, status: "active", createdBy: tenantBReviewer.id },
     });
-    fixtures.track.objective(objB.id);
+    testFixtures.track.objective(objB.id);
 
     const periodIdA = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodIdA);
-    fixtures.track.observationPeriod(periodIdA);
+    testFixtures.track.observationPeriod(periodIdA);
+    testFixtures.track.observationPeriod(periodIdA);
     const periodIdB = await ensureQuarter(tenantBId, 2026, 2);
-    fixtures.track.observationPeriod(periodIdB);
-    fixtures.track.observationPeriod(periodIdB);
+    testFixtures.track.observationPeriod(periodIdB);
+    testFixtures.track.observationPeriod(periodIdB);
 
     // Tenant A creates program + indicator for the shared institution
     const progA = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V15 Prog A", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(progA.id);
+    testFixtures.track.program(progA.id);
     const indA = await defineIndicator(analystSessionA, {
       code: "IND_V15_A", displayName: "V-15 A", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: progA.id,
     });
-    fixtures.track.indicator(indA.id);
+    testFixtures.track.indicator(indA.id);
 
     // Tenant B creates its OWN program + indicator for the SAME institution
     const progB = await adminClient.program.create({
       data: { tenantId: tenantBId, strategyVersionId: svB.id, title: "V15 Prog B", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(progB.id);
+    testFixtures.track.program(progB.id);
     const indB = await defineIndicator(analystSessionB, {
       code: "IND_V15_B", displayName: "V-15 B", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId: svB.id, objectiveId: objB.id, programId: progB.id,
     });
-    fixtures.track.indicator(indB.id);
+    testFixtures.track.indicator(indB.id);
 
     // POSITIVE: Tenant A sees its own program + indicator, NOT Tenant B's
     const viewA = await getInstitutionalView(reviewerSessionA, {
@@ -474,17 +482,17 @@ describeIntegration("V-18: missing institutional observations = UNKNOWN", () => 
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V18 Program", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(program.id);
+    testFixtures.track.program(program.id);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_INST_V18", displayName: "V-18", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
     // Only national — NO institutional
     await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id, observationPeriodId: periodId,
@@ -511,12 +519,12 @@ describeIntegration("V-08b: no fabricated execution verification", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const program = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "V08b Program", sector: "education", owningInstitutionId: institutionEduId, status: "completed" },
     });
-    fixtures.track.program(program.id);
+    testFixtures.track.program(program.id);
     await defineIndicator(analystSession, {
       code: "IND_INST_V08B", displayName: "V-08B", unit: "percent",
       preferredDirection: "decrease", alertThresholds: [], strategyVersionId, objectiveId, programId: program.id,
@@ -547,18 +555,18 @@ describeIntegration("V-17: sector view indicator counting across institutions", 
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     // Two programs from two different institutions in the same sector
     const prog1 = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "Edu Program 1", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(prog1.id);
+    testFixtures.track.program(prog1.id);
     const prog2 = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId, title: "Health Program 1", sector: "education", owningInstitutionId: institutionHealthId, status: "active" },
     });
-    fixtures.track.program(prog2.id);
+    testFixtures.track.program(prog2.id);
 
     // Each program has one distinct indicator (schema limitation: 1 indicator = 1 programId)
     await defineIndicator(analystSession, {
@@ -595,14 +603,14 @@ describeIntegration("V-19: strategy-version and period isolation", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     // Create a SECOND strategy version (draft — not approved) for the same tenant
     const strategy2 = await adminClient.strategy.create({
       data: { tenantId: tenantAId, title: "V19 Second Strategy", createdBy: analystUserId },
     });
-    fixtures.track.strategy(strategy2.id);
+    testFixtures.track.strategy(strategy2.id);
     const sv2 = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy2.id, tenantId: tenantAId, versionNumber: 1, content: "{}",
@@ -615,7 +623,7 @@ describeIntegration("V-19: strategy-version and period isolation", () => {
     const prog2 = await adminClient.program.create({
       data: { tenantId: tenantAId, strategyVersionId: sv2.id, title: "V19 Prog SV2", sector: "education", owningInstitutionId: institutionEduId, status: "active" },
     });
-    fixtures.track.program(prog2.id);
+    testFixtures.track.program(prog2.id);
     // Indicator linked to prog2 (which belongs to sv2)
     await defineIndicator(analystSession, {
       code: "IND_V19_SV2", displayName: "V-19 SV2 Indicator", unit: "percent",

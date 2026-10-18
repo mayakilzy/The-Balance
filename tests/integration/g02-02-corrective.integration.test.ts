@@ -5,14 +5,15 @@
 //   H-13: Two independent VERIFIED counter-evidence do NOT produce FULL
 //   H-14: Snapshot does not mix periods (alerts + correction history)
 // ============================================================
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
 import { FixtureTracker } from "./helpers/fixture-tracker";
 
 
-const fixtures = new FixtureTracker();
+const sharedFixtures = new FixtureTracker();
+const testFixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -86,7 +87,7 @@ beforeAll(async () => {
     const strategy = await adminClient.strategy.create({
       data: { tenantId: tenantAId, title: "G02-02 Corr Strategy", createdBy: analystUserId },
     });
-    fixtures.track.strategy(strategy.id);
+    sharedFixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id, tenantId: tenantAId, versionNumber: 1, content: "{}",
@@ -119,11 +120,18 @@ afterAll(async () => {
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
-  await fixtures.cleanup(adminClient);
+  await testFixtures.cleanup(adminClient);
+    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
+});
+
+afterEach(async () => {
+  if (testFixtures.trackedCount > 0) {
+    await testFixtures.cleanup(adminClient);
+  }
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -150,8 +158,8 @@ describeIntegration("H-13: verified counter-evidence does NOT produce FULL", () 
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_CORR_H13",
       displayName: "Indicator H-13 Counter",
@@ -161,17 +169,17 @@ describeIntegration("H-13: verified counter-evidence does NOT produce FULL", () 
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // 2 independent sources
     const src1 = await adminClient.source.create({
       data: { code: "SRC_H13_1", displayName: "Source H-13 1", type: "government", reviewStatus: "approved", independenceGroup: null, metadata: { synthetic: true, country: "DML" } },
     });
-    fixtures.track.source(src1.id);
+    testFixtures.track.source(src1.id);
     const src2 = await adminClient.source.create({
       data: { code: "SRC_H13_2", displayName: "Source H-13 2", type: "government", reviewStatus: "approved", independenceGroup: null, metadata: { synthetic: true, country: "DML" } },
     });
-    fixtures.track.source(src2.id);
+    testFixtures.track.source(src2.id);
 
     // Direct evidence: type="supporting", verified
     const directEvidence = await adminClient.evidence.create({
@@ -184,7 +192,7 @@ describeIntegration("H-13: verified counter-evidence does NOT produce FULL", () 
         metadata: { countryId },
       },
     });
-    fixtures.track.evidence(directEvidence.id);
+    testFixtures.track.evidence(directEvidence.id);
 
     // Related evidence 1: type="counter", verified — this is COUNTER-evidence
     await adminClient.evidence.create({
@@ -245,11 +253,11 @@ describeIntegration("H-14: snapshot period isolation", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodQ1 = await ensureQuarter(tenantAId, 2026, 1);
-    fixtures.track.observationPeriod(periodQ1);
-    fixtures.track.observationPeriod(periodQ1);
+    testFixtures.track.observationPeriod(periodQ1);
+    testFixtures.track.observationPeriod(periodQ1);
     const periodQ2 = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodQ2);
-    fixtures.track.observationPeriod(periodQ2);
+    testFixtures.track.observationPeriod(periodQ2);
+    testFixtures.track.observationPeriod(periodQ2);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_CORR_H14",
@@ -268,7 +276,7 @@ describeIntegration("H-14: snapshot period isolation", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Q1: ingest observation + compute variance + raise alert
     await ingestObservation(analystSession, {
@@ -318,8 +326,8 @@ describeIntegration("H-14: snapshot period isolation", () => {
     const reviewerSession = makeSession({ id: reviewerUserId, tenantId: tenantAId, roleCode: "reviewer", membershipStatus: "active" });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
     const indicator = await defineIndicator(analystSession, {
       code: "IND_CORR_H14B",
       displayName: "Indicator H-14B",
@@ -329,7 +337,7 @@ describeIntegration("H-14: snapshot period isolation", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // National observation + correction
     const nationalObs = await ingestObservation(analystSession, {
@@ -340,7 +348,7 @@ describeIntegration("H-14: snapshot period isolation", () => {
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
-    fixtures.track.observation(nationalObs.id);
+    testFixtures.track.observation(nationalObs.id);
     await correctObservation(analystSession, nationalObs.id, { newValue: 9.2, reason: "national correction" });
 
     // Subnational observation + correction (different geo)
@@ -354,7 +362,7 @@ describeIntegration("H-14: snapshot period isolation", () => {
       geoLevel: "subnational",
       geoRefId: "geo_corr_h14b",
     });
-    fixtures.track.observation(subnationalObs.id);
+    testFixtures.track.observation(subnationalObs.id);
     await correctObservation(analystSession, subnationalObs.id, { newValue: 8.5, reason: "subnational correction" });
 
     // Snapshot — correction chain should only show national observations (2 rows: original + corrected)

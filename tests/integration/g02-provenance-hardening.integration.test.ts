@@ -10,14 +10,15 @@
 // The test verifies rollback on real PostgreSQL, then restores permissions
 // in a finally block to guarantee cleanup.
 // ============================================================
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 import type { Session } from "next-auth";
 import { FixtureTracker } from "./helpers/fixture-tracker";
 
 
-const fixtures = new FixtureTracker();
+const sharedFixtures = new FixtureTracker();
+const testFixtures = new FixtureTracker();
 const DATABASE_URL = process.env.DATABASE_URL ?? "";
 const DIRECT_URL = process.env.DIRECT_URL ?? "";
 const RUN_INTEGRATION = process.env.RUN_INTEGRATION_TESTS === "1";
@@ -130,7 +131,7 @@ beforeAll(async () => {
         createdBy: analystUserId,
       },
     });
-    fixtures.track.strategy(strategy.id);
+    sharedFixtures.track.strategy(strategy.id);
     sv = await adminClient.strategyVersion.create({
       data: {
         strategyId: strategy.id,
@@ -189,11 +190,18 @@ afterAll(async () => {
     await adminClient?.$disconnect();
     await appClient?.$disconnect();
   }
-  await fixtures.cleanup(adminClient);
+  await testFixtures.cleanup(adminClient);
+    await sharedFixtures.cleanup(adminClient);
 });
 
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
+});
+
+afterEach(async () => {
+  if (testFixtures.trackedCount > 0) {
+    await testFixtures.cleanup(adminClient);
+  }
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
@@ -233,8 +241,8 @@ describeIntegration("H-01: Audit failure → real PostgreSQL rollback", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H01",
@@ -245,7 +253,7 @@ describeIntegration("H-01: Audit failure → real PostgreSQL rollback", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // REVOKE INSERT on audit_log from balance_app
     await adminClient.$executeRawUnsafe(
@@ -311,8 +319,8 @@ describeIntegration("H-02: Correction failure → no partial state", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H02",
@@ -323,7 +331,7 @@ describeIntegration("H-02: Correction failure → no partial state", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Ingest original observation (audit_log INSERT works)
     const original = await ingestObservation(analystSession, {
@@ -334,7 +342,7 @@ describeIntegration("H-02: Correction failure → no partial state", () => {
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
-    fixtures.track.observation(original.id);
+    testFixtures.track.observation(original.id);
 
     // Verify original state
     expect(original.isCurrent).toBe(true);
@@ -406,8 +414,8 @@ describeIntegration("H-03: Concurrent correction failure → chain preserved", (
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H03",
@@ -418,7 +426,7 @@ describeIntegration("H-03: Concurrent correction failure → chain preserved", (
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     const original = await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
@@ -428,7 +436,7 @@ describeIntegration("H-03: Concurrent correction failure → chain preserved", (
       sourceId: centralBankSourceId,
       isSynthetic: true,
     });
-    fixtures.track.observation(original.id);
+    testFixtures.track.observation(original.id);
 
     // Two parallel correction attempts
     const promises = [
@@ -493,8 +501,8 @@ describeIntegration("H-04: Duplicate value handling", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H04",
@@ -505,7 +513,7 @@ describeIntegration("H-04: Duplicate value handling", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Two observations with SAME value (9.0) but DIFFERENT geos
     // Both should succeed — value equality alone does NOT trigger rejection
@@ -519,7 +527,7 @@ describeIntegration("H-04: Duplicate value handling", () => {
       geoLevel: "subnational",
       geoRefId: "geo_h04_a",
     });
-    fixtures.track.observation(obs1.id);
+    testFixtures.track.observation(obs1.id);
     const obs2 = await ingestObservation(analystSession, {
       indicatorDefinitionId: indicator.id,
       observationPeriodId: periodId,
@@ -530,7 +538,7 @@ describeIntegration("H-04: Duplicate value handling", () => {
       geoLevel: "subnational",
       geoRefId: "geo_h04_b", // DIFFERENT geo → different uniqueness slot
     });
-    fixtures.track.observation(obs2.id);
+    testFixtures.track.observation(obs2.id);
 
     expect(obs1.id).not.toBe(obs2.id);
     expect(Number(obs1.observedValue)).toBe(9.0);
@@ -553,8 +561,8 @@ describeIntegration("H-04: Duplicate value handling", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H04_F1",
@@ -565,7 +573,7 @@ describeIntegration("H-04: Duplicate value handling", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // First observation with value 9.0
     await ingestObservation(analystSession, {
@@ -612,8 +620,8 @@ describeIntegration("H-09: Country scope mismatch rejected", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H09",
@@ -624,7 +632,7 @@ describeIntegration("H-09: Country scope mismatch rejected", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Create evidence with countryId=JOR (tenant A is DML)
     const jorEvidence = await adminClient.evidence.create({
@@ -637,7 +645,7 @@ describeIntegration("H-09: Country scope mismatch rejected", () => {
         metadata: { countryId: countryJorId }, // mismatch with tenant's DML
       },
     });
-    fixtures.track.evidence(jorEvidence.id);
+    testFixtures.track.evidence(jorEvidence.id);
 
     await expect(
       ingestObservation(analystSession, {
@@ -673,8 +681,8 @@ describeIntegration("H-10: Missing country metadata → warning", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H10",
@@ -685,7 +693,7 @@ describeIntegration("H-10: Missing country metadata → warning", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Evidence with NO countryId in metadata
     const evidenceNoCountry = await adminClient.evidence.create({
@@ -698,7 +706,7 @@ describeIntegration("H-10: Missing country metadata → warning", () => {
         metadata: { someOtherField: "value" }, // no countryId
       },
     });
-    fixtures.track.evidence(evidenceNoCountry.id);
+    testFixtures.track.evidence(evidenceNoCountry.id);
 
     // Should succeed (warning, not rejection)
     const obs = await ingestObservation(analystSession, {
@@ -710,7 +718,7 @@ describeIntegration("H-10: Missing country metadata → warning", () => {
       evidenceId: evidenceNoCountry.id,
       isSynthetic: true,
     });
-    fixtures.track.observation(obs.id);
+    testFixtures.track.observation(obs.id);
 
     expect(obs).toBeDefined();
     expect(obs.evidenceId).toBe(evidenceNoCountry.id);
@@ -747,8 +755,8 @@ describeIntegration("H-11: Cross-tenant evidence rejected", () => {
     });
 
     const periodId = await ensureQuarter(tenantAId, 2026, 2);
-    fixtures.track.observationPeriod(periodId);
-    fixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
+    testFixtures.track.observationPeriod(periodId);
 
     const indicator = await defineIndicator(analystSession, {
       code: "IND_H11",
@@ -759,7 +767,7 @@ describeIntegration("H-11: Cross-tenant evidence rejected", () => {
       strategyVersionId,
       objectiveId,
     });
-    fixtures.track.indicator(indicator.id);
+    testFixtures.track.indicator(indicator.id);
 
     // Create evidence in Tenant B (same country DML, different tenant)
     const tenantBEvidence = await adminClient.evidence.create({
@@ -772,7 +780,7 @@ describeIntegration("H-11: Cross-tenant evidence rejected", () => {
         metadata: { countryId }, // same country as Tenant A
       },
     });
-    fixtures.track.evidence(tenantBEvidence.id);
+    testFixtures.track.evidence(tenantBEvidence.id);
 
     // Tenant A attempts to use Tenant B's evidence → must be rejected
     // RLS will filter it out (evidence.findFirst returns null), and the
