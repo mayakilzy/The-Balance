@@ -3,6 +3,10 @@
 // FIX B: Only tracks records CREATED by this tracker — never pre-existing records.
 // FIX C: Complete tracking — callers must use trackOwned, not track.
 // FIX A: cleanup must run BEFORE disconnect (callers manage disconnect in finally).
+// FINAL ACCEPTANCE ITEM 1: cleanup surfaces real DB errors (no text-based suppression).
+//   deleteMany is already idempotent (count=0 for missing records, no throw),
+//   so any thrown exception is a real DB error and must be surfaced.
+//   Tracking state is RETAINED after failure so the caller can retry or inspect.
 import type { PrismaClient } from "@prisma/client";
 
 export interface OwnedRecord { id: string; createdByThisSuite: boolean; }
@@ -70,6 +74,16 @@ export class FixtureTracker {
    * Delete only tracked records in FK-safe order.
    * FIX A: Caller must run this BEFORE disconnecting Prisma clients.
    * Caller should wrap disconnect in finally block.
+   *
+   * FINAL ACCEPTANCE ITEM 1 — error propagation:
+   *   deleteMany is idempotent (returns { count: 0 } for missing records, no throw).
+   *   Therefore ANY thrown exception is a real database error and MUST be surfaced.
+   *   The previous text-based suppression (`msg.includes("not found")`) could swallow
+   *   real DB errors whose message happened to contain that substring. Removed.
+   *
+   * State retention:
+   *   On failure, `this.ids` is NOT cleared — the caller can retry cleanup or inspect
+   *   the remaining tracked IDs to determine which records need manual attention.
    */
   async cleanup(client: PrismaClient): Promise<void> {
     const errors: string[] = [];
@@ -77,13 +91,11 @@ export class FixtureTracker {
       for (const id of set) {
         try {
           await fn(id);
-          // deleteMany returns { count: 0 } if already cascade-deleted — that's OK
+          // deleteMany is idempotent: count=0 if record was cascade-deleted earlier — no exception.
         } catch (e) {
-          const msg = (e as Error).message;
-          if (msg.includes("No record was found") || msg.includes("not found")) {
-            continue; // expected for cascade-deleted records
-          }
-          errors.push(`${model} ${id}: ${msg}`);
+          // Real database error (FK constraint, connection loss, permission, etc.).
+          // Surface it — do NOT swallow based on message text.
+          errors.push(`${model} ${id}: ${(e as Error).message}`);
         }
       }
     };
@@ -109,6 +121,7 @@ export class FixtureTracker {
     if (errors.length === 0) {
       for (const key of Object.keys(this.ids) as Array<keyof typeof this.ids>) this.ids[key].clear();
     } else {
+      // Retain tracking state after failure — caller can retry or inspect.
       throw new Error(`FixtureTracker cleanup failed for ${errors.length} record(s):\n${errors.join("\n")}`);
     }
   }

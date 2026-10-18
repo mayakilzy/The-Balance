@@ -279,4 +279,287 @@ describeIntegration("G02-L21 sentinel: FixtureTracker ownership semantics on rea
       await manualCleanupPeriod(preExisting.id);
     }
   });
+
+  // ============================================================
+  // FINAL ACCEPTANCE ITEM 1 — Cleanup error propagation
+  // ============================================================
+  //
+  // Forces a REAL database error (foreign key constraint violation) by creating
+  // a StrategyVersion that is referenced by an Observation via the non-cascade
+  // FK `Observation.strategyVersion @relation(fields: [strategyVersionId], references: [id])`
+  // (no onDelete: Cascade — defaults to Restrict).
+  //
+  // The tracker tracks ONLY the StrategyVersion (not the Observation). When
+  // cleanup attempts to delete the StrategyVersion, PostgreSQL throws an FK
+  // constraint violation. The test proves:
+  //   (a) the error IS surfaced (not swallowed by text-based suppression),
+  //   (b) tracking state is RETAINED after failure (caller can retry or inspect).
+  it("FINAL-1: cleanup surfaces real FK constraint errors and retains tracking state after failure", async () => {
+    // Skip if no indicator available (we need it to create an Observation).
+    if (!seededIndicatorId) {
+      console.warn("Skipping FINAL-1 test: no seeded IndicatorDefinition in tenant A");
+      return;
+    }
+
+    // Find a user in tenant A to satisfy Observation.createdBy.
+    const anyUser = await adminClient.user.findFirst({
+      where: { memberships: { some: { tenantId: tenantAId } } },
+    });
+    if (!anyUser) {
+      console.warn("Skipping FINAL-1 test: no user with membership in tenant A");
+      return;
+    }
+
+    // Create a Strategy + approved StrategyVersion (parent records).
+    const strategy = await adminClient.strategy.create({
+      data: { tenantId: tenantAId, title: "FINAL-1 Sentinel Strategy", createdBy: anyUser.id },
+    });
+    const sv = await adminClient.strategyVersion.create({
+      data: {
+        strategyId: strategy.id,
+        tenantId: tenantAId,
+        versionNumber: 1,
+        content: "{}",
+        status: "approved",
+        approvedBy: anyUser.id,
+        approvedAt: new Date(),
+        metadata: { simulated: true, source: "g02-l21-final1-sentinel" },
+        createdBy: anyUser.id,
+      },
+    });
+
+    // Create an ObservationPeriod + Observation that references the StrategyVersion.
+    // Observation.strategyVersion is a non-cascade FK → deleting the SV will fail.
+    const period = await adminClient.observationPeriod.create({
+      data: {
+        tenantId: tenantAId,
+        periodType: "quarterly",
+        periodValue: "2097-Q1",
+        startAt: new Date(Date.UTC(2097, 0, 1)),
+        endAt: new Date(Date.UTC(2097, 2, 31, 23, 59, 59)),
+      },
+    });
+    const observation = await adminClient.observation.create({
+      data: {
+        tenantId: tenantAId,
+        indicatorDefinitionId: seededIndicatorId,
+        observationPeriodId: period.id,
+        strategyVersionId: sv.id, // <-- non-cascade FK reference
+        observedValue: 1.0,
+        originType: "observed",
+        isSynthetic: true,
+        createdBy: anyUser.id,
+      },
+    });
+
+    const tracker = new FixtureTracker();
+    // Track ONLY the StrategyVersion — NOT the Observation.
+    // Cleanup will try to delete the SV, but the Observation's FK blocks it.
+    tracker.trackOwned.strategyVersion({ id: sv.id, createdByThisSuite: true });
+    expect(tracker.trackedCount).toBe(1);
+
+    try {
+      // === Cleanup MUST throw — FK constraint violation is surfaced, not swallowed. ===
+      await expect(tracker.cleanup(adminClient)).rejects.toThrow(/FixtureTracker cleanup failed/);
+
+      // The error message should mention the strategyVersion model and the failing ID.
+      // (We don't assert the exact PG error code — that varies by driver version.)
+      try {
+        await tracker.cleanup(adminClient);
+        // Should not reach here.
+        expect.unreachable("cleanup should have thrown");
+      } catch (e) {
+        const msg = (e as Error).message;
+        expect(msg).toContain("strategyVersion");
+        expect(msg).toContain(sv.id);
+      }
+
+      // === Tracking state is RETAINED after failure. ===
+      // Caller can inspect trackedCount to know there are pending records.
+      expect(tracker.trackedCount).toBe(1);
+
+      // === The StrategyVersion still exists in the DB (deletion was blocked). ===
+      const svStillExists = await adminClient.strategyVersion.findUnique({ where: { id: sv.id } });
+      expect(svStillExists).not.toBeNull();
+
+      // === The Observation still exists (we never tracked it). ===
+      const obsStillExists = await adminClient.observation.findUnique({ where: { id: observation.id } });
+      expect(obsStillExists).not.toBeNull();
+    } finally {
+      // Manual cleanup in the correct FK order.
+      await adminClient.observation.deleteMany({ where: { id: observation.id } });
+      await adminClient.observationPeriod.deleteMany({ where: { id: period.id } });
+      await adminClient.strategyVersion.deleteMany({ where: { id: sv.id } });
+      await adminClient.strategy.deleteMany({ where: { id: strategy.id } });
+    }
+  });
+
+  // ============================================================
+  // FINAL ACCEPTANCE ITEM 2 — Parallel ownership safety
+  // ============================================================
+  //
+  // Deterministic test exercising OVERLAPPING (concurrent via Promise.all)
+  // cleanup operations against independently owned fixtures in the SAME tenant.
+  //
+  // Two trackers own disjoint sets of ObservationPeriods in tenant A. A third
+  // "shared" period (owned by NEITHER tracker) is also created. After parallel
+  // cleanup:
+  //   - All tracker-owned periods are deleted.
+  //   - The shared period SURVIVES (neither tracker touched it).
+  //   - Both trackers' state is cleared.
+  //
+  // The test uses 5 periods (2 per tracker + 1 shared) to ensure overlap.
+  it("FINAL-2: parallel cleanup of independent trackers does not cross-delete records", async () => {
+    // === Create 5 periods in the same tenant — all independent (no FK between them). ===
+    const periods: { id: string; periodValue: string }[] = [];
+    for (const q of [1, 2, 3, 4] as const) {
+      const p = await adminClient.observationPeriod.create({
+        data: {
+          tenantId: tenantAId,
+          periodType: "quarterly",
+          periodValue: `2096-Q${q}`,
+          startAt: new Date(Date.UTC(2096, (q - 1) * 3, 1)),
+          endAt: new Date(Date.UTC(2096, (q - 1) * 3 + 3, 0, 23, 59, 59)),
+        },
+      });
+      periods.push({ id: p.id, periodValue: p.periodValue });
+    }
+    // Shared period — owned by NEITHER tracker. Must SURVIVE both cleanups.
+    const sharedPeriod = await adminClient.observationPeriod.create({
+      data: {
+        tenantId: tenantAId,
+        periodType: "quarterly",
+        periodValue: "2096-Q4-shared",
+        startAt: new Date(Date.UTC(2096, 9, 1)),
+        endAt: new Date(Date.UTC(2096, 11, 31, 23, 59, 59)),
+      },
+    });
+
+    // Tracker A owns periods 0 and 1 (Q1 and Q2).
+    const trackerA = new FixtureTracker();
+    trackerA.trackOwned.observationPeriod({ id: periods[0]!.id, createdByThisSuite: true });
+    trackerA.trackOwned.observationPeriod({ id: periods[1]!.id, createdByThisSuite: true });
+    expect(trackerA.trackedCount).toBe(2);
+
+    // Tracker B owns periods 2 and 3 (Q3 and Q4).
+    const trackerB = new FixtureTracker();
+    trackerB.trackOwned.observationPeriod({ id: periods[2]!.id, createdByThisSuite: true });
+    trackerB.trackOwned.observationPeriod({ id: periods[3]!.id, createdByThisSuite: true });
+    expect(trackerB.trackedCount).toBe(2);
+
+    try {
+      // === Run both cleanups CONCURRENTLY via Promise.all. ===
+      // This is the "overlapping" execution the owner requested.
+      // Each cleanup operates on its OWN set of IDs — no shared state.
+      // deleteMany by ID is independent: there is no row-level lock conflict
+      // because the IDs are disjoint.
+      await Promise.all([
+        trackerA.cleanup(adminClient),
+        trackerB.cleanup(adminClient),
+      ]);
+
+      // === All 4 tracker-owned periods are deleted. ===
+      for (let i = 0; i < 4; i++) {
+        const found = await adminClient.observationPeriod.findUnique({
+          where: { id: periods[i]!.id },
+        });
+        expect(found).toBeNull();
+      }
+
+      // === The shared period SURVIVES — neither tracker owned it. ===
+      const sharedSurviving = await adminClient.observationPeriod.findUnique({
+        where: { id: sharedPeriod.id },
+      });
+      expect(sharedSurviving).not.toBeNull();
+      expect(sharedSurviving?.id).toBe(sharedPeriod.id);
+
+      // === Both trackers' state is cleared. ===
+      expect(trackerA.trackedCount).toBe(0);
+      expect(trackerB.trackedCount).toBe(0);
+    } finally {
+      // Defensive manual cleanup (in case the test failed mid-way).
+      await adminClient.observationPeriod.deleteMany({ where: { id: sharedPeriod.id } });
+      for (const p of periods) {
+        await adminClient.observationPeriod.deleteMany({ where: { id: p.id } });
+      }
+    }
+  });
+
+  // ============================================================
+  // FINAL ACCEPTANCE ITEM 2 (supplemental) — Parallel cleanup with overlap
+  // ============================================================
+  //
+  // A more aggressive overlap: BOTH trackers track the SAME record (a deliberate
+  // misuse). Both call cleanup concurrently. The record should be deleted by
+  // whichever tracker runs first; the other tracker's deleteMany returns
+  // count=0 (idempotent — no error). Neither tracker's cleanup throws.
+  //
+  // This proves that parallel cleanup is safe EVEN when trackers accidentally
+  // overlap on the same record — the worst case is a benign count=0.
+  it("FINAL-2b: parallel cleanup with accidental overlap is safe (idempotent deleteMany)", async () => {
+    // Create one period that BOTH trackers will track.
+    const sharedBetweenTrackers = await adminClient.observationPeriod.create({
+      data: {
+        tenantId: tenantAId,
+        periodType: "quarterly",
+        periodValue: "2095-Q1",
+        startAt: new Date(Date.UTC(2095, 0, 1)),
+        endAt: new Date(Date.UTC(2095, 2, 31, 23, 59, 59)),
+      },
+    });
+
+    // Create two additional periods — one owned only by A, one owned only by B.
+    const onlyA = await adminClient.observationPeriod.create({
+      data: {
+        tenantId: tenantAId,
+        periodType: "quarterly",
+        periodValue: "2095-Q2",
+        startAt: new Date(Date.UTC(2095, 3, 1)),
+        endAt: new Date(Date.UTC(2095, 5, 30, 23, 59, 59)),
+      },
+    });
+    const onlyB = await adminClient.observationPeriod.create({
+      data: {
+        tenantId: tenantAId,
+        periodType: "quarterly",
+        periodValue: "2095-Q3",
+        startAt: new Date(Date.UTC(2095, 6, 1)),
+        endAt: new Date(Date.UTC(2095, 8, 30, 23, 59, 59)),
+      },
+    });
+
+    const trackerA = new FixtureTracker();
+    trackerA.trackOwned.observationPeriod({ id: sharedBetweenTrackers.id, createdByThisSuite: true });
+    trackerA.trackOwned.observationPeriod({ id: onlyA.id, createdByThisSuite: true });
+
+    const trackerB = new FixtureTracker();
+    trackerB.trackOwned.observationPeriod({ id: sharedBetweenTrackers.id, createdByThisSuite: true });
+    trackerB.trackOwned.observationPeriod({ id: onlyB.id, createdByThisSuite: true });
+
+    try {
+      // Both cleanups run concurrently; both will try to delete `sharedBetweenTrackers`.
+      // The second deleteMany returns count=0 (idempotent) — no error.
+      await Promise.all([
+        trackerA.cleanup(adminClient),
+        trackerB.cleanup(adminClient),
+      ]);
+
+      // All three periods are deleted.
+      const sharedAfter = await adminClient.observationPeriod.findUnique({ where: { id: sharedBetweenTrackers.id } });
+      expect(sharedAfter).toBeNull();
+      const onlyAAfter = await adminClient.observationPeriod.findUnique({ where: { id: onlyA.id } });
+      expect(onlyAAfter).toBeNull();
+      const onlyBAfter = await adminClient.observationPeriod.findUnique({ where: { id: onlyB.id } });
+      expect(onlyBAfter).toBeNull();
+
+      // Both trackers' state is cleared (both cleanups succeeded).
+      expect(trackerA.trackedCount).toBe(0);
+      expect(trackerB.trackedCount).toBe(0);
+    } finally {
+      // Defensive manual cleanup.
+      await adminClient.observationPeriod.deleteMany({ where: { id: sharedBetweenTrackers.id } });
+      await adminClient.observationPeriod.deleteMany({ where: { id: onlyA.id } });
+      await adminClient.observationPeriod.deleteMany({ where: { id: onlyB.id } });
+    }
+  });
 });
