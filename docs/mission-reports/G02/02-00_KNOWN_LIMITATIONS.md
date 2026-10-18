@@ -96,7 +96,7 @@ not auto-correct any of them.
   REVOKE/GRANT on `audit_log` to inject forced audit failure, then verify
   rollback (no observation row, no partial state). Cleanup guaranteed via
   `finally` block.
-- **Status:** RESOLVED by Mission 02-01 (pending CI verification on 02-01 SHA).
+- **Status:** RESOLVED by Mission 02-01 (CI #144 verified on acb156d — H-01 + H-02 pass on real PostgreSQL 16).
 
 ### G02-L08: Counter-Evidence Country Scope Not Verified (Carried from G01 #10) — RESOLVED by 02-01
 - **Affected component:** `Observation.evidenceId` cross-country scope
@@ -110,7 +110,7 @@ not auto-correct any of them.
   - Explicit mismatch → REJECTION (A6) — verified by H-09
   - Missing countryId → WARNING (A5) — verified by H-10
   - Cross-tenant evidence → REJECTION (A15) — verified by H-11
-- **Status:** RESOLVED by Mission 02-01 (pending CI verification on 02-01 SHA).
+- **Status:** RESOLVED by Mission 02-01 (CI #144 verified on acb156d — H-01 + H-02 pass on real PostgreSQL 16).
 
 ### G02-L09: Variance Computation National-Only in 02-00
 - **Affected component:** `VarianceService.computeVariance`
