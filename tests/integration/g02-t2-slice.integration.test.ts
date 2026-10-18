@@ -274,7 +274,6 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
   // Clean G02 tables before each test (preserves G00/G01 data)
-  await fixtures.cleanup(adminClient);
 });
 
 // ============================================================

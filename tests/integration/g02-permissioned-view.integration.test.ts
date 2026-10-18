@@ -107,7 +107,6 @@ afterAll(async () => {
 beforeEach(async () => {
   if (!RUN_INTEGRATION) return;
   // CORRECTION 4: scoped by tenantId, not unrestricted
-  await fixtures.cleanup(adminClient);
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
