@@ -131,6 +131,11 @@ beforeEach(async () => {
   await adminClient.observation.deleteMany({});
   await adminClient.observationPeriod.deleteMany({});
   await adminClient.indicatorDefinition.deleteMany({});
+  // FIX: also clean up programs to prevent cross-test interference
+  await adminClient.dependency.deleteMany({});
+  await adminClient.budgetLine.deleteMany({});
+  await adminClient.project.deleteMany({});
+  await adminClient.program.deleteMany({});
 });
 
 async function ensureQuarter(tenantId: string, year: number, quarter: 1 | 2 | 3 | 4) {
