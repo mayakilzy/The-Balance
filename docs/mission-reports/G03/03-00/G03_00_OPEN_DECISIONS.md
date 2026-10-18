@@ -2,10 +2,10 @@
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Open decisions register (DESIGN ONLY — no code)
-> **Date:** 2026-10-18 (revision 3 — post owner + reviewer second review)
+> **Date:** 2026-10-18 (revision 4 — post security audit corrections)
 > **Author:** GLM (implementation agent)
-> **Status:** REVISED per owner directive — sub-questions resolved, awaiting FINAL PASS
-> **Companion to:** `G03_00_THREAT_MODEL.md`, `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md` (new), `G03_00_ARCHITECTURE_PROPOSAL.md` (fully revised)
+> **Status:** REV 4 — security corrections per owner/reviewer audit (S1, S2, S3)
+> **Companion to:** `G03_00_SECURITY_CORRECTIONS_REV4.md` (authoritative for S1/S2/S3)
 
 ---
 
@@ -14,8 +14,9 @@
 | Rev | Date | Changes |
 |-----|------|---------|
 | 1 | 2026-10-18 | Initial proposal — 8 decisions (D1-D8) |
-| 2 | 2026-10-18 | Owner review feedback: D6 elevated, D3 expanded, D8 per-limitation, vertical slice added |
-| 3 | 2026-10-18 (this) | Owner + reviewer second review: sub-questions resolved, SECURITY INVOKER (not DEFINER), historical preservation, draft mode for snapshots, cross-strategy links forbidden by default, 5 documents fully updated |
+| 2 | 2026-10-18 | Owner review: D6 elevated, D3 expanded, D8 per-limitation, vertical slice |
+| 3 | 2026-10-18 | Sub-questions resolved, SECURITY INVOKER (not DEFINER), historical preservation, draft mode, 5 docs updated |
+| 4 | 2026-10-18 (this) | Security audit corrections: S1 (SECURITY DEFINER for participant removal), S2 (DB-level revocation), S3 (institutional authority separation). Added D13/D14/D15. |
 
 ---
 
@@ -531,7 +532,61 @@ These are flagged for owner review but not blocking for 03-01.
 
 ---
 
-## 11. Decisions That Require Owner Approval Before 03-01 (REV 3 — Updated)
+## 10.5 NEW Decisions from Security Audit (REV 4 — D13, D14, D15)
+
+Per owner/reviewer security audit (REV 4), three new decisions address the findings S1, S2, S3:
+
+### D13 — SECURITY DEFINER for Participant Removal (S1 Correction)
+
+**Finding S1**: Cross-tenant participant management cannot be done via standard RLS because UPDATE requires SELECT visibility, and the SELECT policy on `reform_coordination_participants` is tenant-scoped (own row only).
+
+**Recommendation**: Use a SECURITY DEFINER function `remove_coordination_participant(coordination_id, participant_id, reason)` owned by a dedicated minimal-privilege role `balance_coordination_admin` (NOLOGIN, SELECT on `reform_coordinations` + UPDATE on `reform_coordination_participants` only).
+
+**Why SECURITY DEFINER here, not INVOKER**: The function must UPDATE a row the caller cannot SELECT (cross-tenant). SECURITY INVOKER would inherit the caller's RLS restrictions and fail. The dedicated role + BOOLEAN return + locked search_path + SQL language make this a controlled exception.
+
+**Alternatives considered** (all rejected):
+- Expand SELECT policy → violates owner directive "no SELECT expansion"
+- Service-layer-only management → no DB-level enforcement
+- Self-service removal only → removes lead's management capability
+
+**Status**: PROPOSED (rev 4) — awaiting owner approval.
+
+---
+
+### D14 — DB-Level Revocation Enforcement (S2 Correction)
+
+**Finding S2**: The SELECT policy on `reform_coordination_shared_snapshots` did not exclude revoked snapshots. Direct SELECT bypassed the service-layer filter.
+
+**Recommendation**:
+1. Add denormalized `coordinationId` (not nullable) to `reform_coordination_shared_snapshot_revocations` — breaks the circular RLS dependency.
+2. Create `is_snapshot_revoked(snapshotId)` function (SECURITY INVOKER, returns BOOLEAN).
+3. Add `AND NOT is_snapshot_revoked("id"::text)` to the SELECT policy on `reform_coordination_shared_snapshots`.
+
+**Why denormalization is needed**: Without `coordinationId` on the revocations table, the RLS policy on revocations must subquery `reform_coordination_shared_snapshots` to find the `coordinationId`. But that table's RLS (with the S2 fix) excludes revoked snapshots — creating a circular dependency where the revocation row is invisible because the snapshot row is invisible. Denormalizing `coordinationId` breaks the cycle.
+
+**Status**: PROPOSED (rev 4) — awaiting owner approval.
+
+---
+
+### D15 — Institutional Authority Separation (S3 Correction)
+
+**Finding S3**: `institutionId` is a claim, not verified authority. The system conflated claimed identity, verified authority, participation authorization, and commitment approval authorization.
+
+**Recommendation**: Separate four concepts:
+1. **Claimed institution**: `institutionId` (lead's assertion — documentation only)
+2. **Verified institution**: `verifiedInstitutionId` + `verifiedAt` + `verifiedBy` + `verificationMethod` (admin-verified via future workflow — G03-L13 deferred)
+3. **Participation authorization**: `tenantId` + invitation status (system-verified via session)
+4. **Commitment approval authorization**: `canApproveCommitments` (boolean, default FALSE, explicit grant by lead or admin)
+
+**Conservative constraint**: To approve commitments claiming institutional authority, a participant must have BOTH `canApproveCommitments = true` AND `verifiedInstitutionId` set (matching the claimed institution).
+
+**What this does NOT solve**: The verification workflow itself (admin setting `verifiedInstitutionId`) is out of scope for 03-00 (G03-L13). Until then, `verifiedInstitutionId` is always NULL, meaning no commitments can claim verified institutional authority — fail-closed.
+
+**Status**: PROPOSED (rev 4) — awaiting owner approval.
+
+---
+
+## 11. Decisions That Require Owner Approval Before 03-01 (REV 4 — Updated)
 
 | # | Decision | Status | Required before 03-01? |
 |---|----------|--------|------------------------|
@@ -544,6 +599,9 @@ These are flagged for owner review but not blocking for 03-01.
 | D10 (NEW) | SECURITY INVOKER (not DEFINER) for coordination access function | PROPOSED (rev 3 — owner directive) | YES |
 | D11 (NEW) | Historical preservation on supersession (no silent rewrite) | PROPOSED (rev 3 — owner directive) | YES |
 | D12 (NEW) | Shared snapshot draft mode (draft → under_review → approved → revoked) | PROPOSED (rev 3 — owner decision) | YES |
+| **D13 (REV 4)** | **SECURITY DEFINER for participant removal** (S1 correction — dedicated minimal-privilege role) | PROPOSED (rev 4 — security audit) | YES |
+| **D14 (REV 4)** | **DB-level revocation enforcement** (S2 correction — denormalized coordinationId + is_snapshot_revoked function) | PROPOSED (rev 4 — security audit) | YES |
+| **D15 (REV 4)** | **Institutional authority separation** (S3 correction — claimed vs verified vs participation vs approval) | PROPOSED (rev 4 — security audit) | YES |
 | D2 | Advisory opportunity detection | APPROVED | No |
 | D7 | Soft duplicate check with override | APPROVED | No |
 | D8 | Per-limitation G02 assessment | PROPOSED (rev 2) | No (informational) |

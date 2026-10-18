@@ -1,34 +1,37 @@
 # G03-00 — Consistency Review
 
-> **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation (REV 3)
+> **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation (REV 4)
 > **Document type:** Cross-document consistency verification (DESIGN ONLY)
-> **Date:** 2026-10-18 (revision 3 — post owner + reviewer second review)
+> **Date:** 2026-10-18 (revision 4 — post security audit corrections)
 > **Author:** GLM (implementation agent)
-> **Status:** PROPOSED — verifies all 9 G03-00 documents speak the same architectural language
-> **Companion to:** All other G03-00 documents
+> **Status:** REV 4 — re-verified after security corrections (S1, S2, S3)
+> **Companion to:** `G03_00_SECURITY_CORRECTIONS_REV4.md` (authoritative for S1/S2/S3)
 
 ---
 
 ## 1. Purpose
 
-Per owner directive (REV 3 §6): "أنشئ مراجعة اتساق توضح أن جميع الوثائق تتفق على [8 نقاط]"
+Per owner directive (REV 3 §6 + REV 4 S4): verify that all G03-00 design documents are internally consistent and free of REV 1/REV 2 contracts presented as active.
 
-This document verifies that all 9 G03-00 design documents are internally consistent. Each section below addresses one of the 8 consistency points the owner requested.
+### 1.1 Honest Acknowledgment (REV 4)
 
-### 1.1 Documents in Scope
+The REV 3 consistency review claimed "no contradictions remain" — but the owner/reviewer security audit (REV 4) found three real design gaps (S1, S2, S3) that the consistency review missed. This REV 4 consistency review is **more rigorous**: it does not claim closure unless the specific RLS policies are verified correct.
+
+### 1.2 Documents in Scope (REV 4)
 
 | # | Document | Status |
 |---|----------|--------|
-| 1 | `G03_00_ARCHITECTURE_PROPOSAL.md` | Header-updated (rev 2) → content verified consistent |
-| 2 | `G03_00_DOMAIN_MODEL.md` | **Fully revised (rev 3)** — 12 tables, D3 expansion, coordination tables, supersession |
-| 3 | `G03_00_WORKFLOW_AND_APPROVALS.md` | Header-updated (rev 2) → content verified consistent |
-| 4 | `G03_00_INTEGRATION_CONTRACTS.md` | Header-updated (rev 2) → content verified consistent |
-| 5 | `G03_00_SECURITY_AND_EVIDENCE_POLICY.md` | Header-updated (rev 2) → content verified consistent |
-| 6 | `G03_00_MISSION_ROADMAP.md` | **Fully revised (rev 2)** — 9 missions |
-| 7 | `G03_00_OPEN_DECISIONS.md` | **Fully revised (rev 3)** — D1-D12, sub-questions resolved |
-| 8 | `G03_00_THREAT_MODEL.md` | **New (rev 2)** — 10 threats |
-| 9 | `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md` | **New (rev 3)** — SECURITY INVOKER contract |
-| 10 | `G03_00_MISSION_REPORT.md` | To be updated for rev 3 |
+| 1 | `G03_00_ARCHITECTURE_PROPOSAL.md` | **Header-updated** — full content update deferred to follow-up (per owner S4 directive, will be done) |
+| 2 | `G03_00_DOMAIN_MODEL.md` | **REV 3 fully revised** — REV 4 corrections referenced in SECURITY_CORRECTIONS_REV4 |
+| 3 | `G03_00_WORKFLOW_AND_APPROVALS.md` | **Header-updated** — full content update deferred to follow-up (per owner S4 directive) |
+| 4 | `G03_00_INTEGRATION_CONTRACTS.md` | **Header-updated** — full content update deferred to follow-up (per owner S4 directive) |
+| 5 | `G03_00_SECURITY_AND_EVIDENCE_POLICY.md` | **Header-updated** — REV 4 corrections in SECURITY_CORRECTIONS_REV4 |
+| 6 | `G03_00_MISSION_ROADMAP.md` | **REV 2 fully revised** — unchanged in REV 4 |
+| 7 | `G03_00_OPEN_DECISIONS.md` | **REV 4 fully revised** — D1-D15 |
+| 8 | `G03_00_THREAT_MODEL.md` | **REV 2** — REV 4 corrections (T11/T12/T13) referenced in SECURITY_CORRECTIONS_REV4 |
+| 9 | `G03_00_SECURITY_CONTRACT_FOR_COORDINATION.md` | **REV 3** — REV 4 corrections referenced in SECURITY_CORRECTIONS_REV4 |
+| 10 | `G03_00_SECURITY_CORRECTIONS_REV4.md` | **NEW (REV 4)** — authoritative for S1/S2/S3 corrections |
+| 11 | `G03_00_MISSION_REPORT.md` | To be updated for REV 4 |
 
 ---
 
