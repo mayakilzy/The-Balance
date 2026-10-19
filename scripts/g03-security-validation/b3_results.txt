@@ -1,48 +1,14 @@
-psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:16: NOTICE:  schema "g03_b3_test" does not exist, skipping
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:19: NOTICE:  schema "g03_b3_test" does not exist, skipping
 DROP SCHEMA
-psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:17: ERROR:  role "balance_app" cannot be dropped because some objects depend on it
-DETAIL:  privileges for schema g03_b1_test
-privileges for table g03_b1_test.reform_coordinations
-privileges for table g03_b1_test.reform_coordination_participants
-target of policy rc_select_app on table g03_b1_test.reform_coordinations
-target of policy rc_insert_app on table g03_b1_test.reform_coordinations
-target of policy rc_update_app on table g03_b1_test.reform_coordinations
-target of policy rcp_select_app on table g03_b1_test.reform_coordination_participants
-target of policy rcp_insert_app on table g03_b1_test.reform_coordination_participants
-target of policy rcp_update_app on table g03_b1_test.reform_coordination_participants
-privileges for function g03_b1_test.remove_coordination_participant(text,text,text)
-privileges for schema g03_b2_test
-privileges for table g03_b2_test.reform_coordinations
-privileges for table g03_b2_test.reform_coordination_participants
-privileges for table g03_b2_test.reform_coordination_shared_snapshots
-privileges for table g03_b2_test.reform_coordination_shared_snapshot_revocations
-privileges for function g03_b2_test.is_coordination_participant(text)
-privileges for function g03_b2_test.is_snapshot_revoked(text)
-target of policy rc_select_app on table g03_b2_test.reform_coordinations
-target of policy rc_insert_app on table g03_b2_test.reform_coordinations
-target of policy rcp_select_app on table g03_b2_test.reform_coordination_participants
-target of policy rcp_insert_app on table g03_b2_test.reform_coordination_participants
-target of policy rss_select_app on table g03_b2_test.reform_coordination_shared_snapshots
-target of policy rss_insert_app on table g03_b2_test.reform_coordination_shared_snapshots
-target of policy rss_update_app on table g03_b2_test.reform_coordination_shared_snapshots
-target of policy rssr_select_app on table g03_b2_test.reform_coordination_shared_snapshot_revocations
-target of policy rssr_insert_app on table g03_b2_test.reform_coordination_shared_snapshot_revocations
-CONTEXT:  SQL statement "DROP ROLE IF EXISTS balance_app"
-PL/pgSQL function inline_code_block line 1 at SQL statement
-psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:18: ERROR:  role "balance_admin" cannot be dropped because some objects depend on it
-DETAIL:  privileges for schema g03_b1_test
-privileges for table g03_b1_test.reform_coordinations
-privileges for table g03_b1_test.reform_coordination_participants
-privileges for schema g03_b2_test
-privileges for table g03_b2_test.reform_coordinations
-privileges for table g03_b2_test.reform_coordination_participants
-privileges for table g03_b2_test.reform_coordination_shared_snapshots
-privileges for table g03_b2_test.reform_coordination_shared_snapshot_revocations
-CONTEXT:  SQL statement "DROP ROLE IF EXISTS balance_admin"
-PL/pgSQL function inline_code_block line 1 at SQL statement
+DO
+RESET
+RESET
+RESET
+RESET
 CREATE SCHEMA
-psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:21: ERROR:  role "balance_app" already exists
-psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:22: ERROR:  role "balance_admin" already exists
+CREATE ROLE
+CREATE ROLE
+CREATE ROLE
 GRANT
 SET
 CREATE TABLE
@@ -65,6 +31,14 @@ CREATE POLICY
 CREATE POLICY
 CREATE POLICY
 CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+GRANT
+GRANT
+GRANT
 GRANT
 GRANT
 CREATE FUNCTION
@@ -83,7 +57,7 @@ SET
 INSERT 0 1
 INSERT 0 2
 RESET
-psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:217: NOTICE:  table "test_results" does not exist, skipping
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:167: NOTICE:  table "test_results" does not exist, skipping
 DROP TABLE
 CREATE TABLE
 DO
@@ -94,25 +68,46 @@ DO
 DO
 DO
 DO
-
+DO
+DO
+DO
+DO
+DO
+;
 ============================================================
-B3 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4)
+B3 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4 — CLEAN, REV 7)
 ============================================================
- test_id  |                             description                             |              expected              |        actual        | result 
-----------+---------------------------------------------------------------------+------------------------------------+----------------------+--------
- B3-TEST1 | Lead grants commitment approval (cross-tenant)                      | TRUE+canApprove=TRUE               | true+canApprove=true | PASS
- B3-TEST2 | Non-lead cannot grant commitment approval                           | FALSE (zero modification)          | false                | PASS
- B3-TEST3 | Institutional commitment FAIL-CLOSED (no verified authority)        | FALSE (fail-closed)                | false                | PASS
- B3-TEST4 | Admin verifies institutional authority                              | TRUE+verifiedInstitutionId=INST-CB | true+INST-CB         | PASS
- B3-TEST5 | Institutional commitment approved (3 checks pass)                   | TRUE+approved                      | true+approved        | PASS
- B3-TEST6 | Non-admin cannot verify institutional authority                     | FALSE (admin-only)                 | false                | PASS
- B3-TEST7 | Non-institutional commitment approved without canApproveCommitments | TRUE (no institutional claim)      | true                 | PASS
- B3-TEST8 | Institution mismatch blocks approval                                | FALSE (verified != claimed)        | false                | PASS
-(8 rows)
+  test_id  |                              description                              |                           expected                           |        actual        | result 
+-----------+-----------------------------------------------------------------------+--------------------------------------------------------------+----------------------+--------
+ B3-TEST1  | Lead grants commitment approval (cross-tenant)                        | TRUE+canApprove=TRUE                                         | true+canApprove=true | PASS
+ B3-TEST10 | Non-lead admin cannot verify (leadTenantId check)                     | FALSE (lead check blocks)                                    | false                | PASS
+ B3-TEST11 | Cannot approve proposal owned by another tenant                       | FALSE (tenantId mismatch)                                    | false                | PASS
+ B3-TEST12 | No side effects on failed approval                                    | count unchanged                                              | count=2              | PASS
+ B3-TEST2  | Non-lead cannot grant                                                 | FALSE                                                        | false                | PASS
+ B3-TEST3  | Fail-closed (no verified authority)                                   | FALSE                                                        | false                | PASS
+ B3-TEST4  | Admin verifies institutional authority                                | TRUE+INST-CB                                                 | true+INST-CB         | PASS
+ B3-TEST5  | Institutional commitment approved (3 checks pass)                     | TRUE+approved                                                | true+approved        | PASS
+ B3-TEST6  | Non-admin cannot verify                                               | FALSE                                                        | false                | PASS
+ B3-TEST7  | Non-institutional approved without canApproveCommitments              | TRUE                                                         | true                 | PASS
+ B3-TEST8  | Institution mismatch blocks approval                                  | FALSE                                                        | false                | PASS
+ B3-TEST9  | app.role impersonation ALONE insufficient (leadTenantId blocks)       | FALSE (lead check blocks even with app.role=admin)           | false                | PASS
+ B3-TEST9b | Double impersonation (app.role + app.tenant_id) succeeds — LIMITATION | TRUE (double impersonation succeeds — documented limitation) | true                 | PASS
+(13 rows)
 
-
- passed | failed | total 
---------+--------+-------
-      8 |      0 |     8
-(1 row)
-
+; SELECT COUNT(*) FILTER (WHERE pass) AS passed, COUNT(*) FILTER (WHERE NOT pass) AS failed, COUNT(*) AS total FROM g03_b3_test.test_results;
+;
+NOTE: B3-TEST9 proves app.role impersonation limitation (same trust boundary as C2).
+B3-TEST10 proves leadTenantId check blocks non-lead admin verification.
+B3-TEST11 proves tenantId ownership check blocks cross-tenant approval.
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:335: NOTICE:  drop cascades to 8 other objects
+DETAIL:  drop cascades to table reform_coordinations
+drop cascades to table reform_coordination_participants
+drop cascades to table reform_proposals
+drop cascades to function is_coordination_participant(text)
+drop cascades to function grant_commitment_approval(text,text,text)
+drop cascades to function verify_institutional_authority(text,text,text,text)
+drop cascades to function approve_reform_proposal(text)
+drop cascades to table test_results
+DROP SCHEMA
+;
+CLEANUP COMPLETE — schema g03_b3_test dropped

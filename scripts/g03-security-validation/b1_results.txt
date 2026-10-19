@@ -1,14 +1,13 @@
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:7: NOTICE:  drop cascades to 4 other objects
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:14: NOTICE:  drop cascades to 4 other objects
 DETAIL:  drop cascades to table g03_b1_test.reform_coordinations
 drop cascades to table g03_b1_test.reform_coordination_participants
 drop cascades to function g03_b1_test.remove_coordination_participant(text,text,text)
 drop cascades to table g03_b1_test.test_results
 DROP SCHEMA
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:8: NOTICE:  role "test_public_user" does not exist, skipping
 DO
-DO
-DO
-DO
+RESET
+RESET
+RESET
 CREATE SCHEMA
 CREATE ROLE
 CREATE ROLE
@@ -44,28 +43,27 @@ SET
 INSERT 0 2
 INSERT 0 4
 RESET
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:87: NOTICE:  table "test_results" does not exist, skipping
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:127: NOTICE:  table "test_results" does not exist, skipping
 DROP TABLE
 CREATE TABLE
 DO
 DO
 DO
 DO
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:228: NOTICE:  test_public_user cleanup: role "test_public_user" does not exist
 DO
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:197: ERROR:  role "test_public_user" does not exist
-CONTEXT:  SQL statement "REVOKE USAGE ON SCHEMA g03_b1_test FROM test_public_user"
-PL/pgSQL function inline_code_block line 2 at SQL statement
+DO
 
 ============================================================
-B1 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4)
+B1 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4 — CLEAN RUN)
 ============================================================
- test_id |              description              |               expected                |                             actual                             | result 
----------+---------------------------------------+---------------------------------------+----------------------------------------------------------------+--------
- TEST1   | Lead removes participant              | TRUE+removed+user-A-admin             | true+removed+user-A-admin                                      | PASS
- TEST2   | Non-lead cannot remove                | FALSE+active+NULL                     | false+active+NULL                                              | PASS
- TEST3   | Direct cross-tenant UPDATE blocked    | NULL reason (RLS blocks)              | NULL                                                           | PASS
- TEST4   | PUBLIC cannot EXECUTE                 | ERROR (permission denied)             | permission denied for function remove_coordination_participant | PASS
- TEST5   | set_config impersonation (LIMITATION) | TRUE+removed (impersonation succeeds) | true+removed                                                   | PASS
+ test_id  |                 description                  |               expected                |                             actual                             | result 
+----------+----------------------------------------------+---------------------------------------+----------------------------------------------------------------+--------
+ B1-TEST1 | Lead removes participant                     | TRUE+removed+user-A-admin             | true+removed+user-A-admin                                      | PASS
+ B1-TEST2 | Non-lead cannot remove (ZERO modification)   | FALSE+active+NULL                     | false+active+NULL                                              | PASS
+ B1-TEST3 | Direct cross-tenant UPDATE blocked by RLS    | NULL reason (RLS blocks visibility)   | NULL                                                           | PASS
+ B1-TEST4 | PUBLIC cannot EXECUTE function               | ERROR (permission denied)             | permission denied for function remove_coordination_participant | PASS
+ B1-TEST5 | set_config impersonation (LIMITATION PROVEN) | TRUE+removed (impersonation succeeds) | true+removed                                                   | PASS
 (5 rows)
 
 
@@ -74,3 +72,14 @@ B1 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4)
       5 |      0 |     5
 (1 row)
 
+
+NOTE: B1-TEST5 proves the set_config limitation (impersonation succeeds).
+This is NOT a security pass — it documents the trust boundary (see C2 assessment).
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:272: NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to table reform_coordinations
+drop cascades to table reform_coordination_participants
+drop cascades to function remove_coordination_participant(text,text,text)
+drop cascades to table test_results
+DROP SCHEMA
+
+CLEANUP COMPLETE — schema g03_b1_test dropped
