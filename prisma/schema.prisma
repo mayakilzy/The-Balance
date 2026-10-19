@@ -35,6 +35,8 @@ model Country {
   // G01 (migration 0017): tenant-scoped planning data referencing this country
   objectives         Objective[]
   countryPackConfigs CountryPackConfig[]
+  // G03: reform coordinations reference country
+  reformCoordinationsCountry  ReformCoordination[] @relation("ReformCoordinationCountry")
 
   @@map("countries")
   @@index([status])
@@ -167,6 +169,17 @@ model Tenant {
   observations         Observation[]
   varianceRecords      VarianceRecord[]
   alerts               Alert[]
+  // G03 (migration 0022): tenant-scoped State Reform data
+  reformProposals        ReformProposal[]
+  reformAlternatives     ReformAlternative[]
+  reformApprovals        ReformApproval[]
+  reformActions          ReformAction[]
+  reformActionUpdates    ReformActionUpdate[]
+  reformVerifications    ReformVerification[]
+  reformFeedbackLoops    ReformFeedbackLoop[]
+  reformCoordinationParticipants ReformCoordinationParticipant[]
+  reformCoordinationSharedSnapshots ReformCoordinationSharedSnapshot[]
+  reformCoordinationsLead  ReformCoordination[]
 
   @@map("tenants")
   @@index([status])
@@ -383,8 +396,8 @@ model StrategyVersion {
   observations         Observation[]
   varianceRecords      VarianceRecord[]
   alerts               Alert[]
-
-  @@unique([strategyId, versionNumber])
+  // G03: reform proposals + coordinations can reference this alert
+  reformProposals      ReformProposal[]
   @@index([tenantId, status])
   @@map("strategy_versions")
 }
@@ -595,6 +608,8 @@ model Objective {
   country Country  @relation(fields: [countryId], references: [id])
   // G02 (migration 0021): indicators referencing this objective
   indicatorDefinitions IndicatorDefinition[]
+  // G03: reform proposals can reference this objective
+  reformProposals      ReformProposal[]
 
   @@index([tenantId, countryId])
   @@index([tenantId, status])
@@ -647,6 +662,8 @@ model Program {
   dependenciesTo   Dependency[] @relation("DependencyTo")
   // G02 (migration 0021): indicators referencing this program
   indicatorDefinitions IndicatorDefinition[]
+  // G03: reform actions can link to programs
+  reformActions        ReformAction[]
 
   @@index([tenantId, strategyVersionId])
   @@index([tenantId, sector])
@@ -669,6 +686,8 @@ model Project {
 
   tenant  Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   program Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+  // G03: reform actions can link to projects
+  reformActions ReformAction[]
 
   @@index([tenantId, programId])
   @@map("projects")
@@ -825,6 +844,7 @@ model IndicatorDefinition {
   observations     Observation[]
   varianceRecords  VarianceRecord[]
   alerts           Alert[]
+  // G03: reform proposals can reference this indicator's alert
 
   @@unique([tenantId, code])
   @@index([tenantId, status])
@@ -937,6 +957,9 @@ model VarianceRecord {
   observationPeriod   ObservationPeriod   @relation(fields: [observationPeriodId], references: [id], onDelete: Cascade)
   observation         Observation?        @relation(fields: [observationId], references: [id])
   alerts              Alert[]
+  // G03: reform proposals + coordinations can reference this variance record's alert
+  reformProposals      ReformProposal[]
+  reformCoordinationsViaVariance  ReformCoordination[] @relation("ReformCoordinationVariance")
 
   @@index([tenantId, strategyVersionId, observationPeriodId])
   @@index([tenantId, indicatorDefinitionId, observationPeriodId])
@@ -986,8 +1009,406 @@ model Alert {
   strategyVersion     StrategyVersion     @relation(fields: [strategyVersionId], references: [id], onDelete: Cascade)
   indicatorDefinition IndicatorDefinition? @relation(fields: [indicatorDefinitionId], references: [id])
   varianceRecord     VarianceRecord?      @relation(fields: [varianceRecordId], references: [id])
+  // G03: reform proposals + coordinations can reference this alert
+  reformProposals      ReformProposal[]
+  reformCoordinations  ReformCoordination[] @relation("ReformCoordinationAlert")
 
   @@index([tenantId, strategyVersionId, lifecycleStage])
   @@index([tenantId, indicatorDefinitionId])
   @@map("alerts")
+}
+
+// ============================================================
+// G03 STATE REFORM (03-01) — 12 new PRIVATE tables
+// ------------------------------------------------------------
+// All tenant-scoped, RLS ENABLE + FORCE (see migration 0022).
+// Per G03-00 FINAL PASS architecture (REV 8 — frozen):
+//   - 7 core reform tables
+//   - 5 coordination tables
+//   - 3 helper functions (2 SECURITY INVOKER + 1 SECURITY DEFINER group)
+//   - 1 dedicated role: balance_coordination_admin (NOLOGIN)
+//
+// Key invariants enforced by this migration:
+//   C1: balance_coordination_admin has SELECT + UPDATE on participants
+//       (PostgreSQL requires SELECT for WHERE clause column reads)
+//   C2: set_config('app.tenant_id') is NOT a DB-level identity guarantee
+//       (depends on withAuthenticatedTenant — application layer)
+//   D5: Four distinct lifecycle states (approval / implementation / verification / measurement)
+//   D11: Supersession preserves historical links (no silent rewrite)
+//   D12: Shared snapshots support draft mode (draft → under_review → approved → revoked)
+//   D15: Institutional authority separation (claimed vs verified vs participation vs approval)
+// ============================================================
+
+model ReformProposal {
+  id                          String   @id @default(cuid())
+  tenantId                    String
+  originatingAlertId          String?
+  originatingVarianceRecordId String?
+  strategyVersionId           String?
+  objectiveId                 String?
+  coordinationId              String?
+  title                       String
+  problemStatement            String
+  hypothesizedCauses          Json     @default("[]")
+  context                     Json     @default("{}")
+  status                      String   @default("draft")
+  createdBy                   String
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+  submittedAt                 DateTime?
+  approvedAt                  DateTime?
+  rejectedAt                  DateTime?
+  supersededAt                DateTime?
+  supersededById              String?
+  archivedAt                  DateTime?
+  metadata                    Json     @default("{}")
+
+  tenant                Tenant              @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  originatingAlert      Alert?              @relation(fields: [originatingAlertId], references: [id])
+  originatingVariance   VarianceRecord?     @relation(fields: [originatingVarianceRecordId], references: [id])
+  strategyVersion       StrategyVersion?    @relation(fields: [strategyVersionId], references: [id])
+  objective             Objective?          @relation(fields: [objectiveId], references: [id])
+  coordination          ReformCoordination? @relation(fields: [coordinationId], references: [id])
+  alternatives          ReformAlternative[]
+  approval              ReformApproval?
+  actions               ReformAction[]
+  supersededBy          ReformProposal?     @relation("ReformProposalSupersession", fields: [supersededById], references: [id])
+  supersedes            ReformProposal[]    @relation("ReformProposalSupersession")
+  sharedSnapshots       ReformCoordinationSharedSnapshot[]
+
+  @@index([tenantId, status])
+  @@index([tenantId, originatingAlertId])
+  @@index([tenantId, originatingVarianceRecordId])
+  @@index([tenantId, strategyVersionId])
+  @@index([tenantId, objectiveId])
+  @@index([tenantId, createdAt])
+  @@map("reform_proposals")
+}
+
+model ReformAlternative {
+  id                  String   @id @default(cuid())
+  tenantId            String
+  proposalId          String
+  title               String
+  description         String
+  costEstimateMin     Decimal?  @db.Decimal(20, 2)
+  costEstimateMax     Decimal?  @db.Decimal(20, 2)
+  costCurrency        String   @default("USD")
+  costAssumptions     Json     @default("[]")
+  riskLevel           String   @default("medium")
+  riskNotes           String?
+  feasibilityScore    String   @default("unknown")
+  feasibilityNotes    String?
+  anticipatedOutcomes Json    @default("[]")
+  assumptions         Json     @default("[]")
+  status              String   @default("draft")
+  selectedAt          DateTime?
+  selectedBy          String?
+  withdrawnAt         DateTime?
+  withdrawnBy         String?
+  withdrawalReason    String?
+  draftedVia          String   @default("human")
+  simulated           Boolean  @default(false)
+  metadata            Json     @default("{}")
+  createdBy            String
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  tenant     Tenant          @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proposal   ReformProposal  @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  approvals  ReformApproval[]
+  actions    ReformAction[]
+
+  @@unique([tenantId, proposalId, title])
+  @@index([tenantId, proposalId, status])
+  @@map("reform_alternatives")
+}
+
+model ReformApproval {
+  id              String   @id @default(cuid())
+  tenantId        String
+  proposalId      String   @unique
+  alternativeId   String
+  approvedBy      String
+  approvedAt      DateTime @default(now())
+  approvalNotes   String?
+  supportingEvidence Json  @default("[]")
+  counterEvidence    Json  @default("[]")
+  rationale       String
+  metadata        Json     @default("{}")
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proposal   ReformProposal   @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  alternative ReformAlternative @relation(fields: [alternativeId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, proposalId])
+  @@index([tenantId, approvedAt])
+  @@map("reform_approvals")
+}
+
+model ReformAction {
+  id              String   @id @default(cuid())
+  tenantId        String
+  proposalId      String
+  alternativeId   String
+  programId       String?
+  projectId       String?
+  title           String
+  description     String?
+  assignedTo      String?
+  assignedAt      DateTime?
+  status          String   @default("planned")
+  startDate       DateTime?
+  dueDate         DateTime?
+  completedDate   DateTime?
+  cancelledDate   DateTime?
+  cancelledBy     String?
+  cancellationReason String?
+  progressPercentage Int  @default(0)
+  metadata        Json     @default("{}")
+  createdBy       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant     Tenant           @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  proposal   ReformProposal   @relation(fields: [proposalId], references: [id], onDelete: Cascade)
+  alternative ReformAlternative @relation(fields: [alternativeId], references: [id], onDelete: Cascade)
+  program    Program?         @relation(fields: [programId], references: [id])
+  project    Project?         @relation(fields: [projectId], references: [id])
+  updates    ReformActionUpdate[]
+  verification ReformVerification? @relation("ReformVerificationAction")
+  feedbackLoop  ReformFeedbackLoop? @relation("ReformFeedbackLoopAction")
+  sharedSnapshots ReformCoordinationSharedSnapshot[] @relation("ReformSharedSnapshotAction")
+
+  @@index([tenantId, proposalId, status])
+  @@index([tenantId, assignedTo, status])
+  @@index([tenantId, status, dueDate])
+  @@index([tenantId, programId])
+  @@index([tenantId, projectId])
+  @@map("reform_actions")
+}
+
+model ReformActionUpdate {
+  id              String   @id @default(cuid())
+  tenantId        String
+  actionId        String
+  updateType      String
+  notes           String
+  progressPercentage Int?
+  evidenceIds     Json     @default("[]")
+  actor           String
+  at              DateTime @default(now())
+  metadata        Json     @default("{}")
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  action  ReformAction  @relation(fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@index([actionId, at])
+  @@index([tenantId, at])
+  @@index([tenantId, actionId, updateType])
+  @@map("reform_action_updates")
+}
+
+model ReformVerification {
+  id              String   @id @default(cuid())
+  tenantId        String
+  actionId        String   @unique
+  verificationStatus String @default("pending")
+  verifiedAction  String?
+  evidenceSource  String?
+  disputeReason   String?
+  disputeEvidenceSource String?
+  verifiedBy      String?
+  verifiedAt      DateTime?
+  notes           String?
+  metadata        Json     @default("{}")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  action  ReformAction  @relation("ReformVerificationAction", fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, actionId])
+  @@index([tenantId, verificationStatus])
+  @@index([tenantId, verifiedAt])
+  @@map("reform_verifications")
+}
+
+model ReformFeedbackLoop {
+  id              String   @id @default(cuid())
+  tenantId        String
+  actionId        String   @unique
+  beforeObservationId String?
+  afterObservationId  String?
+  comparisonType  String   @default("none")
+  descriptiveSummary String
+  attributionLevel String @default("descriptive")
+  newVarianceRecordId String?
+  createdBy       String
+  createdAt       DateTime @default(now())
+  metadata        Json     @default("{}")
+
+  tenant  Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  action  ReformAction  @relation("ReformFeedbackLoopAction", fields: [actionId], references: [id], onDelete: Cascade)
+
+  @@unique([tenantId, actionId])
+  @@index([tenantId, createdAt])
+  @@map("reform_feedback_loops")
+}
+
+// ============================================================
+// G03 COORDINATION TABLES (5 — per D6)
+// ============================================================
+
+model ReformCoordination {
+  id              String   @id @default(cuid())
+  leadTenantId    String
+  countryId       String
+  title           String
+  description     String
+  originatingAlertId          String?
+  originatingVarianceRecordId String?
+  approvalPolicy   String
+  status           String   @default("draft")
+  planSubmittedAt   DateTime?
+  planApprovedAt    DateTime?
+  planApprovedBy    String?
+  activatedAt       DateTime?
+  closedAt          DateTime?
+  closedBy          String?
+  closureReason     String?
+  supersededAt      DateTime?
+  supersededById    String?
+  archivedAt        DateTime?
+  createdBy         String
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+  metadata          Json     @default("{}")
+
+  leadTenant        Tenant              @relation(fields: [leadTenantId], references: [id], onDelete: Cascade)
+  country           Country             @relation("ReformCoordinationCountry", fields: [countryId], references: [id])
+  originatingAlert  Alert?              @relation("ReformCoordinationAlert", fields: [originatingAlertId], references: [id])
+  originatingVariance VarianceRecord?  @relation("ReformCoordinationVariance", fields: [originatingVarianceRecordId], references: [id])
+  participants      ReformCoordinationParticipant[]
+  invitations       ReformCoordinationInvitation[]
+  sharedSnapshots   ReformCoordinationSharedSnapshot[]
+  proposals         ReformProposal[]
+  supersededBy      ReformCoordination? @relation("CoordinationSupersession", fields: [supersededById], references: [id])
+  supersedes        ReformCoordination[] @relation("CoordinationSupersession")
+
+  @@index([leadTenantId, status])
+  @@index([countryId, status])
+  @@index([originatingAlertId])
+  @@map("reform_coordinations")
+}
+
+model ReformCoordinationParticipant {
+  id              String   @id @default(cuid())
+  coordinationId  String
+  tenantId        String
+  institutionId   String?
+  role            String   @default("contributor")
+  status          String   @default("pending_invitation")
+  joinedAt        DateTime?
+  removedAt       DateTime?
+  removedBy       String?
+  removalReason   String?
+  withdrawnAt     DateTime?
+  withdrawalReason String?
+  // B3: Institutional authority separation
+  verifiedInstitutionId  String?
+  verifiedAt             DateTime?
+  verifiedBy             String?
+  verificationMethod     String?
+  verificationNotes      String?
+  canApproveCommitments   Boolean  @default(false)
+  approvalAuthorityGrantedBy String?
+  approvalAuthorityGrantedAt DateTime?
+  approvalAuthorityReason String?
+  addedBy         String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  metadata        Json     @default("{}")
+
+  coordination   ReformCoordination @relation(fields: [coordinationId], references: [id], onDelete: Cascade)
+  tenant         Tenant             @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@unique([coordinationId, tenantId])
+  @@index([tenantId, status])
+  @@map("reform_coordination_participants")
+}
+
+model ReformCoordinationInvitation {
+  id              String   @id @default(cuid())
+  coordinationId  String
+  invitedTenantId String
+  invitedInstitutionId String?
+  invitedRole     String   @default("contributor")
+  status          String   @default("pending")
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  acceptedBy      String?
+  declinedAt      DateTime?
+  declinedBy      String?
+  declinedReason  String?
+  revokedAt       DateTime?
+  revokedBy       String?
+  revocationReason String?
+  createdBy       String
+  createdAt       DateTime @default(now())
+  metadata        Json     @default("{}")
+
+  coordination    ReformCoordination @relation(fields: [coordinationId], references: [id], onDelete: Cascade)
+
+  @@index([coordinationId, status])
+  @@index([invitedTenantId, status])
+  @@index([expiresAt])
+  @@map("reform_coordination_invitations")
+}
+
+model ReformCoordinationSharedSnapshot {
+  id              String   @id @default(cuid())
+  coordinationId  String
+  ownerTenantId   String
+  snapshotType    String
+  title           String
+  summary         String
+  status          String   @default("draft")
+  submittedAt     DateTime?
+  approvedAt      DateTime?
+  approvedBy      String?
+  classification  String   @default("shared_within_coordination")
+  proposalId      String?
+  actionId        String?
+  createdBy       String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  metadata        Json     @default("{}")
+
+  coordination   ReformCoordination @relation(fields: [coordinationId], references: [id], onDelete: Cascade)
+  ownerTenant    Tenant             @relation(fields: [ownerTenantId], references: [id], onDelete: Cascade)
+  proposal       ReformProposal?    @relation(fields: [proposalId], references: [id])
+  action         ReformAction?      @relation("ReformSharedSnapshotAction", fields: [actionId], references: [id])
+  revocations    ReformCoordinationSharedSnapshotRevocation[]
+
+  @@index([coordinationId, status])
+  @@index([ownerTenantId, status])
+  @@map("reform_coordination_shared_snapshots")
+}
+
+model ReformCoordinationSharedSnapshotRevocation {
+  id              String   @id @default(cuid())
+  tenantId        String
+  coordinationId  String
+  snapshotId      String
+  revokedBy       String
+  revokedAt       DateTime @default(now())
+  reason          String
+  metadata        Json     @default("{}")
+
+  snapshot        ReformCoordinationSharedSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
+  @@unique([snapshotId])
+  @@index([coordinationId])
+  @@map("reform_coordination_shared_snapshot_revocations")
 }

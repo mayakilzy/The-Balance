@@ -55,6 +55,20 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "observatory:alert:read",
     "observatory:alert:review",
     "observatory:alert:act",
+    // G03 (03-01): State Reform permissions — admin has all
+    "reform:proposal:read",
+    "reform:proposal:write",
+    "reform:proposal:approve",
+    "reform:alternative:read",
+    "reform:alternative:write",
+    "reform:action:read",
+    "reform:action:write",
+    "reform:action:verify",
+    "reform:verification:read",
+    "reform:coordination:read",
+    "reform:coordination:manage",
+    "reform:coordination:approve",
+    "reform:coordination:share",
   ],
   analyst: [
     "tenant:read",
@@ -86,6 +100,15 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "observatory:observation:ingest",
     "observatory:variance:read",
     "observatory:alert:read",
+    // G03 (03-01): State Reform permissions — analyst can draft + implement, not approve/verify
+    "reform:proposal:read",
+    "reform:proposal:write",
+    "reform:alternative:read",
+    "reform:alternative:write",
+    "reform:action:read",
+    "reform:action:write",
+    "reform:verification:read",
+    "reform:coordination:read",
   ],
   reviewer: [
     "tenant:read",
@@ -114,6 +137,16 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "observatory:alert:read",
     "observatory:alert:review",
     "observatory:alert:act",
+    // G03 (03-01): State Reform permissions — reviewer can approve + verify, not draft
+    "reform:proposal:read",
+    "reform:proposal:approve",
+    "reform:alternative:read",
+    "reform:action:read",
+    "reform:action:verify",
+    "reform:verification:read",
+    "reform:coordination:read",
+    "reform:coordination:approve",
+    "reform:coordination:share",
   ],
   observer: [
     "tenant:read",
@@ -129,6 +162,10 @@ const ROLE_PERMISSIONS: Record<string, string[]> = {
     "observatory:observation:read",
     "observatory:variance:read",
     "observatory:alert:read",
+    // G03 (03-01): State Reform permissions — observer is read-only on proposals + actions
+    "reform:proposal:read",
+    "reform:action:read",
+    "reform:coordination:read",
   ],
 };
 
