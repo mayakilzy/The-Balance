@@ -1,11 +1,11 @@
-# G03-00 — Open Decisions (Revised)
+# G03-00 — Open Decisions (Final — REV 8)
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Open decisions register (DESIGN ONLY — no code)
-> **Date:** 2026-10-18 (revision 5 — closes B1/B2/B3/B4 per owner audit)
+> **Date:** 2026-10-18 (revision 8 — final, post empirical validation)
 > **Author:** GLM (implementation agent)
-> **Status:** REV 5 — all blockers closed; awaiting FINAL PASS
-> **Companion to:** `G03_00_BLOCKER_CLOSURE_REV5.md` (authoritative for B1-B4 closures)
+> **Status:** REV 8 — all blockers closed, empirical validation complete (24/24 PASS)
+> **Companion to:** `G03_00_EMPIRICAL_VALIDATION_REV7.md` (authoritative for empirical results)
 
 ---
 
@@ -13,11 +13,8 @@
 
 | Rev | Date | Changes |
 |-----|------|---------|
-| 1 | 2026-10-18 | Initial proposal — 8 decisions (D1-D8) |
-| 2 | 2026-10-18 | Owner review: D6 elevated, D3 expanded, D8 per-limitation, vertical slice |
-| 3 | 2026-10-18 | Sub-questions resolved, SECURITY INVOKER (not DEFINER), historical preservation, draft mode |
-| 4 | 2026-10-18 | Security audit corrections: S1 (SECURITY DEFINER function), S2 (DB-level revocation), S3 (institutional authority) |
-| 5 | 2026-10-18 (this) | Blocker closure: B1 (Option A corrected — lead check inside UPDATE WHERE), B2 (tightened revocation), B3 (explicit institutional authority contract), B4 (all documents fully updated) |
+| 1-7 | 2026-10-18 | See prior revisions (design → security corrections → empirical validation) |
+| 8 | 2026-10-18 (this) | Final: C1/C2 corrections applied to contracts, all documents synchronized, 24/24 PASS on PostgreSQL 16.4 |
 
 ---
 

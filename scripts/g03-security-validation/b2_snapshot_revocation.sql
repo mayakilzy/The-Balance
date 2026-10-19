@@ -130,6 +130,16 @@ END $$;
 SELECT test_id, description, expected, actual, CASE WHEN pass THEN 'PASS' ELSE 'FAIL' END AS result FROM g03_b2_test.test_results ORDER BY test_id;
 \echo ''; SELECT COUNT(*) FILTER (WHERE pass) AS passed, COUNT(*) FILTER (WHERE NOT pass) AS failed, COUNT(*) AS total FROM g03_b2_test.test_results;
 
+-- ENFORCE TEST FAILURE: if any test failed, raise exception → exit code 1
+DO $$
+DECLARE v_failed INT; v_total INT; v_expected INT := 6;
+BEGIN
+  SELECT COUNT(*), COUNT(*) FILTER (WHERE NOT pass) INTO v_total, v_failed FROM g03_b2_test.test_results;
+  IF v_total != v_expected THEN RAISE EXCEPTION 'B2 TEST COUNT MISMATCH: expected %, got %', v_expected, v_total; END IF;
+  IF v_failed > 0 THEN RAISE EXCEPTION 'B2 TEST FAILURES: % of % tests failed', v_failed, v_total; END IF;
+  RAISE NOTICE 'B2 ALL % TESTS PASSED', v_total;
+END $$;
+
 -- CLEANUP
 DROP SCHEMA g03_b2_test CASCADE;
 \echo ''; \echo 'CLEANUP COMPLETE — schema g03_b2_test dropped'

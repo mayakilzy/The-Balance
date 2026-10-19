@@ -1,11 +1,24 @@
-# G03-00 — Blocker Closure (REV 5)
+# G03-00 — Blocker Closure (REV 5 + REV 8 Empirical Updates)
 
 > **Mission:** 03-00 — Targeted Reform Architecture & Scope Foundation
 > **Document type:** Security blocker closure (DESIGN ONLY — no code, no migrations)
-> **Date:** 2026-10-18 (revision 5 — closes B1, B2, B3, B4 per owner audit of REV 4)
+> **Date:** 2026-10-18 (rev 5 + empirical updates from REV 7/8)
 > **Author:** GLM (implementation agent)
-> **Status:** REV 5 — closes all 4 blockers per owner directive
-> **Companion to:** All other G03-00 documents (fully updated in REV 5)
+> **Status:** REV 8 — empirically validated (24/24 PASS on PostgreSQL 16.4)
+> **Companion to:** `G03_00_EMPIRICAL_VALIDATION_REV7.md` (authoritative empirical results)
+
+> ⚠️ **EMPIRICAL UPDATES (REV 7/8)**: This document has been updated with the
+> empirically-proven corrections from REV 7. Key changes:
+> - **C1 (CONFIRMED)**: `balance_coordination_admin` needs SELECT privilege
+>   (PostgreSQL requires it for WHERE clause column reads). Empirically proven
+>   in B1-TEST1.
+> - **C2 (DOCUMENTED LIMITATION)**: `set_config('app.tenant_id', ...)` is NOT
+>   a DB-level identity guarantee. PostgreSQL allows any role to set custom
+>   GUCs. The security model depends on `withAuthenticatedTenant` (application
+>   layer) to set `app.tenant_id` from a verified session. Empirically proven
+>   in B1-TEST5 (impersonation succeeds) + B3-TEST9b (double impersonation).
+> - **Empirical results**: 24/24 PASS on PostgreSQL 16.4, all exit code 0.
+>   See `G03_00_EMPIRICAL_VALIDATION_REV7.md` for full details.
 
 ---
 

@@ -1,12 +1,4 @@
-psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:7: NOTICE:  drop cascades to 8 other objects
-DETAIL:  drop cascades to table g03_b2_test.reform_coordinations
-drop cascades to table g03_b2_test.reform_coordination_participants
-drop cascades to table g03_b2_test.reform_coordination_shared_snapshots
-drop cascades to table g03_b2_test.reform_coordination_shared_snapshot_revocations
-drop cascades to function g03_b2_test.is_coordination_participant(text)
-drop cascades to function g03_b2_test.is_snapshot_revoked(text)
-drop cascades to function g03_b2_test.enforce_revocation_coordination_match()
-drop cascades to table g03_b2_test.test_results
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:7: NOTICE:  schema "g03_b2_test" does not exist, skipping
 DROP SCHEMA
 DO
 RESET
@@ -78,7 +70,9 @@ B2 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4 — CLEAN RUN)
 (6 rows)
 
 ; SELECT COUNT(*) FILTER (WHERE pass) AS passed, COUNT(*) FILTER (WHERE NOT pass) AS failed, COUNT(*) AS total FROM g03_b2_test.test_results;
-psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:134: NOTICE:  drop cascades to 8 other objects
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:141: NOTICE:  B2 ALL 6 TESTS PASSED
+DO
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:144: NOTICE:  drop cascades to 8 other objects
 DETAIL:  drop cascades to table reform_coordinations
 drop cascades to table reform_coordination_participants
 drop cascades to table reform_coordination_shared_snapshots

@@ -307,19 +307,22 @@ DO $$ DECLARE v_result BOOLEAN; begin
 END $$;
 
 -- TEST 12: Verify SECURITY DEFINER functions do NOT bypass RLS inappropriately
--- (The functions use balance_coordination_admin which has FORCE RLS policies)
--- This test verifies that the function's UPDATE only affects rows matching the WHERE clause
-DO $$ DECLARE v_count INT; BEGIN
-  -- Count proposals before (as admin)
-  SET ROLE balance_admin; SELECT count(*) INTO v_count FROM g03_b3_test.reform_proposals WHERE status = 'approved'; RESET ROLE;
-  -- tenant-B attempts to approve tenant-A's prop-noninst-1 (already approved, but let's try prop-A1)
-  -- Actually, let's verify that calling approve on a non-existent proposal returns FALSE (no side effects)
+-- FIX (per owner directive A2): Compare count BEFORE and AFTER the failed approval
+-- (not just count >= 2)
+DO $$ DECLARE v_count_before INT; v_count_after INT; v_result BOOLEAN; BEGIN
+  -- Get count of approved proposals BEFORE the failed approval attempt
+  SET ROLE balance_admin; SELECT count(*) INTO v_count_before FROM g03_b3_test.reform_proposals WHERE status = 'approved'; RESET ROLE;
+  -- Attempt to approve a non-existent proposal (should return FALSE, no side effects)
   SET ROLE balance_app; PERFORM set_config('app.tenant_id', 'tenant-B', false); PERFORM set_config('app.user_id', 'user-B', false);
-  PERFORM g03_b3_test.approve_reform_proposal('nonexistent-proposal');
+  SELECT g03_b3_test.approve_reform_proposal('nonexistent-proposal') INTO v_result;
   RESET ROLE;
-  -- Verify no new proposals were approved
-  SET ROLE balance_admin; SELECT count(*) INTO v_count FROM g03_b3_test.reform_proposals WHERE status = 'approved'; RESET ROLE;
-  INSERT INTO g03_b3_test.test_results VALUES ('B3-TEST12', 'No side effects on failed approval', 'count unchanged', 'count=' || v_count, v_count >= 2);
+  -- Get count of approved proposals AFTER (should be unchanged)
+  SET ROLE balance_admin; SELECT count(*) INTO v_count_after FROM g03_b3_test.reform_proposals WHERE status = 'approved'; RESET ROLE;
+  INSERT INTO g03_b3_test.test_results VALUES
+    ('B3-TEST12', 'No side effects on failed approval (before=after)',
+     'before=' || v_count_before || ' after=' || v_count_after,
+     'before=' || v_count_before || ' after=' || v_count_after,
+     v_count_before = v_count_after);
 END $$;
 
 \echo ''; \echo '============================================================'
@@ -330,6 +333,16 @@ SELECT test_id, description, expected, actual, CASE WHEN pass THEN 'PASS' ELSE '
 \echo ''; \echo 'NOTE: B3-TEST9 proves app.role impersonation limitation (same trust boundary as C2).'
 \echo 'B3-TEST10 proves leadTenantId check blocks non-lead admin verification.'
 \echo 'B3-TEST11 proves tenantId ownership check blocks cross-tenant approval.'
+
+-- ENFORCE TEST FAILURE: if any test failed, raise exception → exit code 1
+DO $$
+DECLARE v_failed INT; v_total INT; v_expected INT := 13;
+BEGIN
+  SELECT COUNT(*), COUNT(*) FILTER (WHERE NOT pass) INTO v_total, v_failed FROM g03_b3_test.test_results;
+  IF v_total != v_expected THEN RAISE EXCEPTION 'B3 TEST COUNT MISMATCH: expected %, got %', v_expected, v_total; END IF;
+  IF v_failed > 0 THEN RAISE EXCEPTION 'B3 TEST FAILURES: % of % tests failed', v_failed, v_total; END IF;
+  RAISE NOTICE 'B3 ALL % TESTS PASSED', v_total;
+END $$;
 
 -- CLEANUP
 DROP SCHEMA g03_b3_test CASCADE;

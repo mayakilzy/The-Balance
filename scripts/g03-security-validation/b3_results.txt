@@ -82,7 +82,7 @@ B3 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4 — CLEAN, REV 7)
  B3-TEST1  | Lead grants commitment approval (cross-tenant)                        | TRUE+canApprove=TRUE                                         | true+canApprove=true | PASS
  B3-TEST10 | Non-lead admin cannot verify (leadTenantId check)                     | FALSE (lead check blocks)                                    | false                | PASS
  B3-TEST11 | Cannot approve proposal owned by another tenant                       | FALSE (tenantId mismatch)                                    | false                | PASS
- B3-TEST12 | No side effects on failed approval                                    | count unchanged                                              | count=2              | PASS
+ B3-TEST12 | No side effects on failed approval (before=after)                     | before=2 after=2                                             | before=2 after=2     | PASS
  B3-TEST2  | Non-lead cannot grant                                                 | FALSE                                                        | false                | PASS
  B3-TEST3  | Fail-closed (no verified authority)                                   | FALSE                                                        | false                | PASS
  B3-TEST4  | Admin verifies institutional authority                                | TRUE+INST-CB                                                 | true+INST-CB         | PASS
@@ -99,7 +99,9 @@ B3 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4 — CLEAN, REV 7)
 NOTE: B3-TEST9 proves app.role impersonation limitation (same trust boundary as C2).
 B3-TEST10 proves leadTenantId check blocks non-lead admin verification.
 B3-TEST11 proves tenantId ownership check blocks cross-tenant approval.
-psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:335: NOTICE:  drop cascades to 8 other objects
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:345: NOTICE:  B3 ALL 13 TESTS PASSED
+DO
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:348: NOTICE:  drop cascades to 8 other objects
 DETAIL:  drop cascades to table reform_coordinations
 drop cascades to table reform_coordination_participants
 drop cascades to table reform_proposals

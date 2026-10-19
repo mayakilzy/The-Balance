@@ -1,8 +1,4 @@
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:14: NOTICE:  drop cascades to 4 other objects
-DETAIL:  drop cascades to table g03_b1_test.reform_coordinations
-drop cascades to table g03_b1_test.reform_coordination_participants
-drop cascades to function g03_b1_test.remove_coordination_participant(text,text,text)
-drop cascades to table g03_b1_test.test_results
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:14: NOTICE:  schema "g03_b1_test" does not exist, skipping
 DROP SCHEMA
 DO
 RESET
@@ -75,7 +71,9 @@ B1 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4 — CLEAN RUN)
 
 NOTE: B1-TEST5 proves the set_config limitation (impersonation succeeds).
 This is NOT a security pass — it documents the trust boundary (see C2 assessment).
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:272: NOTICE:  drop cascades to 4 other objects
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:284: NOTICE:  B1 ALL 5 TESTS PASSED
+DO
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:289: NOTICE:  drop cascades to 4 other objects
 DETAIL:  drop cascades to table reform_coordinations
 drop cascades to table reform_coordination_participants
 drop cascades to function remove_coordination_participant(text,text,text)

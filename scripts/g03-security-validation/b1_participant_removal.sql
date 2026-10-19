@@ -267,6 +267,23 @@ FROM g03_b1_test.test_results;
 \echo 'This is NOT a security pass — it documents the trust boundary (see C2 assessment).'
 
 -- ============================================================
+-- ENFORCE TEST FAILURE: if any test failed, raise exception → exit code 1
+-- Also verify exact expected count (5 tests for B1)
+-- ============================================================
+DO $$
+DECLARE v_failed INT; v_total INT; v_expected INT := 5;
+BEGIN
+  SELECT COUNT(*), COUNT(*) FILTER (WHERE NOT pass) INTO v_total, v_failed FROM g03_b1_test.test_results;
+  IF v_total != v_expected THEN
+    RAISE EXCEPTION 'B1 TEST COUNT MISMATCH: expected %, got %', v_expected, v_total;
+  END IF;
+  IF v_failed > 0 THEN
+    RAISE EXCEPTION 'B1 TEST FAILURES: % of % tests failed', v_failed, v_total;
+  END IF;
+  RAISE NOTICE 'B1 ALL % TESTS PASSED', v_total;
+END $$;
+
+-- ============================================================
 -- CLEANUP after tests (so the script can be re-run cleanly)
 -- ============================================================
 DROP SCHEMA g03_b1_test CASCADE;
