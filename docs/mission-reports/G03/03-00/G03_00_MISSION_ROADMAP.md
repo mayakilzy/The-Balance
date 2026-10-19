@@ -57,13 +57,14 @@ Per owner directive:
 
 The numbers below are **estimates derived from the design**. They will be adjusted as the design evolves in implementation. They are NOT commitments.
 
-| Resource | Estimate (revised) | Note |
-|----------|-------------------|------|
-| Tables | 11 (7 core + 4 coordination) | D1 + D6 |
+| Resource | Estimate (final — REV 8) | Note |
+|----------|---------------------------|------|
+| Tables | 12 (7 core + 5 coordination) | D1 + D6 — empirically validated |
 | Services | 12 (11 core + 1 coordination) | May consolidate or split during implementation |
 | API routes | ~35 | Estimated from service count |
-| New tests | ~210 (was ~190) | Adjusted for +2 missions + coordination tests |
+| New tests | ~210 | Adjusted for +2 missions + coordination + security tests |
 | Missions | 9 (was 7) | +1 coordination, +1 vertical slice |
+| Security tests | 24 (B1: 5, B2: 6, B3: 13) | Empirically validated on PostgreSQL 16.4 |
 
 ---
 
@@ -134,7 +135,7 @@ Establish the architectural foundation for GROUP 03: domain model, workflow, con
 - [ ] All 8 documents produced (was 7)
 - [ ] Architecture honors all 14 inherited invariants
 - [ ] 10 new G3 invariants proposed (unchanged)
-- [ ] Threat model identifies and mitigates 10 coordination threats (NEW)
+- [ ] Threat model identifies and mitigates 13 coordination threats (T1-T13)
 - [ ] Domain model specifies 12 tables — 7 core + 5 coordination
 - [ ] Workflow specifies 4 distinct lifecycle states (was 3) — separates verification from measurement
 - [ ] Contracts specify all service signatures + Zod schemas (expanded for coordination + D3 hypothesis schema)
