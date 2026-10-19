@@ -40,7 +40,7 @@ This is a fundamental shift in decomposition strategy. The original roadmap buil
 
 **9 missions** (was 7 in rev 1):
 - 03-00: Architecture design (this mission)
-- 03-01: Schema bootstrap (single migration, 11 tables, 13 permissions, triggers, RLS)
+- 03-01: Schema bootstrap (single migration, 12 tables, 13 permissions, triggers, RLS)
 - 03-02: Vertical Slice — minimum viable single-tenant reform (proposal + simple approval + action + verification + feedback)
 - 03-03: Reform Alternatives (multiple options per proposal + selection)
 - 03-04: Reform Comparison + Advisor (deterministic comparison + LLM advisory)
@@ -73,7 +73,7 @@ The numbers below are **estimates derived from the design**. They will be adjust
 03-00 (DESIGN)
   │
   ▼
-03-01 (SCHEMA — 11 tables, 13 permissions, RLS, triggers, threats T1-T10 mitigations)
+03-01 (SCHEMA — 12 tables, 13 permissions, RLS, triggers, threats T1-T13 mitigations)
   │
   ▼
 03-02 (VERTICAL SLICE — minimum viable single-tenant reform flow)
@@ -111,7 +111,7 @@ Establish the architectural foundation for GROUP 03: domain model, workflow, con
 - Read all G00/G01/G02 authoritative documents
 - **Study the Institution-Tenant relationship** (per owner directive — was missed in rev 1)
 - Analyze existing service contracts, schemas, ADRs
-- Design G03 architecture (11 tables, 13 permissions, 12 services)
+- Design G03 architecture (12 tables, 13 permissions, 12 services)
 - Produce 8 design documents (was 7 — added THREAT_MODEL.md)
 - Identify open decisions requiring owner approval
 - **Per-limitation G02 dependency assessment** (D8 revised)
@@ -135,7 +135,7 @@ Establish the architectural foundation for GROUP 03: domain model, workflow, con
 - [ ] Architecture honors all 14 inherited invariants
 - [ ] 10 new G3 invariants proposed (unchanged)
 - [ ] Threat model identifies and mitigates 10 coordination threats (NEW)
-- [ ] Domain model specifies 11 tables (was 7) — 7 core + 4 coordination
+- [ ] Domain model specifies 12 tables — 7 core + 5 coordination
 - [ ] Workflow specifies 4 distinct lifecycle states (was 3) — separates verification from measurement
 - [ ] Contracts specify all service signatures + Zod schemas (expanded for coordination + D3 hypothesis schema)
 - [ ] Security policy covers RLS (coordination-aware), RBAC (13 permissions), audit, evidence, LLM, F6, attribution, publication, **threat model**

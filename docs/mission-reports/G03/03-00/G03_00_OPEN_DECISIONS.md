@@ -22,15 +22,15 @@
 
 | # | Decision | Owner directive | Status |
 |---|----------|-----------------|--------|
-| D1 | Independent reform tables vs. reuse G01 | APPROVED IN PRINCIPLE | Under revision — review all 9 tables for redundancy |
+| D1 | Independent reform tables vs. reuse G01 | APPROVED (rev 8) | 12 tables (7 core + 5 coordination) — empirically validated |
 | D2 | System-initiated opportunity detection | APPROVED — advisory only | Approved |
-| D3 | Problem vs. cause analysis | APPROVED WITH MODIFICATIONS | Under revision — add evidence supporting/contradicting, confidence basis, review status |
-| D4 | Optional FK to Program/Project | APPROVED IN PRINCIPLE | Under revision — add strict tenant/country/strategy context verification |
-| D5 | Three distinct lifecycle states | APPROVED IN PRINCIPLE | Under revision — separate execution verification from outcome measurement |
-| D6 | Cross-ministry coordination | **APPROVED WITH MODIFICATIONS** (elevated from deferred) | Under revision — institution-based, not tenant-based; two-level approval; explicit shared snapshots |
+| D3 | Problem vs. cause analysis | APPROVED (rev 8) | Expanded hypothesis schema with confidenceBasis, contradictingEvidenceIds, reviewStatus |
+| D4 | Optional FK to Program/Project | APPROVED (rev 8) | Cross-strategy links forbidden by default; strict tenant/country/strategy verification |
+| D5 | Four distinct lifecycle states | APPROVED (rev 8) | Separated execution verification from outcome measurement |
+| D6 | Cross-ministry coordination | **APPROVED (rev 8)** | 5 coordination tables, 4 permissions, two-level approval, SECURITY INVOKER + SECURITY DEFINER for admin ops |
 | D7 | Duplicate proposal prevention | APPROVED — warning + justified override | Approved |
-| D8 | G02 limitations | **CHANGED** — per-limitation dependency assessment, not blanket defer | Under revision — independent assessment of each G02-L22 through L26 |
-| D9 (NEW) | Coordination model details | Required by D6 | Proposed — multi-table model (4 tables), threat model documented separately |
+| D8 | G02 limitations | APPROVED (rev 8) | Per-limitation dependency assessment completed for G02-L22 through L26 |
+| D9 | Coordination model details | APPROVED (rev 8) | 5-table coordination model, threat model documented, empirically validated |
 
 ---
 
@@ -44,7 +44,7 @@
 
 After owner review, the recommendation stands with the following adjustments:
 
-1. **9 tables total** (7 original + 2 coordination... but see D6 below — coordination requires 4 tables, not 2). Total: **7 + 4 = 11 tables** for G03.
+1. **12 tables total** (7 core + 5 coordination). See D6 for the coordination model details.
 
 2. **Review for redundancy** — I performed this review. Findings:
    - `reform_action_updates` (append-only progress log): **KEEP** — owner explicitly directed not to merge into JSONB. The append-only enforcement is a security property, not a data modeling choice.
@@ -68,7 +68,7 @@ After owner review, the recommendation stands with the following adjustments:
 
 | Service group | Count | Purpose |
 |---------------|-------|---------|
-| Core reform services | 11 | (as originally proposed) |
+| Core reform services | 11 | (11 core + 1 coordination = 12 total services) |
 | Coordination services | 1 | `reform-coordination-service.ts` (CRUD + invitations + shared snapshots + plan approval) |
 | **TOTAL** | **12** | |
 
@@ -658,7 +658,7 @@ The revised open decisions document reflects the owner's directive to:
 4. Add a vertical slice mission for early validation
 5. Treat numbers as estimates, not goals
 
-The architecture is now more complex (11 tables, 12 services, 13 permissions, 9 missions) but more honest about the real-world needs of government reform. The threat model identifies 10 specific threats with mitigations that do not weaken RLS or tenant sovereignty.
+The architecture is now more complex (12 tables, 12 services, 13 permissions, 9 missions) but more honest about the real-world needs of government reform. The threat model identifies 13 specific threats with mitigations that do not weaken RLS or tenant sovereignty.
 
 I await the owner's final approval (or further modifications) before proceeding to mission 03-01.
 

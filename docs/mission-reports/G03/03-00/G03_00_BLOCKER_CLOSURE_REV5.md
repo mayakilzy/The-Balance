@@ -231,7 +231,10 @@ CREATE POLICY reform_coordination_participants_coord_admin_update
 --   1. The role is NOLOGIN — only invokable via the function
 --   2. The function's WHERE clause (lead check) is the authoritative gate
 --   3. The function returns BOOLEAN (no data exfiltration)
---   4. The role has NO SELECT on this table (cannot read participant data directly)
+--   4. The role CAN SELECT on this table (needed for UPDATE per C1 fix), but:
+--      - The role is NOLOGIN (cannot connect directly)
+--      - The function returns BOOLEAN (no data exfiltration via the function)
+--      - Direct SELECT by the role is not possible in production (NOLOGIN)
 
 -- REVOKE default privileges from PUBLIC (defense in depth)
 REVOKE ALL ON public.reform_coordinations FROM PUBLIC;
@@ -264,7 +267,7 @@ GRANT ALL ON public.reform_coordination_participants TO balance_admin;
 - If set (via verified session): returns the verified tenant ID.
 - If not set (empty string): the lead check subquery returns no rows, UPDATE matches zero rows.
 
-**Impersonation prevention**: An attacker cannot set `app.tenant_id` to the lead's tenant ID without authenticating as a user in that tenant AND having an active membership. The DB enforces this via the session mechanism.
+**Impersonation prevention (C2 LIMITATION — empirically proven)**: PostgreSQL does NOT prevent `balance_app` from setting `app.tenant_id` to arbitrary values via `set_config()`. The security model depends on `withAuthenticatedTenant` (application layer) to set `app.tenant_id` from a verified session. If direct SQL access is obtained, an attacker can impersonate any tenant. This is a documented limitation — see B1-TEST5 and B3-TEST9b for empirical evidence. The mitigation is: (1) no direct DB access for `balance_app` in production, (2) `withAuthenticatedTenant` is the single point of trust, (3) audit logging records the actor.
 
 ### 2.6 Atomic Audit (Requirement 6)
 
@@ -348,7 +351,7 @@ export async function removeCoordinationParticipant(
 | SEC-45 | Concurrency: lead removes participant while participant self-withdraws simultaneously | One succeeds, the other returns FALSE; no double-modification | Requirement 7 — concurrency |
 | SEC-46 | Membership change mid-call: participant's status changes from 'active' to 'withdrawn' during the function call | Function returns FALSE (status check fails); ZERO rows modified | Requirement 7 — membership change |
 | SEC-47 | Direct invocation of the function via SQL console as `balance_app` without going through the service | Function works but audit/event not written — service-layer audit is the canonical record | Defense in depth |
-| SEC-48 | `balance_coordination_admin` role attempts direct SELECT on `reform_coordination_participants` | RLS blocks (role has no SELECT policy on that table) | Requirement 4 — minimal privileges |
+| SEC-48 | `balance_coordination_admin` role attempts direct SELECT on `reform_coordination_participants` | RLS allows (role has SELECT per C1 fix); BUT role is NOLOGIN — cannot connect directly | Requirement 4 — minimal privileges (SELECT needed for UPDATE, but role is NOLOGIN) |
 | SEC-49 | `balance_coordination_admin` role attempts direct UPDATE on `reform_coordination_participants` (bypassing the function) | RLS allows (policy is permissive), BUT the role is NOLOGIN — cannot connect | Requirement 4 |
 | SEC-50 | Function called with `p_reason` shorter than 10 chars | Service-layer validation rejects before calling the function | Input validation |
 | SEC-51 | Lead revokes `reform:coordination:manage` mid-call (role change) | `requirePermissionWithCurrentRole` re-checks CURRENT DB role; throws PermissionDeniedError | Requirement 3 — current role check |

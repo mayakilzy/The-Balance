@@ -27,26 +27,19 @@
 
 The stakes are higher for G03. This document specifies the complete security contract.
 
-### 1.2 Why SECURITY DEFINER Is Still the Right Tool
+### 1.2 HISTORICAL: Why SECURITY DEFINER Was Initially Proposed (SUPERSEDED)
 
-Despite the owner's correct caution, `SECURITY DEFINER` remains the right tool **when properly constrained**, because:
+> ⚠️ **HISTORICAL — SUPERSEDED by REV 3/7/8**: The following section was the original REV 2
+> proposal for `SECURITY DEFINER`. It has been **superseded** by the REV 3+ design which uses:
+> - **SECURITY INVOKER** for visibility checks (`is_coordination_participant`, `is_snapshot_revoked`)
+> - **SECURITY DEFINER** ONLY for administrative cross-tenant UPDATE operations
+>   (`remove_coordination_participant`, `grant_commitment_approval`, `verify_institutional_authority`)
+>   with a dedicated `balance_coordination_admin` role (NOLOGIN, no BYPASSRLS)
+>
+> This section is preserved as a historical record of the design evolution. It is NOT an active contract.
+> The active contract is in §2 (Function Specification) below, which reflects the REV 8 final design.
 
-1. **Standard RLS is insufficient**: `reform_coordinations` rows must be visible to the lead tenant AND all active participants. Standard tenant-isolation RLS (`tenantId = current_setting('app.tenant_id')`) cannot express "tenantId = lead OR is_participant(id)" without a subquery that itself needs RLS bypass.
-
-2. **Alternatives are worse**:
-   - **Application-layer enforcement**: Service code checks participant status before SELECT. Risk: any service bug (e.g., a forgotten check) exposes cross-tenant data. Defense-in-depth failure.
-   - **Materialized view per coordination**: Impractical — coordinations are dynamic.
-   - **Denormalized `visibleToTenantIds` array on `reform_coordinations`**: Sync issues — adding/removing a participant requires updating the coordination row, which is race-prone and audit-unfriendly.
-   - **View with SECURITY INVOKER + explicit JOIN**: PostgreSQL 15+ supports `SECURITY INVOKER` views, but the JOIN itself would need RLS bypass for the participant check.
-
-3. **SECURITY DEFINER with strict constraints** is the PostgreSQL-recommended pattern for cross-tenant authorization helpers. The risk is manageable if the function is:
-   - Minimal (only returns boolean — never rows)
-   - Owned by a dedicated non-admin role
-   - Has a locked `search_path`
-   - Has minimal grants
-   - Cannot be exploited for data exfiltration
-
-This document specifies these constraints as a verifiable contract.
+The original REV 2 proposal argued that `SECURITY DEFINER` was the right tool for the visibility-check function (`is_coordination_participant`). This was later proven unnecessary — `SECURITY INVOKER` works correctly because the RLS policy on `reform_coordination_participants` uses the same condition the function checks. See §2.6 (REV 3 correction) and `G03_00_EMPIRICAL_VALIDATION_REV7.md` for empirical proof.
 
 ---
 
