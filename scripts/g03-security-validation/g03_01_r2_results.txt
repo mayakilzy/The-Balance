@@ -1,0 +1,52 @@
+psql:scripts/g03-security-validation/g03_01_r2_tests.sql:23: NOTICE:  table "g03_r2_results" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+DO
+DO
+DO
+DO
+DO
+ALTER TABLE
+ALTER TABLE
+SET
+DELETE 1
+DELETE 1
+DELETE 1
+RESET
+ALTER TABLE
+ALTER TABLE
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+
+============================================================
+G03-01 SECURITY REMEDIATION R2 TEST RESULTS
+============================================================
+ test_id |                        description                        |         expected          |                                  actual                                   | result 
+---------+-----------------------------------------------------------+---------------------------+---------------------------------------------------------------------------+--------
+ S2-R2-1 | remove_coordination_participant REVOKE'd from balance_app | ERROR (permission denied) | permission denied for function remove_coordination_participant            | PASS
+ S2-R2-2 | grant_commitment_approval REVOKE'd from balance_app       | ERROR (permission denied) | permission denied for function grant_commitment_approval                  | PASS
+ S2-R2-3 | verify_institutional_authority REVOKE'd from balance_app  | ERROR (permission denied) | permission denied for function verify_institutional_authority             | PASS
+ S3-R2-1 | UPDATE blocked even with spoofed migration_mode           | ERROR (S3 VIOLATION)      | S3 VIOLATION: UPDATE not permitted on append-only table reform_approvals. | PASS
+ S3-R2-2 | DELETE blocked even with spoofed migration_mode           | ERROR (S3 VIOLATION)      | S3 VIOLATION: DELETE not permitted on append-only table reform_approvals. | PASS
+ S3-R2-4 | Approved snapshot content immutable                       | ERROR (S3 VIOLATION)      | S3 VIOLATION: cannot modify content of approved shared snapshot.          | PASS
+ S3-R2-5 | Self-withdrawal works                                     | OK                        | OK                                                                        | PASS
+ S3-R2-6 | Tenant A sees own proposal                                | count=1                   | count=1                                                                   | PASS
+ S3-R2-7 | Tenant B cannot see A proposal                            | count=0                   | count=0                                                                   | PASS
+ S4-R2-1 | All 12 table names verified                               | all exist                 | all exist                                                                 | PASS
+ S4-R2-2 | No EXECUTE on DEFINER functions for balance_app           | 0 grants                  | 0 grants                                                                  | PASS
+ S4-R2-3 | REVOKE FROM PUBLIC on all DEFINER functions               | 0 grants                  | 0 grants                                                                  | PASS
+(12 rows)
+
+
+ passed | failed | total 
+--------+--------+-------
+     12 |      0 |    12
+(1 row)
+
+psql:scripts/g03-security-validation/g03_01_r2_tests.sql:359: NOTICE:  G03-01 R2: ALL 12 TESTS PASSED
+DO
