@@ -61,6 +61,44 @@ CREATE TEMP TABLE g03_final_results (
 );
 
 -- ============================================================
+-- 0. DYNAMIC TENANT ID HELPERS (session-scoped, SECURITY DEFINER)
+-- ============================================================
+-- CI FIX: the previous revision hardcoded tenant cuid() values from the
+-- local dev environment. In CI, prisma cuid() generates DIFFERENT IDs, so
+-- the FK constraints (leadTenantId, tenantId, ownerTenantId) rejected
+-- every INSERT that used a hardcoded ID.
+--
+-- Fix: look up tenant IDs by their stable `code` field, just like the
+-- script already does for countries (iso3='DML'). These functions are
+-- SECURITY DEFINER so they execute as the script owner (postgres superuser),
+-- bypassing RLS — this means they return the correct ID even when the
+-- current role is `balance_app` (which may be subject to RLS on tenants).
+--
+-- `pg_temp` schema = session-scoped: functions auto-dropped when the
+-- psql session ends, so they leave NO permanent objects behind.
+-- ============================================================
+CREATE OR REPLACE FUNCTION pg_temp.tenant_a_id() RETURNS TEXT
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path = public, pg_temp AS $$
+  SELECT id FROM tenants WHERE code = 'DML-MOP-TENANT'
+$$;
+
+CREATE OR REPLACE FUNCTION pg_temp.tenant_b_id() RETURNS TEXT
+LANGUAGE sql SECURITY DEFINER STABLE SET search_path = public, pg_temp AS $$
+  SELECT id FROM tenants WHERE code = 'DML-CB-TENANT'
+$$;
+
+-- Verify the helpers return non-NULL (fail fast if seed didn't run)
+DO $$
+DECLARE v_a TEXT; v_b TEXT;
+BEGIN
+  v_a := pg_temp.tenant_a_id();
+  v_b := pg_temp.tenant_b_id();
+  IF v_a IS NULL THEN RAISE EXCEPTION 'CI FIX: tenant A (DML-MOP-TENANT) not found. Was the seed run?'; END IF;
+  IF v_b IS NULL THEN RAISE EXCEPTION 'CI FIX: tenant B (DML-CB-TENANT) not found. Was the seed run?'; END IF;
+  RAISE NOTICE 'CI FIX: tenant A=%, tenant B=%', v_a, v_b;
+END $$;
+
+-- ============================================================
 -- 1. RLS VERIFICATION — per table, by exact name (relrowsecurity + relforcerowsecurity)
 -- ============================================================
 DO $$
@@ -99,13 +137,13 @@ DECLARE v_affected INT; v_status TEXT;
 BEGIN
   SET ROLE balance_admin;
   INSERT INTO reform_coordinations (id, "leadTenantId", "countryId", title, description, "approvalPolicy", "createdBy", "updatedAt")
-  VALUES ('fa-c1', 'cmveksd72000copg0lim5xiiw', (SELECT id FROM countries WHERE iso3='DML'), 'FA', 'T', 'lead_only', 'admin', NOW());
+  VALUES ('fa-c1', pg_temp.tenant_a_id(), (SELECT id FROM countries WHERE iso3='DML'), 'FA', 'T', 'lead_only', 'admin', NOW());
   INSERT INTO reform_coordination_participants (id, "coordinationId", "tenantId", "addedBy", status, "updatedAt")
-  VALUES ('fa-p1', 'fa-c1', 'cmveksd74000eopg0p1tbcda0', 'admin', 'active', NOW());
+  VALUES ('fa-p1', 'fa-c1', pg_temp.tenant_b_id(), 'admin', 'active', NOW());
   RESET ROLE;
 
   SET ROLE balance_app;
-  PERFORM set_config('app.tenant_id', 'cmveksd74000eopg0p1tbcda0', false);
+  PERFORM set_config('app.tenant_id', pg_temp.tenant_b_id(), false);
   PERFORM set_config('app.user_id', 'user-b', false);
   UPDATE reform_coordination_participants SET status = 'withdrawn', "withdrawnAt" = NOW(), "withdrawalReason" = 'test'
   WHERE id = 'fa-p1' AND status = 'active';
@@ -133,15 +171,15 @@ DECLARE v_before INT; v_after INT; v_raised BOOLEAN := FALSE;
 BEGIN
   SET ROLE balance_admin;
   INSERT INTO reform_proposals (id, "tenantId", title, "problemStatement", "createdBy", "updatedAt")
-  VALUES ('fa-p2', 'cmveksd72000copg0lim5xiiw', 'FA2', 'P', 'user', NOW());
-  SELECT count(*) INTO v_before FROM reform_proposals WHERE "tenantId" = 'cmveksd72000copg0lim5xiiw';
+  VALUES ('fa-p2', pg_temp.tenant_a_id(), 'FA2', 'P', 'user', NOW());
+  SELECT count(*) INTO v_before FROM reform_proposals WHERE "tenantId" = pg_temp.tenant_a_id();
   RESET ROLE;
 
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd74000eopg0p1tbcda0', false);
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_b_id(), false);
     INSERT INTO reform_proposals (id, "tenantId", title, "problemStatement", "createdBy", "updatedAt")
-    VALUES ('fa-hack', 'cmveksd72000copg0lim5xiiw', 'HACK', 'H', 'hacker', NOW());
+    VALUES ('fa-hack', pg_temp.tenant_a_id(), 'HACK', 'H', 'hacker', NOW());
     RESET ROLE;
   EXCEPTION WHEN OTHERS THEN
     v_raised := TRUE;
@@ -149,7 +187,7 @@ BEGIN
   END;
 
   SET ROLE balance_admin;
-  SELECT count(*) INTO v_after FROM reform_proposals WHERE "tenantId" = 'cmveksd72000copg0lim5xiiw';
+  SELECT count(*) INTO v_after FROM reform_proposals WHERE "tenantId" = pg_temp.tenant_a_id();
   RESET ROLE;
 
   INSERT INTO g03_final_results VALUES ('SA-02', 'Cross-tenant INSERT blocked (denied + count unchanged)',
@@ -190,9 +228,9 @@ BEGIN
   -- Setup: an approved snapshot owned by tenant A
   SET ROLE balance_admin;
   INSERT INTO reform_coordinations (id, "leadTenantId", "countryId", title, description, "approvalPolicy", "createdBy", "updatedAt")
-  VALUES (v_coord_id, 'cmveksd72000copg0lim5xiiw', (SELECT id FROM countries WHERE iso3='DML'), 'FA3', 'T', 'lead_only', 'admin', NOW());
+  VALUES (v_coord_id, pg_temp.tenant_a_id(), (SELECT id FROM countries WHERE iso3='DML'), 'FA3', 'T', 'lead_only', 'admin', NOW());
   INSERT INTO reform_coordination_shared_snapshots (id, "coordinationId", "ownerTenantId", "snapshotType", title, summary, status, "approvedAt", "approvedBy", "createdBy", "updatedAt")
-  VALUES (v_snap_id, v_coord_id, 'cmveksd72000copg0lim5xiiw', 'commitment', 'OrigTitle', 'OrigSummary', 'approved', NOW(), 'reviewer-orig', 'user-orig', NOW());
+  VALUES (v_snap_id, v_coord_id, pg_temp.tenant_a_id(), 'commitment', 'OrigTitle', 'OrigSummary', 'approved', NOW(), 'reviewer-orig', 'user-orig', NOW());
   -- Capture the persisted original values for "unchanged" verification
   SELECT "approvedBy", "approvedAt", "status", "ownerTenantId", "coordinationId", "title"
   INTO v_orig_approvedBy, v_orig_approvedAt, v_orig_status, v_orig_owner, v_orig_coord, v_orig_title
@@ -205,7 +243,7 @@ BEGIN
   v_raised := FALSE;
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
     UPDATE reform_coordination_shared_snapshots SET "approvedBy" = 'HACKED_BY'
     WHERE id = v_snap_id;
     RESET ROLE;
@@ -227,7 +265,7 @@ BEGIN
   v_raised := FALSE;
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
     UPDATE reform_coordination_shared_snapshots SET "approvedAt" = NOW() + INTERVAL '1 hour'
     WHERE id = v_snap_id;
     RESET ROLE;
@@ -254,14 +292,14 @@ BEGIN
   BEGIN
     SET ROLE balance_admin;
     INSERT INTO reform_coordination_shared_snapshots (id, "coordinationId", "ownerTenantId", "snapshotType", title, summary, status, "createdBy", "updatedAt")
-    VALUES (v_draft_id, v_coord_id, 'cmveksd72000copg0lim5xiiw', 'commitment', 'DraftT', 'DraftS', 'draft', 'user-orig', NOW());
+    VALUES (v_draft_id, v_coord_id, pg_temp.tenant_a_id(), 'commitment', 'DraftT', 'DraftS', 'draft', 'user-orig', NOW());
     SELECT status INTO v_orig_d_status FROM reform_coordination_shared_snapshots WHERE id = v_draft_id;
     RESET ROLE;
 
     v_raised := FALSE;
     BEGIN
       SET ROLE balance_app;
-      PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
+      PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
       UPDATE reform_coordination_shared_snapshots SET status = 'approved' WHERE id = v_draft_id;
       RESET ROLE;
     EXCEPTION WHEN OTHERS THEN
@@ -290,8 +328,8 @@ BEGIN
   v_raised := FALSE;
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
-    UPDATE reform_coordination_shared_snapshots SET "ownerTenantId" = 'cmveksd74000eopg0p1tbcda0'
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
+    UPDATE reform_coordination_shared_snapshots SET "ownerTenantId" = pg_temp.tenant_b_id()
     WHERE id = v_snap_id;
     RESET ROLE;
   EXCEPTION WHEN OTHERS THEN
@@ -312,7 +350,7 @@ BEGIN
   v_raised := FALSE;
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
     UPDATE reform_coordination_shared_snapshots SET "coordinationId" = 'fa-c-other'
     WHERE id = v_snap_id;
     RESET ROLE;
@@ -335,7 +373,7 @@ BEGIN
   v_raised := FALSE;
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
     UPDATE reform_coordination_shared_snapshots SET title = 'HACKED_TITLE' WHERE id = v_snap_id;
     RESET ROLE;
   EXCEPTION WHEN OTHERS THEN
@@ -368,17 +406,17 @@ DECLARE v_count INT;
 BEGIN
   SET ROLE balance_admin;
   INSERT INTO reform_coordinations (id, "leadTenantId", "countryId", title, description, "approvalPolicy", "createdBy", "updatedAt")
-  VALUES ('fa-c4', 'cmveksd72000copg0lim5xiiw', (SELECT id FROM countries WHERE iso3='DML'), 'FA4', 'T', 'lead_only', 'admin', NOW());
+  VALUES ('fa-c4', pg_temp.tenant_a_id(), (SELECT id FROM countries WHERE iso3='DML'), 'FA4', 'T', 'lead_only', 'admin', NOW());
   INSERT INTO reform_coordination_participants (id, "coordinationId", "tenantId", "addedBy", status, "updatedAt")
-  VALUES ('fa-p4', 'fa-c4', 'cmveksd74000eopg0p1tbcda0', 'admin', 'active', NOW());
+  VALUES ('fa-p4', 'fa-c4', pg_temp.tenant_b_id(), 'admin', 'active', NOW());
   INSERT INTO reform_coordination_shared_snapshots (id, "coordinationId", "ownerTenantId", "snapshotType", title, summary, status, "approvedAt", "approvedBy", "createdBy", "updatedAt")
-  VALUES ('fa-snap4', 'fa-c4', 'cmveksd72000copg0lim5xiiw', 'commitment', 'Title', 'Summary', 'approved', NOW(), 'reviewer', 'user', NOW());
+  VALUES ('fa-snap4', 'fa-c4', pg_temp.tenant_a_id(), 'commitment', 'Title', 'Summary', 'approved', NOW(), 'reviewer', 'user', NOW());
   INSERT INTO reform_coordination_shared_snapshot_revocations (id, "tenantId", "coordinationId", "snapshotId", "revokedBy", reason)
-  VALUES ('fa-rev4', 'cmveksd72000copg0lim5xiiw', 'fa-c4', 'fa-snap4', 'reviewer', 'test revocation');
+  VALUES ('fa-rev4', pg_temp.tenant_a_id(), 'fa-c4', 'fa-snap4', 'reviewer', 'test revocation');
   RESET ROLE;
 
   SET ROLE balance_app;
-  PERFORM set_config('app.tenant_id', 'cmveksd74000eopg0p1tbcda0', false);
+  PERFORM set_config('app.tenant_id', pg_temp.tenant_b_id(), false);
   SELECT count(*) INTO v_count FROM reform_coordination_shared_snapshots WHERE id = 'fa-snap4';
   RESET ROLE;
 
@@ -405,14 +443,14 @@ DECLARE v_raised BOOLEAN;
 BEGIN
   SET ROLE balance_admin;
   INSERT INTO reform_proposals (id, "tenantId", title, "problemStatement", "createdBy", "updatedAt")
-  VALUES ('fa-p5', 'cmveksd72000copg0lim5xiiw', 'FA5', 'P', 'user', NOW());
+  VALUES ('fa-p5', pg_temp.tenant_a_id(), 'FA5', 'P', 'user', NOW());
   RESET ROLE;
 
   v_raised := FALSE;
   BEGIN
     SET ROLE balance_admin;
     INSERT INTO reform_alternatives (id, "tenantId", "proposalId", title, description, "createdBy", "updatedAt")
-    VALUES ('fa-alt5', 'cmveksd74000eopg0p1tbcda0', 'fa-p5', 'Alt', 'Desc', 'user', NOW());
+    VALUES ('fa-alt5', pg_temp.tenant_b_id(), 'fa-p5', 'Alt', 'Desc', 'user', NOW());
     RESET ROLE;
   EXCEPTION WHEN OTHERS THEN
     v_raised := TRUE;
@@ -431,16 +469,16 @@ DECLARE v_raised BOOLEAN;
 BEGIN
   SET ROLE balance_admin;
   INSERT INTO reform_proposals (id, "tenantId", title, "problemStatement", "createdBy", "updatedAt")
-  VALUES ('fa-p6', 'cmveksd72000copg0lim5xiiw', 'FA6', 'P', 'user', NOW());
+  VALUES ('fa-p6', pg_temp.tenant_a_id(), 'FA6', 'P', 'user', NOW());
   INSERT INTO reform_alternatives (id, "tenantId", "proposalId", title, description, "createdBy", "updatedAt")
-  VALUES ('fa-alt6', 'cmveksd72000copg0lim5xiiw', 'fa-p6', 'Alt', 'Desc', 'user', NOW());
+  VALUES ('fa-alt6', pg_temp.tenant_a_id(), 'fa-p6', 'Alt', 'Desc', 'user', NOW());
   RESET ROLE;
 
   v_raised := FALSE;
   BEGIN
     SET ROLE balance_admin;
     INSERT INTO reform_actions (id, "tenantId", "proposalId", "alternativeId", title, "createdBy", "updatedAt")
-    VALUES ('fa-act6', 'cmveksd74000eopg0p1tbcda0', 'fa-p6', 'fa-alt6', 'Action', 'user', NOW());
+    VALUES ('fa-act6', pg_temp.tenant_b_id(), 'fa-p6', 'fa-alt6', 'Action', 'user', NOW());
     RESET ROLE;
   EXCEPTION WHEN OTHERS THEN
     v_raised := TRUE;
@@ -500,7 +538,7 @@ DECLARE v_raised BOOLEAN := FALSE;
 BEGIN
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
     PERFORM set_config('app.user_id', 'user-test', false);
     -- Attempt direct invocation of a DORMANT DEFINER function
     PERFORM remove_coordination_participant('fa-nonexistent', 'fa-nonexistent', 'probe');
@@ -520,7 +558,7 @@ DECLARE v_result BOOLEAN;
 BEGIN
   BEGIN
     SET ROLE balance_app;
-    PERFORM set_config('app.tenant_id', 'cmveksd72000copg0lim5xiiw', false);
+    PERFORM set_config('app.tenant_id', pg_temp.tenant_a_id(), false);
     -- is_snapshot_revoked on a non-existent snapshot should return FALSE (not raise)
     SELECT is_snapshot_revoked('fa-nonexistent-snapshot') INTO v_result;
     RESET ROLE;
@@ -571,11 +609,11 @@ DECLARE v_raised BOOLEAN := FALSE; v_count_before INT; v_count_after INT;
 BEGIN
   SET ROLE balance_admin;
   INSERT INTO reform_proposals (id, "tenantId", title, "problemStatement", "createdBy", "updatedAt")
-  VALUES ('fa-p7', 'cmveksd72000copg0lim5xiiw', 'FA7', 'P', 'user', NOW());
+  VALUES ('fa-p7', pg_temp.tenant_a_id(), 'FA7', 'P', 'user', NOW());
   INSERT INTO reform_alternatives (id, "tenantId", "proposalId", title, description, "createdBy", "updatedAt")
-  VALUES ('fa-alt7', 'cmveksd72000copg0lim5xiiw', 'fa-p7', 'Alt', 'Desc', 'user', NOW());
+  VALUES ('fa-alt7', pg_temp.tenant_a_id(), 'fa-p7', 'Alt', 'Desc', 'user', NOW());
   INSERT INTO reform_approvals (id, "tenantId", "proposalId", "alternativeId", "approvedBy", "rationale")
-  VALUES ('fa-ap7', 'cmveksd72000copg0lim5xiiw', 'fa-p7', 'fa-alt7', 'admin', 'approved');
+  VALUES ('fa-ap7', pg_temp.tenant_a_id(), 'fa-p7', 'fa-alt7', 'admin', 'approved');
   SELECT count(*) INTO v_count_before FROM reform_approvals WHERE id = 'fa-ap7';
   RESET ROLE;
 
@@ -612,11 +650,11 @@ DECLARE v_raised BOOLEAN := FALSE; v_orig TEXT; v_curr TEXT;
 BEGIN
   SET ROLE balance_admin;
   INSERT INTO reform_proposals (id, "tenantId", title, "problemStatement", "createdBy", "updatedAt")
-  VALUES ('fa-p8', 'cmveksd72000copg0lim5xiiw', 'FA8', 'P', 'user', NOW());
+  VALUES ('fa-p8', pg_temp.tenant_a_id(), 'FA8', 'P', 'user', NOW());
   INSERT INTO reform_alternatives (id, "tenantId", "proposalId", title, description, "createdBy", "updatedAt")
-  VALUES ('fa-alt8', 'cmveksd72000copg0lim5xiiw', 'fa-p8', 'Alt', 'Desc', 'user', NOW());
+  VALUES ('fa-alt8', pg_temp.tenant_a_id(), 'fa-p8', 'Alt', 'Desc', 'user', NOW());
   INSERT INTO reform_approvals (id, "tenantId", "proposalId", "alternativeId", "approvedBy", "rationale")
-  VALUES ('fa-ap8', 'cmveksd72000copg0lim5xiiw', 'fa-p8', 'fa-alt8', 'admin', 'approved');
+  VALUES ('fa-ap8', pg_temp.tenant_a_id(), 'fa-p8', 'fa-alt8', 'admin', 'approved');
   SELECT "rationale" INTO v_orig FROM reform_approvals WHERE id = 'fa-ap8';
   RESET ROLE;
 
@@ -676,7 +714,7 @@ END $$;
 DO $$
 DECLARE v_proposals INT; v_coordinations INT; v_snapshots INT;
 BEGIN
-  SELECT count(*) INTO v_proposals FROM reform_proposals WHERE "tenantId" IN ('cmveksd72000copg0lim5xiiw','cmveksd74000eopg0p1tbcda0') AND title LIKE 'DML Seed%';
+  SELECT count(*) INTO v_proposals FROM reform_proposals WHERE "tenantId" IN (pg_temp.tenant_a_id(),pg_temp.tenant_b_id()) AND title LIKE 'DML Seed%';
   SELECT count(*) INTO v_coordinations FROM reform_coordinations WHERE title LIKE 'DML Seed%';
   SELECT count(*) INTO v_snapshots FROM reform_coordination_shared_snapshots WHERE title LIKE 'DML Seed%';
   INSERT INTO g03_final_results VALUES ('SEED-01', 'Seed fixture: reform entities present',
@@ -692,8 +730,8 @@ BEGIN
   SELECT count(*) INTO v_count
   FROM reform_coordinations c
   JOIN reform_coordination_participants p ON p."coordinationId" = c.id
-  WHERE c."leadTenantId" = 'cmveksd72000copg0lim5xiiw'
-    AND p."tenantId" = 'cmveksd74000eopg0p1tbcda0'
+  WHERE c."leadTenantId" = pg_temp.tenant_a_id()
+    AND p."tenantId" = pg_temp.tenant_b_id()
     AND c.title LIKE 'DML Seed%';
   INSERT INTO g03_final_results VALUES ('SEED-02', 'Seed: multi-institution coordination present (Tenant A lead + Tenant B participant)',
     '>=1 cross-tenant coordinations', 'count=' || v_count, v_count >= 1);

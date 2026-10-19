@@ -2,23 +2,23 @@
 
  RUN  v3.2.7 /home/z/The-Balance
 
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-01: Coordination membership — positive > Tenant B can read its own participant row in a coordination owned by Tenant A 12ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-02: Coordination membership — negative (cross-tenant invisible) > Tenant B cannot read Tenant A's coordination-only resources (no membership) 5ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-03: Authority-field protection — canApproveCommitments > balance_app cannot modify canApproveCommitments (D15 institutional authority separation) 56ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-04: Authority-field protection — verifiedInstitutionId > balance_app cannot modify verifiedInstitutionId (D15 three-check, fail-closed) 8ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-05: Snapshot revocation — non-owner invisible > Tenant B (participant) cannot see a snapshot revoked by Tenant A (owner) 11ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-06: Snapshot revocation — owner retains audit visibility > Tenant A (owner) can still read its own revoked snapshot for audit 9ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-07: Append-only — DELETE blocked on reform_approvals > Even balance_admin cannot DELETE from reform_approvals (unconditional trigger) 10ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-08: Append-only — UPDATE blocked on reform_action_updates > Even balance_admin cannot UPDATE reform_action_updates (unconditional trigger) 12ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-09: Cross-tenant FK — alternative.tenantId ≠ proposal.tenantId > INSERT reform_alternatives with mismatched tenantId is rejected by trigger 4ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-10: Cross-tenant FK — action.tenantId ≠ proposal.tenantId > INSERT reform_actions with mismatched tenantId is rejected by trigger 6ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-11: Approval metadata — approvedBy protection > balance_app cannot modify approvedBy on an approved shared snapshot (migration 0025) 8ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-12: Approval metadata — status→approved transition denied > balance_app cannot transition status from draft to approved (migration 0025) 29ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-01: Coordination membership — positive > Tenant B can read its own participant row in a coordination owned by Tenant A 14ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-02: Coordination membership — negative (cross-tenant invisible) > Tenant B cannot read Tenant A's coordination-only resources (no membership) 6ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-03: Authority-field protection — canApproveCommitments > balance_app cannot modify canApproveCommitments (D15 institutional authority separation) 59ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-04: Authority-field protection — verifiedInstitutionId > balance_app cannot modify verifiedInstitutionId (D15 three-check, fail-closed) 12ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-05: Snapshot revocation — non-owner invisible > Tenant B (participant) cannot see a snapshot revoked by Tenant A (owner) 14ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-06: Snapshot revocation — owner retains audit visibility > Tenant A (owner) can still read its own revoked snapshot for audit 10ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-07: Append-only — DELETE blocked on reform_approvals > Even balance_admin cannot DELETE from reform_approvals (unconditional trigger) 12ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-08: Append-only — UPDATE blocked on reform_action_updates > Even balance_admin cannot UPDATE reform_action_updates (unconditional trigger) 34ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-09: Cross-tenant FK — alternative.tenantId ≠ proposal.tenantId > INSERT reform_alternatives with mismatched tenantId is rejected by trigger 5ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-10: Cross-tenant FK — action.tenantId ≠ proposal.tenantId > INSERT reform_actions with mismatched tenantId is rejected by trigger 7ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-11: Approval metadata — approvedBy protection > balance_app cannot modify approvedBy on an approved shared snapshot (migration 0025) 10ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-12: Approval metadata — status→approved transition denied > balance_app cannot transition status from draft to approved (migration 0025) 9ms
  ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-13: DEFINER functions DORMANT — EFFECTIVE privilege test > balance_app direct call to remove_coordination_participant raises (REVOKE effective) 3ms
- ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-14: INVOKER functions EFFECTIVE — direct call succeeds > balance_app can call is_snapshot_revoked() and gets a boolean result 3ms
+ ✓ tests/integration/g03-01-security.integration.test.ts > G03-01 I-14: INVOKER functions EFFECTIVE — direct call succeeds > balance_app can call is_snapshot_revoked() and gets a boolean result 2ms
 
  Test Files  1 passed (1)
       Tests  14 passed (14)
-   Start at  02:25:36
-   Duration  565ms (transform 81ms, setup 0ms, collect 115ms, tests 251ms, environment 0ms, prepare 74ms)
+   Start at  02:45:04
+   Duration  646ms (transform 97ms, setup 0ms, collect 132ms, tests 294ms, environment 0ms, prepare 66ms)
 

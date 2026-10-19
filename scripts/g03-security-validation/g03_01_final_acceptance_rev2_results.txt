@@ -2,6 +2,10 @@ DO
 psql:scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql:58: NOTICE:  table "g03_final_results" does not exist, skipping
 DROP TABLE
 CREATE TABLE
+CREATE FUNCTION
+CREATE FUNCTION
+psql:scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql:99: NOTICE:  CI FIX: tenant A=cmvendrwt000coptmtva3rvy2, tenant B=cmvendrwv000eoptmo1ks5y1t
+DO
 DO
 DO
 DO
@@ -45,7 +49,7 @@ G03-01 FINAL ACCEPTANCE TEST RESULTS (rev 2 — reviewer closure)
  SA-03a  | approvedBy-only change denied + persisted unchanged                                 | raised=TRUE + approvedBy=reviewer-orig          | raised=true approvedBy=reviewer-orig                                                          | PASS
  SA-03b  | approvedAt-only change denied + persisted unchanged                                 | raised=TRUE + approvedAt unchanged              | raised=true approvedAt_match=true                                                             | PASS
  SA-03c  | status draft->approved denied + persisted unchanged                                 | raised=TRUE + status=draft                      | raised=true status=draft                                                                      | PASS
- SA-03d  | ownerTenantId change denied + persisted unchanged                                   | raised=TRUE + owner=cmveksd72000copg0lim5xiiw   | raised=true owner=cmveksd72000copg0lim5xiiw                                                   | PASS
+ SA-03d  | ownerTenantId change denied + persisted unchanged                                   | raised=TRUE + owner=cmvendrwt000coptmtva3rvy2   | raised=true owner=cmvendrwt000coptmtva3rvy2                                                   | PASS
  SA-03e  | coordinationId change denied + persisted unchanged                                  | raised=TRUE + coord=fa-c3                       | raised=true coord=fa-c3                                                                       | PASS
  SA-03f  | approved content (title) modification denied + persisted unchanged                  | raised=TRUE + title=OrigTitle                   | raised=true title=OrigTitle                                                                   | PASS
  SA-04   | Revoked snapshot invisible to participant                                           | count=0                                         | count=0                                                                                       | PASS
@@ -61,5 +65,5 @@ G03-01 FINAL ACCEPTANCE TEST RESULTS (rev 2 — reviewer closure)
      25 |      0 |    25
 (1 row)
 
-psql:scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql:733: NOTICE:  G03-01 FINAL: ALL 25 TESTS PASSED
+psql:scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql:771: NOTICE:  G03-01 FINAL: ALL 25 TESTS PASSED
 DO
