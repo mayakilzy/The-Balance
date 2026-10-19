@@ -1,0 +1,93 @@
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:15: NOTICE:  schema "g03_b2_test" does not exist, skipping
+DROP SCHEMA
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:16: ERROR:  role "balance_app" cannot be dropped because some objects depend on it
+DETAIL:  privileges for schema g03_b1_test
+privileges for table g03_b1_test.reform_coordinations
+privileges for table g03_b1_test.reform_coordination_participants
+target of policy rc_select_app on table g03_b1_test.reform_coordinations
+target of policy rc_insert_app on table g03_b1_test.reform_coordinations
+target of policy rc_update_app on table g03_b1_test.reform_coordinations
+target of policy rcp_select_app on table g03_b1_test.reform_coordination_participants
+target of policy rcp_insert_app on table g03_b1_test.reform_coordination_participants
+target of policy rcp_update_app on table g03_b1_test.reform_coordination_participants
+privileges for function g03_b1_test.remove_coordination_participant(text,text,text)
+CONTEXT:  SQL statement "DROP ROLE IF EXISTS balance_app"
+PL/pgSQL function inline_code_block line 1 at SQL statement
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:17: ERROR:  role "balance_admin" cannot be dropped because some objects depend on it
+DETAIL:  privileges for schema g03_b1_test
+privileges for table g03_b1_test.reform_coordinations
+privileges for table g03_b1_test.reform_coordination_participants
+CONTEXT:  SQL statement "DROP ROLE IF EXISTS balance_admin"
+PL/pgSQL function inline_code_block line 1 at SQL statement
+CREATE SCHEMA
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:20: ERROR:  role "balance_app" already exists
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:21: ERROR:  role "balance_admin" already exists
+GRANT
+SET
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+CREATE FUNCTION
+GRANT
+CREATE FUNCTION
+GRANT
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE FUNCTION
+CREATE TRIGGER
+GRANT
+GRANT
+GRANT
+GRANT
+GRANT
+SET
+INSERT 0 1
+INSERT 0 2
+INSERT 0 2
+INSERT 0 1
+RESET
+psql:/home/z/my-project/scripts/g03-security-validation/b2_snapshot_revocation.sql:182: NOTICE:  table "test_results" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+DO
+DO
+DO
+DO
+DO
+DO
+
+============================================================
+B2 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4)
+============================================================
+ test_id  |                      description                       |         expected         |                                                 actual                                                 | result 
+----------+--------------------------------------------------------+--------------------------+--------------------------------------------------------------------------------------------------------+--------
+ B2-TEST1 | Approved non-revoked snapshot visible to participant   | count=1                  | count=1                                                                                                | PASS
+ B2-TEST2 | Revoked snapshot NOT visible to participant (DB-level) | count=0                  | count=0                                                                                                | PASS
+ B2-TEST3 | Owner retains historical access to revoked snapshot    | count=1                  | count=1                                                                                                | PASS
+ B2-TEST4 | coordinationId match enforcement (trigger)             | ERROR (mismatch blocked) | Coordination mismatch: revocation coord-WRONG does not match snapshot coord-1                          | PASS
+ B2-TEST5 | Cross-tenant forgery prevention                        | ERROR (RLS blocks)       | new row violates row-level security policy for table "reform_coordination_shared_snapshot_revocations" | PASS
+ B2-TEST6 | No circular RLS (is_snapshot_revoked works)            | TRUE (snap-2 is revoked) | true                                                                                                   | PASS
+(6 rows)
+
+
+ passed | failed | total 
+--------+--------+-------
+      6 |      0 |     6
+(1 row)
+

@@ -1,12 +1,15 @@
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:12: NOTICE:  drop cascades to 3 other objects
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:7: NOTICE:  drop cascades to 4 other objects
 DETAIL:  drop cascades to table g03_b1_test.reform_coordinations
 drop cascades to table g03_b1_test.reform_coordination_participants
 drop cascades to function g03_b1_test.remove_coordination_participant(text,text,text)
+drop cascades to table g03_b1_test.test_results
 DROP SCHEMA
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:8: NOTICE:  role "test_public_user" does not exist, skipping
+DO
+DO
+DO
+DO
 CREATE SCHEMA
-DO
-DO
-DO
 CREATE ROLE
 CREATE ROLE
 CREATE ROLE
@@ -41,100 +44,33 @@ SET
 INSERT 0 2
 INSERT 0 4
 RESET
-
-=== B1 TEST 1: Lead removes participant ===
-SET
-BEGIN
-SET
-SET
- test1_result 
---------------
- t
-(1 row)
-
-COMMIT
-RESET
-SET
-     test     |   id    | status  |  removedBy   
---------------+---------+---------+--------------
- TEST1_verify | part-B1 | removed | user-A-admin
-(1 row)
-
-RESET
-
-=== B1 TEST 2: Non-lead tries to remove participant ===
-SET
-BEGIN
-SET
-SET
- test2_result 
---------------
- f
-(1 row)
-
-COMMIT
-RESET
-SET
-     test     |   id    | status | removedBy 
---------------+---------+--------+-----------
- TEST2_verify | part-A1 | active | 
-(1 row)
-
-RESET
-
-=== B1 TEST 3: Direct cross-tenant UPDATE blocked by RLS ===
-SET
-BEGIN
-SET
-UPDATE 0
-COMMIT
-RESET
-SET
-     test     |   id    | status | removalReason 
---------------+---------+--------+---------------
- TEST3_verify | part-B2 | active | 
-(1 row)
-
-RESET
-
-=== B1 TEST 4: PUBLIC cannot call function ===
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:87: NOTICE:  table "test_results" does not exist, skipping
+DROP TABLE
+CREATE TABLE
 DO
-CREATE ROLE
-GRANT
-SET
-BEGIN
-SET
-SET
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:233: ERROR:  permission denied for function remove_coordination_participant
-ROLLBACK
-RESET
-psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:236: ERROR:  role "test_public_user" cannot be dropped because some objects depend on it
-DETAIL:  privileges for schema g03_b1_test
+DO
+DO
+DO
+DO
+psql:/home/z/my-project/scripts/g03-security-validation/b1_participant_removal.sql:197: ERROR:  role "test_public_user" does not exist
+CONTEXT:  SQL statement "REVOKE USAGE ON SCHEMA g03_b1_test FROM test_public_user"
+PL/pgSQL function inline_code_block line 2 at SQL statement
 
-=== B1 TEST 5: set_config impersonation (documented limitation) ===
-SET
-BEGIN
-SET
-SET
- test5_result 
---------------
- t
+============================================================
+B1 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4)
+============================================================
+ test_id |              description              |               expected                |                             actual                             | result 
+---------+---------------------------------------+---------------------------------------+----------------------------------------------------------------+--------
+ TEST1   | Lead removes participant              | TRUE+removed+user-A-admin             | true+removed+user-A-admin                                      | PASS
+ TEST2   | Non-lead cannot remove                | FALSE+active+NULL                     | false+active+NULL                                              | PASS
+ TEST3   | Direct cross-tenant UPDATE blocked    | NULL reason (RLS blocks)              | NULL                                                           | PASS
+ TEST4   | PUBLIC cannot EXECUTE                 | ERROR (permission denied)             | permission denied for function remove_coordination_participant | PASS
+ TEST5   | set_config impersonation (LIMITATION) | TRUE+removed (impersonation succeeds) | true+removed                                                   | PASS
+(5 rows)
+
+
+ passed | failed | total 
+--------+--------+-------
+      5 |      0 |     5
 (1 row)
 
-COMMIT
-RESET
-SET
-     test     |   id    | status  |  removedBy   
---------------+---------+---------+--------------
- TEST5_verify | part-A2 | removed | impersonator
-(1 row)
-
-RESET
-
-=== B1 VALIDATION COMPLETE ===
-Expected results:
-TEST 1: result=t, status=removed (lead can remove)
-TEST 2: result=f, status=active (non-lead cannot remove)
-TEST 3: 0 rows updated (RLS blocks cross-tenant direct UPDATE)
-TEST 4: ERROR permission denied (PUBLIC cannot EXECUTE)
-TEST 5: result=t — IMPERSONATION SUCCEEDS (documented limitation)

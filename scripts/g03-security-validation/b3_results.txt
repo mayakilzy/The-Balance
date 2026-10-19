@@ -1,0 +1,118 @@
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:16: NOTICE:  schema "g03_b3_test" does not exist, skipping
+DROP SCHEMA
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:17: ERROR:  role "balance_app" cannot be dropped because some objects depend on it
+DETAIL:  privileges for schema g03_b1_test
+privileges for table g03_b1_test.reform_coordinations
+privileges for table g03_b1_test.reform_coordination_participants
+target of policy rc_select_app on table g03_b1_test.reform_coordinations
+target of policy rc_insert_app on table g03_b1_test.reform_coordinations
+target of policy rc_update_app on table g03_b1_test.reform_coordinations
+target of policy rcp_select_app on table g03_b1_test.reform_coordination_participants
+target of policy rcp_insert_app on table g03_b1_test.reform_coordination_participants
+target of policy rcp_update_app on table g03_b1_test.reform_coordination_participants
+privileges for function g03_b1_test.remove_coordination_participant(text,text,text)
+privileges for schema g03_b2_test
+privileges for table g03_b2_test.reform_coordinations
+privileges for table g03_b2_test.reform_coordination_participants
+privileges for table g03_b2_test.reform_coordination_shared_snapshots
+privileges for table g03_b2_test.reform_coordination_shared_snapshot_revocations
+privileges for function g03_b2_test.is_coordination_participant(text)
+privileges for function g03_b2_test.is_snapshot_revoked(text)
+target of policy rc_select_app on table g03_b2_test.reform_coordinations
+target of policy rc_insert_app on table g03_b2_test.reform_coordinations
+target of policy rcp_select_app on table g03_b2_test.reform_coordination_participants
+target of policy rcp_insert_app on table g03_b2_test.reform_coordination_participants
+target of policy rss_select_app on table g03_b2_test.reform_coordination_shared_snapshots
+target of policy rss_insert_app on table g03_b2_test.reform_coordination_shared_snapshots
+target of policy rss_update_app on table g03_b2_test.reform_coordination_shared_snapshots
+target of policy rssr_select_app on table g03_b2_test.reform_coordination_shared_snapshot_revocations
+target of policy rssr_insert_app on table g03_b2_test.reform_coordination_shared_snapshot_revocations
+CONTEXT:  SQL statement "DROP ROLE IF EXISTS balance_app"
+PL/pgSQL function inline_code_block line 1 at SQL statement
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:18: ERROR:  role "balance_admin" cannot be dropped because some objects depend on it
+DETAIL:  privileges for schema g03_b1_test
+privileges for table g03_b1_test.reform_coordinations
+privileges for table g03_b1_test.reform_coordination_participants
+privileges for schema g03_b2_test
+privileges for table g03_b2_test.reform_coordinations
+privileges for table g03_b2_test.reform_coordination_participants
+privileges for table g03_b2_test.reform_coordination_shared_snapshots
+privileges for table g03_b2_test.reform_coordination_shared_snapshot_revocations
+CONTEXT:  SQL statement "DROP ROLE IF EXISTS balance_admin"
+PL/pgSQL function inline_code_block line 1 at SQL statement
+CREATE SCHEMA
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:21: ERROR:  role "balance_app" already exists
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:22: ERROR:  role "balance_admin" already exists
+GRANT
+SET
+CREATE TABLE
+CREATE TABLE
+CREATE TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+ALTER TABLE
+CREATE FUNCTION
+GRANT
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+CREATE POLICY
+GRANT
+GRANT
+CREATE FUNCTION
+ALTER FUNCTION
+GRANT
+REVOKE
+CREATE FUNCTION
+ALTER FUNCTION
+GRANT
+REVOKE
+CREATE FUNCTION
+ALTER FUNCTION
+GRANT
+REVOKE
+SET
+INSERT 0 1
+INSERT 0 2
+RESET
+psql:/home/z/my-project/scripts/g03-security-validation/b3_institutional_authority.sql:217: NOTICE:  table "test_results" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+
+============================================================
+B3 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4)
+============================================================
+ test_id  |                             description                             |              expected              |        actual        | result 
+----------+---------------------------------------------------------------------+------------------------------------+----------------------+--------
+ B3-TEST1 | Lead grants commitment approval (cross-tenant)                      | TRUE+canApprove=TRUE               | true+canApprove=true | PASS
+ B3-TEST2 | Non-lead cannot grant commitment approval                           | FALSE (zero modification)          | false                | PASS
+ B3-TEST3 | Institutional commitment FAIL-CLOSED (no verified authority)        | FALSE (fail-closed)                | false                | PASS
+ B3-TEST4 | Admin verifies institutional authority                              | TRUE+verifiedInstitutionId=INST-CB | true+INST-CB         | PASS
+ B3-TEST5 | Institutional commitment approved (3 checks pass)                   | TRUE+approved                      | true+approved        | PASS
+ B3-TEST6 | Non-admin cannot verify institutional authority                     | FALSE (admin-only)                 | false                | PASS
+ B3-TEST7 | Non-institutional commitment approved without canApproveCommitments | TRUE (no institutional claim)      | true                 | PASS
+ B3-TEST8 | Institution mismatch blocks approval                                | FALSE (verified != claimed)        | false                | PASS
+(8 rows)
+
+
+ passed | failed | total 
+--------+--------+-------
+      8 |      0 |     8
+(1 row)
+
