@@ -55,6 +55,10 @@ let alertId: string;
 let proposalId: string;
 let actionId: string;
 let feedbackLoopId: string;
+let newObservationId: string;
+let e2eIndicatorId: string;
+let e2eObservationPeriodId: string;
+let e2eSourceId: string;
 
 // Per-user cookie jars
 let analystCookies: string[] = [];
@@ -176,6 +180,52 @@ beforeAll(async () => {
   }
   strategyVersionId = sv.id;
 
+  // Create a test indicator + observation period + source for the E2E test.
+  // These are scoped to this E2E run and cleaned up in afterAll.
+  // They are used by step 11 (feedback loop with newAfterObservation) to
+  // verify the G02 observation integration via the API.
+  const e2eSuffix = `${Date.now()}`;
+  const e2eIndicator = await adminDb.indicatorDefinition.create({
+    data: {
+      tenantId: tenantAId,
+      strategyVersionId,
+      code: `G03-02-E2E-IND-${e2eSuffix}`,
+      displayName: "G03-02 E2E Test Indicator",
+      unit: "percent",
+      preferredDirection: "decrease",
+      defaultTargetValue: 5.0,
+      targetTimeHorizon: "multi_year",
+      alertThresholds: [],
+      createdBy: analystUserId,
+    },
+  });
+  e2eIndicatorId = e2eIndicator.id;
+
+  const e2ePeriod = await adminDb.observationPeriod.create({
+    data: {
+      tenantId: tenantAId,
+      periodType: "quarterly",
+      periodValue: `G03-02-E2E-Q-${e2eSuffix}`,
+      startAt: new Date("2026-04-01T00:00:00Z"),
+      endAt: new Date("2026-06-30T23:59:59Z"),
+    },
+  });
+  e2eObservationPeriodId = e2ePeriod.id;
+
+  let e2eSrc = await adminDb.source.findFirst({ where: { code: `G03-02-E2E-SRC-${e2eSuffix}` } });
+  if (!e2eSrc) {
+    e2eSrc = await adminDb.source.create({
+      data: {
+        code: `G03-02-E2E-SRC-${e2eSuffix}`,
+        displayName: "G03-02 E2E Test Source",
+        type: "government",
+        reviewStatus: "approved",
+        metadata: { synthetic: true, country: "DML" },
+      },
+    });
+  }
+  e2eSourceId = e2eSrc.id;
+
   // Create an alert directly (bypass G02 to keep E2E test focused on G03-02)
   alertId = `g03-02-e2e-alert-${Date.now()}`;
   await adminDb.alert.create({
@@ -252,6 +302,19 @@ afterAll(async () => {
       }
       if (alertId) {
         await adminDb.alert.deleteMany({ where: { id: alertId } }).catch(() => {});
+      }
+      // Cleanup E2E observation fixtures (created in step 11 via feedback loop)
+      if (newObservationId) {
+        await adminDb.observation.deleteMany({ where: { id: newObservationId } }).catch(() => {});
+      }
+      if (e2eIndicatorId) {
+        await adminDb.indicatorDefinition.deleteMany({ where: { id: e2eIndicatorId } }).catch(() => {});
+      }
+      if (e2eObservationPeriodId) {
+        await adminDb.observationPeriod.deleteMany({ where: { id: e2eObservationPeriodId } }).catch(() => {});
+      }
+      if (e2eSourceId) {
+        await adminDb.source.deleteMany({ where: { id: e2eSourceId } }).catch(() => {});
       }
 
       await adminDb.$executeRawUnsafe(`ALTER TABLE "reform_feedback_loops" ENABLE TRIGGER prevent_delete_reform_feedback_loops`);
@@ -411,7 +474,7 @@ describeE2E("G03-02 Real API End-to-End Workflow", () => {
     expect(body.verificationStatus).toBe("verified");
   }, 30000);
 
-  it("step 11: analyst creates descriptive feedback loop", async () => {
+  it("step 11: analyst creates descriptive feedback loop with new G02 observation", async () => {
     const { response } = await fetchAs(analystCookies, `/api/v1/reform/actions/${actionId}/feedback`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -419,12 +482,22 @@ describeE2E("G03-02 Real API End-to-End Workflow", () => {
         comparisonType: "none",
         descriptiveSummary:
           "The action was implemented on 2026-04-15; observation #X1 recorded inflation at 4.2% on 2026-04-30. No causal claim is made about the relationship between the action and the observation.",
+        newAfterObservation: {
+          indicatorDefinitionId: e2eIndicatorId,
+          observationPeriodId: e2eObservationPeriodId,
+          observedValue: 4.2,
+          originType: "observed",
+          sourceId: e2eSourceId,
+          isSynthetic: false,
+        },
       }),
     });
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(body.feedbackLoopId).toBeDefined();
+    expect(body.newObservationId).toBeDefined();
     feedbackLoopId = body.feedbackLoopId;
+    newObservationId = body.newObservationId;
   }, 30000);
 
   it("step 12: reviewer closes the originating alert", async () => {
@@ -482,5 +555,22 @@ describeE2E("G03-02 Real API End-to-End Workflow", () => {
       where: { actionId, tenantId: tenantAId },
     });
     expect(feedback?.attributionLevel).toBe("descriptive");
+
+    // R4: Verify the newly ingested G02 observation exists + is linked to the feedback
+    const newObservation = await adminDb.observation.findUnique({ where: { id: newObservationId } });
+    expect(newObservation).not.toBeNull();
+    expect(Number(newObservation?.observedValue)).toBeCloseTo(4.2, 5);
+    expect(feedback?.afterObservationId).toBe(newObservationId);
+
+    // Verify the audit_log entry for the observation ingestion was also written
+    // (this proves atomicity — the observation + its audit_log + the feedback
+    // loop were all written in the SAME transaction via ingestObservationTx).
+    const obsAudit = await adminDb.auditLog.findFirst({
+      where: { tenantId: tenantAId, action: "observatory.observation.ingested" },
+      orderBy: { at: "desc" },
+    });
+    expect(obsAudit, "audit_log entry for observatory.observation.ingested should exist").not.toBeNull();
+    const obsDetails = obsAudit?.details as { observationId?: string } | null;
+    expect(obsDetails?.observationId).toBe(newObservationId);
   }, 30000);
 });

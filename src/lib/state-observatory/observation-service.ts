@@ -52,206 +52,234 @@ export async function ingestObservation(
 
   return withAuthenticatedTenant(
     session,
-    async ({ tx, tenantId, userId }) => {
-      // Verify indicator belongs to this tenant
-      const indicator = await tx.indicatorDefinition.findFirst({
-        where: {
-          id: parsed.indicatorDefinitionId,
-          tenantId,
-        },
-      });
-      if (!indicator) {
-        throw new NotFoundError(
-          `Indicator ${parsed.indicatorDefinitionId} not found in tenant ${tenantId}`
-        );
-      }
+    async ({ tx, tenantId, userId }) => ingestObservationTx(parsed, tx, tenantId, userId)
+  );
+}
 
-      // Verify observation period belongs to this tenant
-      const period = await tx.observationPeriod.findFirst({
-        where: {
-          id: parsed.observationPeriodId,
-          tenantId,
-        },
-      });
-      if (!period) {
-        throw new NotFoundError(
-          `Observation period ${parsed.observationPeriodId} not found in tenant ${tenantId}`
-        );
-      }
+/**
+ * Transaction-aware variant of ingestObservation.
+ *
+ * This is the SAME business logic as `ingestObservation`, but accepts a
+ * transaction client (tx) + tenantId + userId from an outer transaction
+ * instead of starting its own. This enables atomic composition with other
+ * services (e.g., G03-02 `createReformFeedbackLoop` can call this to
+ * ingest a new observation in the SAME transaction as the feedback loop
+ * creation — guaranteeing atomicity).
+ *
+ * Authorization: the caller MUST verify `observatory:observation:ingest`
+ * permission BEFORE calling this function. The public `ingestObservation`
+ * does this; transaction-aware callers must do it themselves.
+ *
+ * Audit: writes `observatory.observation.ingested` via `writeAuditTx` on
+ * the provided `tx`, so it commits/rolls back WITH the caller's transaction.
+ *
+ * G02 public contract preserved: `ingestObservation(session, input)` is
+ * unchanged — existing callers (G02 tests, G01 strategy composer, G03-02
+ * vertical slice) continue to work without modification.
+ */
+export async function ingestObservationTx(
+  parsed: IngestObservationInput,
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  userId: string
+): Promise<Observation> {
+  // Verify indicator belongs to this tenant
+  const indicator = await tx.indicatorDefinition.findFirst({
+    where: {
+      id: parsed.indicatorDefinitionId,
+      tenantId,
+    },
+  });
+  if (!indicator) {
+    throw new NotFoundError(
+      `Indicator ${parsed.indicatorDefinitionId} not found in tenant ${tenantId}`
+    );
+  }
 
-      // If strategyVersionId provided, verify it's approved in same tenant
-      if (parsed.strategyVersionId) {
-        const sv = await tx.strategyVersion.findFirst({
-          where: {
-            id: parsed.strategyVersionId,
-            tenantId,
-            status: "approved",
-          },
-          select: { id: true },
-        });
-        if (!sv) {
-          throw new Error(
-            `StrategyVersion ${parsed.strategyVersionId} not found or not approved`
-          );
-        }
-      }
+  // Verify observation period belongs to this tenant
+  const period = await tx.observationPeriod.findFirst({
+    where: {
+      id: parsed.observationPeriodId,
+      tenantId,
+    },
+  });
+  if (!period) {
+    throw new NotFoundError(
+      `Observation period ${parsed.observationPeriodId} not found in tenant ${tenantId}`
+    );
+  }
 
-      // E3: cross-country geoRefId check
-      if (parsed.geoRefId && parsed.geoLevel === "institutional") {
-        await verifyInstitutionInTenantCountry(tx, tenantId, parsed.geoRefId);
-      }
-
-      // 02-01: Provenance + country scope validation BEFORE INSERT
-      // Load source (if sourceId provided) — Source is PUBLIC G00 table
-      let sourceRow: {
-        id: string;
-        reviewStatus: string;
-        independenceGroup: string | null;
-        submittedByTenantId: string | null;
-      } | null = null;
-      if (parsed.sourceId) {
-        sourceRow = await tx.source.findUnique({
-          where: { id: parsed.sourceId },
-          select: {
-            id: true,
-            reviewStatus: true,
-            independenceGroup: true,
-            submittedByTenantId: true,
-          },
-        });
-        if (!sourceRow) {
-          throw new NotFoundError(
-            `Source ${parsed.sourceId} not found`
-          );
-        }
-      }
-
-      // Load evidence (if evidenceId provided) — RLS-enforced (filters cross-tenant)
-      let evidenceRow: {
-        id: string;
-        tenantId: string;
-        sourceId: string | null;
-        verificationStatus: string;
-        type: string;
-        metadata: unknown;
-      } | null = null;
-      if (parsed.evidenceId) {
-        evidenceRow = await tx.evidence.findFirst({
-          where: { id: parsed.evidenceId, tenantId },
-          select: {
-            id: true,
-            tenantId: true,
-            sourceId: true,
-            verificationStatus: true,
-            type: true,
-            metadata: true,
-          },
-        });
-        // If evidenceId provided but evidence not found in tenant — let validator handle
-      }
-
-      // Get tenant's countryId for country scope check
-      const tenantRow = await tx.tenant.findUnique({
-        where: { id: tenantId },
-        select: { countryId: true },
-      });
-      if (!tenantRow) {
-        throw new NotFoundError(`Tenant ${tenantId} not found`);
-      }
-
-      // Run provenance validation (pure function)
-      const provenanceResult = validateObservationProvenance(
-        {
-          originType: parsed.originType,
-          verificationStatus: parsed.verificationStatus ?? "unverified",
-          sourceId: parsed.sourceId ?? null,
-          evidenceId: parsed.evidenceId ?? null,
-          derivationMethod: parsed.derivationMethod ?? null,
-          isSynthetic: parsed.isSynthetic ?? true,
-        },
-        {
-          source: sourceRow,
-          evidence: evidenceRow,
-          sessionTenantId: tenantId,
-          tenantCountryId: tenantRow.countryId,
-        }
-      );
-
-      if (!provenanceResult.valid) {
-        throw new Error(
-          `Provenance validation failed: ${provenanceResult.errors.join("; ")}`
-        );
-      }
-
-      // Country scope check (if evidenceId provided)
-      if (parsed.evidenceId && evidenceRow) {
-        const countryResult = verifyEvidenceCountryScope({
-          evidenceMetadata: evidenceRow.metadata,
-          tenantCountryId: tenantRow.countryId,
-        });
-        if (!countryResult.valid) {
-          throw new Error(
-            `Evidence country scope violation: ${countryResult.reason}`
-          );
-        }
-        // B14 (02-02): surface "unknown" country-scope warning in provenanceWarnings
-        if (countryResult.level === "unknown") {
-          provenanceResult.warnings.push(
-            `evidence country scope unknown — ${countryResult.reason}`
-          );
-        }
-      }
-
-      // Build metadata with isSynthetic marker (E6) + validation warnings
-      const metadata: Record<string, unknown> = {
-        ...(parsed.qualityNotes ?? {}),
-        isSynthetic: parsed.isSynthetic ?? true,
-        syntheticCountry: parsed.isSynthetic === false ? null : "DML",
-        // 02-01: attach non-blocking provenance warnings
-        provenanceWarnings: provenanceResult.warnings,
-      };
-
-      // Create the observation
-      const observation = await tx.observation.create({
-        data: {
-          tenantId,
-          indicatorDefinitionId: parsed.indicatorDefinitionId,
-          observationPeriodId: parsed.observationPeriodId,
-          strategyVersionId: parsed.strategyVersionId ?? null,
-          observedValue: parsed.observedValue,
-          originType: parsed.originType,
-          verificationStatus: parsed.verificationStatus ?? "unverified",
-          derivationMethod: parsed.derivationMethod ?? null,
-          sourceId: parsed.sourceId ?? null,
-          evidenceId: parsed.evidenceId ?? null,
-          isSynthetic: parsed.isSynthetic ?? true,
-          observedAt: parsed.observedAt ?? null,
-          qualityNotes: metadata as Prisma.InputJsonValue,
-          geoLevel: parsed.geoLevel ?? "national",
-          geoRefId: parsed.geoRefId ?? null,
-          isCurrent: true,
-          createdBy: userId,
-        },
-      });
-
-      // Atomic audit log
-      await writeAuditTx(tx, {
+  // If strategyVersionId provided, verify it's approved in same tenant
+  if (parsed.strategyVersionId) {
+    const sv = await tx.strategyVersion.findFirst({
+      where: {
+        id: parsed.strategyVersionId,
         tenantId,
-        actor: userId,
-        action: "observatory.observation.ingested",
-        details: {
-          observationId: observation.id,
-          indicatorId: parsed.indicatorDefinitionId,
-          periodId: parsed.observationPeriodId,
-          originType: parsed.originType,
-          isSynthetic: parsed.isSynthetic ?? true,
-        },
-        status: "ok",
-      });
+        status: "approved",
+      },
+      select: { id: true },
+    });
+    if (!sv) {
+      throw new Error(
+        `StrategyVersion ${parsed.strategyVersionId} not found or not approved`
+      );
+    }
+  }
 
-      return observation;
+  // E3: cross-country geoRefId check
+  if (parsed.geoRefId && parsed.geoLevel === "institutional") {
+    await verifyInstitutionInTenantCountry(tx, tenantId, parsed.geoRefId);
+  }
+
+  // 02-01: Provenance + country scope validation BEFORE INSERT
+  // Load source (if sourceId provided) — Source is PUBLIC G00 table
+  let sourceRow: {
+    id: string;
+    reviewStatus: string;
+    independenceGroup: string | null;
+    submittedByTenantId: string | null;
+  } | null = null;
+  if (parsed.sourceId) {
+    sourceRow = await tx.source.findUnique({
+      where: { id: parsed.sourceId },
+      select: {
+        id: true,
+        reviewStatus: true,
+        independenceGroup: true,
+        submittedByTenantId: true,
+      },
+    });
+    if (!sourceRow) {
+      throw new NotFoundError(
+        `Source ${parsed.sourceId} not found`
+      );
+    }
+  }
+
+  // Load evidence (if evidenceId provided) — RLS-enforced (filters cross-tenant)
+  let evidenceRow: {
+    id: string;
+    tenantId: string;
+    sourceId: string | null;
+    verificationStatus: string;
+    type: string;
+    metadata: unknown;
+  } | null = null;
+  if (parsed.evidenceId) {
+    evidenceRow = await tx.evidence.findFirst({
+      where: { id: parsed.evidenceId, tenantId },
+      select: {
+        id: true,
+        tenantId: true,
+        sourceId: true,
+        verificationStatus: true,
+        type: true,
+        metadata: true,
+      },
+    });
+    // If evidenceId provided but evidence not found in tenant — let validator handle
+  }
+
+  // Get tenant's countryId for country scope check
+  const tenantRow = await tx.tenant.findUnique({
+    where: { id: tenantId },
+    select: { countryId: true },
+  });
+  if (!tenantRow) {
+    throw new NotFoundError(`Tenant ${tenantId} not found`);
+  }
+
+  // Run provenance validation (pure function)
+  const provenanceResult = validateObservationProvenance(
+    {
+      originType: parsed.originType,
+      verificationStatus: parsed.verificationStatus ?? "unverified",
+      sourceId: parsed.sourceId ?? null,
+      evidenceId: parsed.evidenceId ?? null,
+      derivationMethod: parsed.derivationMethod ?? null,
+      isSynthetic: parsed.isSynthetic ?? true,
+    },
+    {
+      source: sourceRow,
+      evidence: evidenceRow,
+      sessionTenantId: tenantId,
+      tenantCountryId: tenantRow.countryId,
     }
   );
+
+  if (!provenanceResult.valid) {
+    throw new Error(
+      `Provenance validation failed: ${provenanceResult.errors.join("; ")}`
+    );
+  }
+
+  // Country scope check (if evidenceId provided)
+  if (parsed.evidenceId && evidenceRow) {
+    const countryResult = verifyEvidenceCountryScope({
+      evidenceMetadata: evidenceRow.metadata,
+      tenantCountryId: tenantRow.countryId,
+    });
+    if (!countryResult.valid) {
+      throw new Error(
+        `Evidence country scope violation: ${countryResult.reason}`
+      );
+    }
+    // B14 (02-02): surface "unknown" country-scope warning in provenanceWarnings
+    if (countryResult.level === "unknown") {
+      provenanceResult.warnings.push(
+        `evidence country scope unknown — ${countryResult.reason}`
+      );
+    }
+  }
+
+  // Build metadata with isSynthetic marker (E6) + validation warnings
+  const metadata: Record<string, unknown> = {
+    ...(parsed.qualityNotes ?? {}),
+    isSynthetic: parsed.isSynthetic ?? true,
+    syntheticCountry: parsed.isSynthetic === false ? null : "DML",
+    // 02-01: attach non-blocking provenance warnings
+    provenanceWarnings: provenanceResult.warnings,
+  };
+
+  // Create the observation
+  const observation = await tx.observation.create({
+    data: {
+      tenantId,
+      indicatorDefinitionId: parsed.indicatorDefinitionId,
+      observationPeriodId: parsed.observationPeriodId,
+      strategyVersionId: parsed.strategyVersionId ?? null,
+      observedValue: parsed.observedValue,
+      originType: parsed.originType,
+      verificationStatus: parsed.verificationStatus ?? "unverified",
+      derivationMethod: parsed.derivationMethod ?? null,
+      sourceId: parsed.sourceId ?? null,
+      evidenceId: parsed.evidenceId ?? null,
+      isSynthetic: parsed.isSynthetic ?? true,
+      observedAt: parsed.observedAt ?? null,
+      qualityNotes: metadata as Prisma.InputJsonValue,
+      geoLevel: parsed.geoLevel ?? "national",
+      geoRefId: parsed.geoRefId ?? null,
+      isCurrent: true,
+      createdBy: userId,
+    },
+  });
+
+  // Atomic audit log
+  await writeAuditTx(tx, {
+    tenantId,
+    actor: userId,
+    action: "observatory.observation.ingested",
+    details: {
+      observationId: observation.id,
+      indicatorId: parsed.indicatorDefinitionId,
+      periodId: parsed.observationPeriodId,
+      originType: parsed.originType,
+      isSynthetic: parsed.isSynthetic ?? true,
+    },
+    status: "ok",
+  });
+
+  return observation;
 }
 
 /**
