@@ -1,0 +1,41 @@
+psql:scripts/g03-security-validation/g03_01_remediation_tests.sql:11: NOTICE:  table "g03_remediation_results" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+
+============================================================
+G03-01 SECURITY REMEDIATION TEST RESULTS
+============================================================
+ test_id  |               description               |       expected       |                                                actual                                                | result 
+----------+-----------------------------------------+----------------------+------------------------------------------------------------------------------------------------------+--------
+ S1-TEST1 | Direct canApproveCommitments blocked    | ERROR (S1 VIOLATION) | S1 VIOLATION: balance_app cannot modify canApproveCommitments. Use grant_commitment_approval().      | PASS
+ S1-TEST2 | Direct verifiedInstitutionId blocked    | ERROR (S1 VIOLATION) | S1 VIOLATION: balance_app cannot modify verifiedInstitutionId. Use verify_institutional_authority(). | PASS
+ S1-TEST3 | Self-withdrawal allowed                 | OK                   | OK                                                                                                   | PASS
+ S2-TEST1 | Function fails without service_context  | FALSE                | false                                                                                                | PASS
+ S2-TEST2 | Function succeeds with service_context  | TRUE                 | true                                                                                                 | PASS
+ S3-TEST1 | UPDATE on reform_approvals blocked      | ERROR (S3 VIOLATION) | S3 VIOLATION: UPDATE not permitted on append-only table reform_approvals.                            | PASS
+ S3-TEST2 | DELETE on reform_action_updates blocked | ERROR (S3 VIOLATION) | S3 VIOLATION: DELETE not permitted on append-only table reform_action_updates.                       | PASS
+ S3-TEST3 | balance_admin DELETE blocked            | ERROR (S3 VIOLATION) | S3 VIOLATION: DELETE not permitted on append-only table reform_approvals.                            | PASS
+ S3-TEST4 | Tenant A sees own proposal              | count=1              | count=1                                                                                              | PASS
+ S3-TEST5 | Tenant B cannot see A proposal          | count=0              | count=0                                                                                              | PASS
+ S4-TEST1 | RLS ENABLE+FORCE all 12 tables          | 12                   | 12                                                                                                   | PASS
+(11 rows)
+
+
+ passed | failed | total 
+--------+--------+-------
+     11 |      0 |    11
+(1 row)
+
+psql:scripts/g03-security-validation/g03_01_remediation_tests.sql:360: NOTICE:  G03-01 REMEDIATION: ALL 11 TESTS PASSED
+DO
