@@ -620,7 +620,7 @@ The function returns TRUE only when `status = 'active'`. Pending, removed, and w
 **Threat**: An attacker sets `app.tenant_id` to a victim's tenant ID, then calls the function.
 
 **Mitigation**:
-1. `balance_app` cannot set `app.tenant_id` arbitrarily — it can only set it via `set_config('app.tenant_id', $1, true)` inside a transaction started by the application.
+1. C2 LIMITATION (empirically proven): PostgreSQL does NOT prevent `balance_app` from setting `app.tenant_id` to arbitrary values via `set_config()`. The security model depends on `withAuthenticatedTenant` (application layer) to set `app.tenant_id` from a verified session. If direct SQL access is obtained, an attacker can impersonate any tenant. This is a documented limitation, not a DB-level guarantee.
 2. The application (`withAuthenticatedTenant`) sets `app.tenant_id` from the **verified session** (JWT + DB membership check), not from client input.
 3. The `app.tenant_id` setting is **transaction-scoped** (`true` as third arg to `set_config`), so it cannot persist beyond the transaction.
 

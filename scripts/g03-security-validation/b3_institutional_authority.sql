@@ -307,8 +307,8 @@ DO $$ DECLARE v_result BOOLEAN; begin
 END $$;
 
 -- TEST 12: Verify SECURITY DEFINER functions do NOT bypass RLS inappropriately
--- FIX (per owner directive A2): Compare count BEFORE and AFTER the failed approval
--- (not just count >= 2)
+-- FIX (per owner directive): Compare count BEFORE and AFTER the failed approval
+-- AND verify the function returned FALSE (not just count unchanged)
 DO $$ DECLARE v_count_before INT; v_count_after INT; v_result BOOLEAN; BEGIN
   -- Get count of approved proposals BEFORE the failed approval attempt
   SET ROLE balance_admin; SELECT count(*) INTO v_count_before FROM g03_b3_test.reform_proposals WHERE status = 'approved'; RESET ROLE;
@@ -319,10 +319,10 @@ DO $$ DECLARE v_count_before INT; v_count_after INT; v_result BOOLEAN; BEGIN
   -- Get count of approved proposals AFTER (should be unchanged)
   SET ROLE balance_admin; SELECT count(*) INTO v_count_after FROM g03_b3_test.reform_proposals WHERE status = 'approved'; RESET ROLE;
   INSERT INTO g03_b3_test.test_results VALUES
-    ('B3-TEST12', 'No side effects on failed approval (before=after)',
-     'before=' || v_count_before || ' after=' || v_count_after,
-     'before=' || v_count_before || ' after=' || v_count_after,
-     v_count_before = v_count_after);
+    ('B3-TEST12', 'No side effects on failed approval (FALSE + before=after)',
+     'FALSE+before=' || v_count_before || '+after=' || v_count_after,
+     v_result::TEXT || '+before=' || v_count_before || '+after=' || v_count_after,
+     v_result = FALSE AND v_count_before = v_count_after);
 END $$;
 
 \echo ''; \echo '============================================================'

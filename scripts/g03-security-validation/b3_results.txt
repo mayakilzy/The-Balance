@@ -77,21 +77,21 @@ DO
 ============================================================
 B3 EMPIRICAL VALIDATION RESULTS (PostgreSQL 16.4 — CLEAN, REV 7)
 ============================================================
-  test_id  |                              description                              |                           expected                           |        actual        | result 
------------+-----------------------------------------------------------------------+--------------------------------------------------------------+----------------------+--------
- B3-TEST1  | Lead grants commitment approval (cross-tenant)                        | TRUE+canApprove=TRUE                                         | true+canApprove=true | PASS
- B3-TEST10 | Non-lead admin cannot verify (leadTenantId check)                     | FALSE (lead check blocks)                                    | false                | PASS
- B3-TEST11 | Cannot approve proposal owned by another tenant                       | FALSE (tenantId mismatch)                                    | false                | PASS
- B3-TEST12 | No side effects on failed approval (before=after)                     | before=2 after=2                                             | before=2 after=2     | PASS
- B3-TEST2  | Non-lead cannot grant                                                 | FALSE                                                        | false                | PASS
- B3-TEST3  | Fail-closed (no verified authority)                                   | FALSE                                                        | false                | PASS
- B3-TEST4  | Admin verifies institutional authority                                | TRUE+INST-CB                                                 | true+INST-CB         | PASS
- B3-TEST5  | Institutional commitment approved (3 checks pass)                     | TRUE+approved                                                | true+approved        | PASS
- B3-TEST6  | Non-admin cannot verify                                               | FALSE                                                        | false                | PASS
- B3-TEST7  | Non-institutional approved without canApproveCommitments              | TRUE                                                         | true                 | PASS
- B3-TEST8  | Institution mismatch blocks approval                                  | FALSE                                                        | false                | PASS
- B3-TEST9  | app.role impersonation ALONE insufficient (leadTenantId blocks)       | FALSE (lead check blocks even with app.role=admin)           | false                | PASS
- B3-TEST9b | Double impersonation (app.role + app.tenant_id) succeeds — LIMITATION | TRUE (double impersonation succeeds — documented limitation) | true                 | PASS
+  test_id  |                              description                              |                           expected                           |         actual         | result 
+-----------+-----------------------------------------------------------------------+--------------------------------------------------------------+------------------------+--------
+ B3-TEST1  | Lead grants commitment approval (cross-tenant)                        | TRUE+canApprove=TRUE                                         | true+canApprove=true   | PASS
+ B3-TEST10 | Non-lead admin cannot verify (leadTenantId check)                     | FALSE (lead check blocks)                                    | false                  | PASS
+ B3-TEST11 | Cannot approve proposal owned by another tenant                       | FALSE (tenantId mismatch)                                    | false                  | PASS
+ B3-TEST12 | No side effects on failed approval (FALSE + before=after)             | FALSE+before=2+after=2                                       | false+before=2+after=2 | PASS
+ B3-TEST2  | Non-lead cannot grant                                                 | FALSE                                                        | false                  | PASS
+ B3-TEST3  | Fail-closed (no verified authority)                                   | FALSE                                                        | false                  | PASS
+ B3-TEST4  | Admin verifies institutional authority                                | TRUE+INST-CB                                                 | true+INST-CB           | PASS
+ B3-TEST5  | Institutional commitment approved (3 checks pass)                     | TRUE+approved                                                | true+approved          | PASS
+ B3-TEST6  | Non-admin cannot verify                                               | FALSE                                                        | false                  | PASS
+ B3-TEST7  | Non-institutional approved without canApproveCommitments              | TRUE                                                         | true                   | PASS
+ B3-TEST8  | Institution mismatch blocks approval                                  | FALSE                                                        | false                  | PASS
+ B3-TEST9  | app.role impersonation ALONE insufficient (leadTenantId blocks)       | FALSE (lead check blocks even with app.role=admin)           | false                  | PASS
+ B3-TEST9b | Double impersonation (app.role + app.tenant_id) succeeds — LIMITATION | TRUE (double impersonation succeeds — documented limitation) | true                   | PASS
 (13 rows)
 
 ; SELECT COUNT(*) FILTER (WHERE pass) AS passed, COUNT(*) FILTER (WHERE NOT pass) AS failed, COUNT(*) AS total FROM g03_b3_test.test_results;

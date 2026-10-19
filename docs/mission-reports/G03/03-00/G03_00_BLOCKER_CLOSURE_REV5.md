@@ -81,16 +81,22 @@ The owner (Ayman) and reviewer (ChatGPT) conducted an independent security audit
 --
 -- SECURITY: SECURITY DEFINER (executes as function owner)
 --   - The function owner is `balance_coordination_admin` (NOLOGIN role)
---   - The role has SELECT on reform_coordinations + UPDATE on reform_coordination_participants
+--   - C1 FIX (empirically proven): The role has SELECT on reform_coordinations
+--     + SELECT + UPDATE on reform_coordination_participants
+--     (PostgreSQL requires SELECT for WHERE clause column reads + RETURNING)
 --   - FORCE RLS applies; specific policies allow the role's operations
 --   - The function's WHERE clause (lead check + status check) is the
 --     authoritative authorization gate
 --
 -- CALLER IDENTITY (Requirement 3):
---   - app.tenant_id is set by withAuthenticatedTenant (verified session, NOT client input)
---   - app.user_id is set by withAuthenticatedTenant (verified session, NOT client input)
---   - balance_app cannot set these arbitrarily — only via the application's
---     verified session mechanism
+--   - app.tenant_id is set by withAuthenticatedTenant (verified session)
+--   - C2 LIMITATION (empirically proven): PostgreSQL does NOT prevent balance_app
+--     from setting app.tenant_id to arbitrary values via set_config(). The security
+--     model depends on withAuthenticatedTenant (application layer) to set
+--     app.tenant_id from a verified session, NOT from client input. If direct SQL
+--     access is obtained, an attacker can impersonate any tenant.
+--   - app.role is also a GUC — same limitation applies. However, app.role alone
+--     is insufficient (leadTenantId check still blocks non-lead tenants).
 --   - The function reads current_setting('app.tenant_id', true) — if empty/NULL,
 --     the lead check subquery returns no rows, UPDATE matches zero rows
 
@@ -173,17 +179,25 @@ CREATE ROLE balance_coordination_admin NOLOGIN;
 -- Grant SELECT on reform_coordinations (for the lead check subquery)
 GRANT SELECT ON public.reform_coordinations TO balance_coordination_admin;
 
--- Grant UPDATE on reform_coordination_participants (for the actual removal)
-GRANT UPDATE ON public.reform_coordination_participants TO balance_coordination_admin;
+-- C1 FIX (empirically proven in B1-TEST1): Grant SELECT + UPDATE on
+-- reform_coordination_participants. PostgreSQL requires SELECT for:
+--   - Columns read in the WHERE clause (coordinationId, id, status)
+--   - Columns read via RETURNING
+-- Without SELECT, the function fails with "permission denied for table".
+GRANT SELECT, UPDATE ON public.reform_coordination_participants TO balance_coordination_admin;
 
 -- Do NOT grant:
 -- - INSERT, DELETE on any table
 -- - UPDATE on reform_coordinations (lead cannot modify coordination via this role)
--- - SELECT on reform_coordination_participants (the function uses UPDATE which returns rows,
---   but the role cannot SELECT directly)
 -- - BYPASSRLS
 -- - USAGE on any schema except public
 -- - CREATE on any schema
+-- Note: The role CAN SELECT on reform_coordination_participants (needed for UPDATE),
+-- but this is acceptable because:
+--   1. The role is NOLOGIN (cannot connect directly)
+--   2. The function returns BOOLEAN (no data exfiltration via the function)
+--   3. The function's WHERE clause enforces the lead check
+--   4. The role has no other privileges
 
 -- ============================================================
 -- RLS POLICIES for balance_coordination_admin
@@ -243,7 +257,7 @@ GRANT ALL ON public.reform_coordination_participants TO balance_admin;
    SELECT set_config('app.tenant_id', $tenantId, true);
    ```
 5. The third argument `true` makes the setting **transaction-scoped** (`SET LOCAL`).
-6. `balance_app` cannot set `app.tenant_id` to an arbitrary value — it can only set it via the application's verified session mechanism.
+6. C2 LIMITATION (empirically proven in B1-TEST5 + B3-TEST9b): PostgreSQL does NOT prevent `balance_app` from setting `app.tenant_id` to an arbitrary value via `set_config()`. The security model depends on `withAuthenticatedTenant` (application layer) to set `app.tenant_id` from a verified session. If direct SQL access is obtained, an attacker can impersonate any tenant. This is a documented limitation, not a DB-level guarantee.
 7. After the transaction ends, the setting is cleared.
 
 **The function reads `current_setting('app.tenant_id', true)`**:

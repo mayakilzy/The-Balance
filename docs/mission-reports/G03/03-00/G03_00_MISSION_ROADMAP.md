@@ -45,7 +45,7 @@ This is a fundamental shift in decomposition strategy. The original roadmap buil
 - 03-03: Reform Alternatives (multiple options per proposal + selection)
 - 03-04: Reform Comparison + Advisor (deterministic comparison + LLM advisory)
 - 03-05: Enhanced Approval Workflow (evidence snapshots + denied audit + supersession)
-- 03-06: Multi-Institution Coordination (4 coordination tables + 2-level approval + shared snapshots)
+- 03-06: Multi-Institution Coordination (5 coordination tables + 2-level approval + shared snapshots)
 - 03-07: Coordination Vertical Slice (end-to-end coordination flow)
 - 03-08: Polish + Closure (hardening, sentinel regression tests, G03 closure documents)
 

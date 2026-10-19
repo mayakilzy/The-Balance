@@ -377,7 +377,7 @@ CREATE POLICY reform_coordinations_visible_to_participants ON reform_coordinatio
   );
 ```
 
-This pattern is the **same as G02's observation chain integrity** (which uses `SECURITY DEFINER` functions for cross-row checks). It's proven safe and tested.
+This pattern uses `SECURITY INVOKER` for visibility checks (`is_coordination_participant`, `is_snapshot_revoked`) and `SECURITY DEFINER` only for administrative cross-tenant UPDATE operations. The G02 observation chain pattern is **not** a security precedent — G02 verifies internal data consistency within a single tenant; G03 handles cross-tenant data disclosure, which is a fundamentally different security concern. The `set_config('app.tenant_id')` GUC is **not** a DB-level identity guarantee (empirically proven in B1-TEST5).
 
 ### 7.5 Threat Model
 
@@ -399,7 +399,7 @@ Per owner directive ("تنفيذ تدريجي يحافظ على استقلال �
 
 | Phase | Mission | Scope |
 |-------|---------|-------|
-| Phase 1 (Foundation) | 03-01 | Schema bootstrap includes 4 coordination tables + RLS + triggers + 4 new permissions |
+| Phase 1 (Foundation) | 03-01 | Schema bootstrap includes 5 coordination tables + RLS + triggers + 4 new permissions |
 | Phase 2 (Core single-tenant reform) | 03-02 through 03-04 | Single-tenant reform proposals/alternatives/approval (coordination-agnostic) |
 | Phase 3 (Implementation tracking) | 03-05 | ReformAction + updates (coordination-agnostic) |
 | Phase 4 (Verification + feedback) | 03-06 | F6 verification + feedback loop (coordination-agnostic) |
@@ -504,7 +504,7 @@ This decision was created during the revision process to consolidate the coordin
 
 ### 10.2 Recommendation
 
-Adopt the 4-table coordination model documented in:
+Adopt the 5-table coordination model documented in:
 - `G03_00_THREAT_MODEL.md` — full threat analysis
 - `G03_00_DOMAIN_MODEL.md` (revised) — table schemas + RLS + triggers
 - `G03_00_WORKFLOW_AND_APPROVALS.md` (revised) — two-level approval flow
@@ -547,7 +547,7 @@ Per owner/reviewer security audit (REV 4), three new decisions address the findi
 - Service-layer-only management → no DB-level enforcement
 - Self-service removal only → removes lead's management capability
 
-**Status**: PROPOSED (rev 4) — awaiting owner approval.
+**Status**: APPROVED (rev 8 — empirically validated on PostgreSQL 16.4, B1-TEST1 PASS).
 
 ---
 
@@ -562,7 +562,7 @@ Per owner/reviewer security audit (REV 4), three new decisions address the findi
 
 **Why denormalization is needed**: Without `coordinationId` on the revocations table, the RLS policy on revocations must subquery `reform_coordination_shared_snapshots` to find the `coordinationId`. But that table's RLS (with the S2 fix) excludes revoked snapshots — creating a circular dependency where the revocation row is invisible because the snapshot row is invisible. Denormalizing `coordinationId` breaks the cycle.
 
-**Status**: PROPOSED (rev 4) — awaiting owner approval.
+**Status**: APPROVED (rev 8 — empirically validated on PostgreSQL 16.4, B2-TEST1 to B2-TEST6 PASS).
 
 ---
 
@@ -580,29 +580,29 @@ Per owner/reviewer security audit (REV 4), three new decisions address the findi
 
 **What this does NOT solve**: The verification workflow itself (admin setting `verifiedInstitutionId`) is out of scope for 03-00 (G03-L13). Until then, `verifiedInstitutionId` is always NULL, meaning no commitments can claim verified institutional authority — fail-closed.
 
-**Status**: PROPOSED (rev 4) — awaiting owner approval.
+**Status**: APPROVED (rev 8 — empirically validated on PostgreSQL 16.4, B3-TEST1 to B3-TEST12 PASS).
 
 ---
 
-## 11. Decisions That Require Owner Approval Before 03-01 (REV 4 — Updated)
+## 11. Decisions That Require Owner Approval Before 03-01 (REV 8 — Final)
 
 | # | Decision | Status | Required before 03-01? |
 |---|----------|--------|------------------------|
-| D1 | **12 tables** (7 core + 5 coordination) | PROPOSED (rev 3 — was 11 in rev 2, added revocations table) | YES |
-| D3 | Expanded `hypothesizedCauses[]` schema (confidenceBasis, contradictingEvidenceIds, reviewStatus, reviewedBy, reviewedAt) | PROPOSED (rev 2) | YES |
-| D4 | **Cross-strategy links forbidden by default** (rev 3 — was "allowed with override" in rev 2) | PROPOSED (rev 3 — owner decision) | YES |
-| D5 | Four distinct lifecycle states (separated verification from measurement) | PROPOSED (rev 2) | YES |
-| D6 | Multi-institution coordination (5 tables, 4 permissions, two-level approval, SECURITY INVOKER) | PROPOSED (rev 3 — SECURITY INVOKER not DEFINER) | YES |
-| D9 | Coordination model details | PROPOSED (rev 2) | YES |
-| D10 (NEW) | SECURITY INVOKER (not DEFINER) for coordination access function | PROPOSED (rev 3 — owner directive) | YES |
-| D11 (NEW) | Historical preservation on supersession (no silent rewrite) | PROPOSED (rev 3 — owner directive) | YES |
-| D12 (NEW) | Shared snapshot draft mode (draft → under_review → approved → revoked) | PROPOSED (rev 3 — owner decision) | YES |
-| **D13 (REV 4)** | **SECURITY DEFINER for participant removal** (S1 correction — dedicated minimal-privilege role) | PROPOSED (rev 4 — security audit) | YES |
-| **D14 (REV 4)** | **DB-level revocation enforcement** (S2 correction — denormalized coordinationId + is_snapshot_revoked function) | PROPOSED (rev 4 — security audit) | YES |
-| **D15 (REV 4)** | **Institutional authority separation** (S3 correction — claimed vs verified vs participation vs approval) | PROPOSED (rev 4 — security audit) | YES |
+| D1 | **12 tables** (7 core + 5 coordination) | APPROVED (rev 8) | YES |
+| D3 | Expanded `hypothesizedCauses[]` schema | APPROVED (rev 8) | YES |
+| D4 | **Cross-strategy links forbidden by default** | APPROVED (rev 8) | YES |
+| D5 | Four distinct lifecycle states | APPROVED (rev 8) | YES |
+| D6 | Multi-institution coordination (5 tables, 4 permissions, SECURITY INVOKER + SECURITY DEFINER for admin ops) | APPROVED (rev 8) | YES |
+| D9 | Coordination model details | APPROVED (rev 8) | YES |
+| D10 | SECURITY INVOKER for visibility checks | APPROVED (rev 8) | YES |
+| D11 | Historical preservation on supersession | APPROVED (rev 8) | YES |
+| D12 | Shared snapshot draft mode | APPROVED (rev 8) | YES |
+| D13 | SECURITY DEFINER for participant removal (dedicated role, lead check inside UPDATE WHERE) | APPROVED (rev 8 — B1 PASS) | YES |
+| D14 | DB-level revocation enforcement | APPROVED (rev 8 — B2 PASS) | YES |
+| D15 | Institutional authority separation (fail-closed) | APPROVED (rev 8 — B3 PASS) | YES |
 | D2 | Advisory opportunity detection | APPROVED | No |
 | D7 | Soft duplicate check with override | APPROVED | No |
-| D8 | Per-limitation G02 assessment | PROPOSED (rev 2) | No (informational) |
+| D8 | Per-limitation G02 assessment | APPROVED (rev 8) | No (informational) |
 
 ---
 
@@ -622,15 +622,15 @@ Per owner/reviewer security audit (REV 4), three new decisions address the findi
 
 ### 12.2 What I'm Confident About Now
 
-1. **The 4-table coordination model** is the right granularity. Fewer tables would lose the invitation flow or the shared snapshot model. More tables would be over-engineering.
+1. **The 5-table coordination model** is the right granularity. Fewer tables would lose the invitation flow, shared snapshot draft mode, or revocation append-only enforcement. More tables would be over-engineering.
 
 2. **The two-level approval (coordination plan + per-participant proposal)** is the only model that honors both "coordination is meaningful" and "no majority override".
 
-3. **The `SECURITY DEFINER` helper function for coordination RLS** is a proven pattern (G02 uses it for observation chain integrity). It's safe and tested.
+3. **Coordination access functions use `SECURITY INVOKER`** for participant/snapshot visibility checks (`is_coordination_participant`, `is_snapshot_revoked`). `SECURITY DEFINER` is used **only** for administrative operations that require cross-tenant UPDATE (`remove_coordination_participant`, `grant_commitment_approval`, `verify_institutional_authority`), with a dedicated `balance_coordination_admin` role (NOLOGIN, no BYPASSRLS). The G02 pattern is **not** a security precedent — G02's chain-integrity functions verify internal data consistency within a single tenant; G03's coordination functions handle cross-tenant data disclosure, which is a fundamentally different security concern. The `set_config('app.tenant_id', ...)` GUC is **not** a DB-level identity guarantee (empirically proven in B1-TEST5 + B3-TEST9b) — the security model depends on `withAuthenticatedTenant` (application layer) to set `app.tenant_id` from a verified session.
 
 4. **The expanded `hypothesizedCauses[]` schema** with `confidenceBasis`, `contradictingEvidenceIds`, and `reviewStatus` makes the epistemic state explicit. This is structurally honest.
 
-5. **The 9-mission roadmap** (with 03-07 coordination + 03-08 vertical integration) provides a practical path: ship core reform first (03-02 through 03-06), then coordination (03-07 + 03-08), then iterate.
+5. **The 9-mission roadmap** (with 03-07 coordination + 03-08 polish + closure) provides a practical path: ship core reform first (03-02 through 03-06), then coordination (03-07), then closure (03-08).
 
 ### 12.3 What I'm Still Uncertain About
 
