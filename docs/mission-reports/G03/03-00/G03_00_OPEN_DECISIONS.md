@@ -61,8 +61,8 @@ After owner review, the recommendation stands with the following adjustments:
 | Table group | Count | Purpose |
 |-------------|-------|---------|
 | Core reform entities | 7 | ReformProposal, ReformAlternative, ReformApproval, ReformAction, ReformActionUpdate, ReformVerification, ReformFeedbackLoop |
-| Coordination entities (D6) | 4 | ReformCoordination, ReformCoordinationParticipant, ReformCoordinationInvitation, ReformCoordinationSharedSnapshot |
-| **TOTAL** | **11** | |
+| Coordination entities (D6) | 5 | ReformCoordination, ReformCoordinationParticipant, ReformCoordinationInvitation, ReformCoordinationSharedSnapshot, ReformCoordinationSharedSnapshotRevocation |
+| **TOTAL** | **12** | |
 
 ### 3.4 Number of Services (Result, Not Goal)
 
@@ -345,17 +345,21 @@ However, each `ReformCoordinationParticipant` has an **optional `institutionId`*
 | `reform:coordination:approve` | admin, reviewer (lead tenant) | Approve coordination plan (lead only) |
 | `reform:coordination:share` | admin, reviewer | Approve shared snapshots before visible to other participants |
 
-### 7.4 RLS Pattern: Coordination-Aware RLS via SECURITY DEFINER Helper
+### 7.4 RLS Pattern: Coordination-Aware RLS via SECURITY INVOKER Helper
 
-The standard tenant-isolation RLS is insufficient for coordination tables (coordination metadata must be visible to all participants). Solution:
+The standard tenant-isolation RLS is insufficient for coordination tables (coordination metadata must be visible to all participants). Solution: use a **SECURITY INVOKER** function (not SECURITY DEFINER) — this works because the RLS policy on `reform_coordination_participants` uses the same condition the function checks, so the caller's own RLS allows reading their own tenant's participation rows.
 
 ```sql
--- Helper function (SECURITY DEFINER — bypasses RLS for this check only)
+-- Helper function (SECURITY INVOKER — does NOT bypass RLS)
+-- This is the ACTIVE contract per REV 8. The earlier REV 2 proposal used
+-- SECURITY DEFINER, which was superseded in REV 3 after analysis showed
+-- SECURITY INVOKER works correctly (the caller's RLS allows reading own tenant rows).
 CREATE OR REPLACE FUNCTION is_coordination_participant(p_coordination_id TEXT)
 RETURNS BOOLEAN
 LANGUAGE sql
-SECURITY DEFINER
-SET search_path = public
+SECURITY INVOKER
+STABLE
+SET search_path = public, pg_temp
 AS $$
   SELECT EXISTS (
     SELECT 1 FROM reform_coordination_participants

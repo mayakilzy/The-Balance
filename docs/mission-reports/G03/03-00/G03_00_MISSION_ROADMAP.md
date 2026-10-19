@@ -160,19 +160,21 @@ Establish the architectural foundation for GROUP 03: domain model, workflow, con
 
 ### 4.1 Goal
 
-Create the database foundation for GROUP 03: 1 migration with **11 new tables** (was 7), **13 new permissions** (was 9), RLS policies including **coordination-aware RLS via SECURITY DEFINER helper**, cross-tenant triggers, F6 trigger, attribution trigger, supersession trigger, **coordination-specific triggers**. Plus seed extension for Demolandia.
+Create the database foundation for GROUP 03: 1 migration with **12 new tables** (7 core + 5 coordination), **13 new permissions** (9 core + 4 coordination), RLS policies including **coordination-aware RLS via SECURITY INVOKER helper function** (`is_coordination_participant`), plus **SECURITY DEFINER functions** for administrative cross-tenant operations (`remove_coordination_participant`, `grant_commitment_approval`, `verify_institutional_authority`) owned by dedicated `balance_coordination_admin` role (NOLOGIN, no BYPASSRLS), cross-tenant triggers, F6 trigger, attribution trigger, supersession trigger, **coordination-specific triggers**. Plus seed extension for Demolandia.
 
 ### 4.2 Scope
 
 - Create `prisma/migrations/20261018000022_g03_reform_bootstrap/migration.sql`
-- Update `prisma/schema.prisma` with 11 new models
+- Update `prisma/schema.prisma` with 12 new models (7 core + 5 coordination)
 - Update `src/lib/permissions.ts` with 13 new permissions
 - Extend `prisma/seed-ontology.ts` with sample reform data (including 1 coordination example)
-- **Create SECURITY DEFINER helper function** `is_coordination_participant(text)`
+- **Create SECURITY INVOKER helper functions** `is_coordination_participant(text)` and `is_snapshot_revoked(text)`
+- **Create SECURITY DEFINER administrative functions** `remove_coordination_participant`, `grant_commitment_approval`, `verify_institutional_authority` (owned by `balance_coordination_admin`, NOLOGIN)
+- **Create `balance_coordination_admin` role** (NOLOGIN, SELECT+UPDATE grants, FORCE RLS, REVOKE EXECUTE FROM PUBLIC)
 - NO service code (src/lib/reform/ not created yet)
 - NO API routes (src/app/api/v1/reform/ not created yet)
 
-### 4.3 Tables Created (11)
+### 4.3 Tables Created (12)
 
 | Table | Source decision |
 |-------|-----------------|
@@ -189,12 +191,7 @@ Create the database foundation for GROUP 03: 1 migration with **11 new tables** 
 | `reform_coordination_shared_snapshots` | D6 (NEW) |
 | `reform_coordination_shared_snapshot_revocations` | D6 (NEW — for revocation without UPDATE) |
 
-Wait — that's 12 tables, not 11. Let me recount:
-
-Core: 7 (proposals, alternatives, approvals, actions, action_updates, verifications, feedback_loops)
-Coordination: 5 (coordinations, participants, invitations, shared_snapshots, snapshot_revocations)
-
-**Total: 12 tables**. (Updated from 11 — the revocations table was added during threat model refinement.)
+**Total: 12 tables** (7 core + 5 coordination).
 
 ### 4.4 Permissions Created (13)
 
@@ -212,7 +209,7 @@ Coordination: 5 (coordinations, participants, invitations, shared_snapshots, sna
 ### 4.5 RLS Policies (Coordination-Aware)
 
 - Standard tenant-isolation RLS on 7 core tables + `coordination_participants` + `coordination_invitations` + `coordination_shared_snapshots` + `coordination_shared_snapshot_revocations`
-- **Coordination-aware RLS** on `reform_coordinations` via `is_coordination_participant()` SECURITY DEFINER helper (visible to lead OR active participant)
+- **Coordination-aware RLS** on `reform_coordinations` via `is_coordination_participant()` SECURITY INVOKER helper function (visible to lead OR active participant)
 - Append-only enforcement on `reform_action_updates`, `reform_approvals`, `reform_feedback_loops`, `reform_coordination_shared_snapshots`, `reform_coordination_shared_snapshot_revocations`
 
 ### 4.6 Triggers
@@ -228,7 +225,12 @@ Coordination: 5 (coordinations, participants, invitations, shared_snapshots, sna
 - [ ] Migration applies cleanly on fresh PostgreSQL 16 + pgvector
 - [ ] All 12 tables created with correct columns + types
 - [ ] RLS ENABLE + FORCE on all 12 tables
-- [ ] `is_coordination_participant()` SECURITY DEFINER function created and EXECUTE granted to `balance_app`
+- [ ] `is_coordination_participant()` SECURITY INVOKER function created and EXECUTE granted to `balance_app`
+- [ ] `is_snapshot_revoked()` SECURITY INVOKER function created and EXECUTE granted to `balance_app`
+- [ ] `remove_coordination_participant()` SECURITY DEFINER function created (owner: `balance_coordination_admin`), EXECUTE granted to `balance_app` only, REVOKE FROM PUBLIC
+- [ ] `balance_coordination_admin` role created (NOLOGIN, SELECT+UPDATE grants, FORCE RLS policies)
+- [ ] C1 FIX verified: `balance_coordination_admin` has SELECT on `reform_coordination_participants` (PostgreSQL requires SELECT for UPDATE WHERE clause column reads)
+- [ ] C2 LIMITATION documented: `set_config('app.tenant_id')` is NOT a DB-level identity guarantee — depends on `withAuthenticatedTenant`
 - [ ] Coordination-aware RLS policy on `reform_coordinations` works (lead + participants can SELECT; only lead can modify)
 - [ ] All 13 new permissions registered in `permissions.ts`
 - [ ] Seed creates sample data per tenant + 1 coordination example (idempotent)

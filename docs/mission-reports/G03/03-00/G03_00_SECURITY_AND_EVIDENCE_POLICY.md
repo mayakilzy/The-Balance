@@ -7,16 +7,19 @@
 > **Status:** REVISED per owner directive — re-awaiting final approval
 > **Companion to:** `G03_00_ARCHITECTURE_PROPOSAL.md` §3, §8
 
-> ⚠️ **REVISION NOTE (2026-10-18 rev 2)**: This document specifies the security policy from rev 1.
-> The **threat model for multi-institution coordination** (NEW per D6) is extracted to a dedicated document:
-> - `G03_00_THREAT_MODEL.md` — 10 threats (T1-T10) with mitigations
+> ⚠️ **REVISION NOTE (REV 8 — FINAL)**: This document specifies the security policy.
+> The **threat model for multi-institution coordination** is in a dedicated document:
+> - `G03_00_THREAT_MODEL.md` — 13 threats (T1-T13) with mitigations
 >
-> **Key changes from rev 1**:
-> - Coordination-aware RLS via `SECURITY DEFINER` helper function `is_coordination_participant(text)` —
->   same pattern as G02's observation chain integrity
+> **Key design (REV 8 final — empirically validated on PostgreSQL 16.4)**:
+> - Coordination-aware RLS via `SECURITY INVOKER` helper functions (`is_coordination_participant`, `is_snapshot_revoked`) — does NOT bypass RLS
+> - `SECURITY DEFINER` used ONLY for administrative cross-tenant UPDATE operations (`remove_coordination_participant`, `grant_commitment_approval`, `verify_institutional_authority`) — owned by `balance_coordination_admin` (NOLOGIN, no BYPASSRLS)
+> - C1 FIX (empirically proven): `balance_coordination_admin` has SELECT + UPDATE on `reform_coordination_participants` (PostgreSQL requires SELECT for WHERE clause column reads)
+> - C2 LIMITATION (empirically proven): `set_config('app.tenant_id')` is NOT a DB-level identity guarantee — depends on `withAuthenticatedTenant` (application layer)
+> - The G02 pattern is NOT a security precedent — G02 verifies internal data consistency; G03 handles cross-tenant data disclosure
 > - 4 new permissions: `reform:coordination:read`, `:manage`, `:approve`, `:share` (total G03: 13)
 > - Two-level approval model (coordination plan + per-participant proposal) — no majority override
-> - Explicit shared snapshots with reviewer approval — no live links to private data
+> - Explicit shared snapshots with reviewer approval + draft mode — no live links to private data
 > - Append-only shared snapshots with revocation via separate table (no UPDATE)
 >
 > **D3 revision** (epistemic honesty): The owner correctly noted that regex + `attributionLevel`
