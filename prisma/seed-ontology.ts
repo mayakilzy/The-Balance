@@ -815,6 +815,359 @@ async function main() {
   //     listed in CountryPackConfig.sectors.
   console.log(`  Education + health sectors: 0 evidence → LOW (unknown) — intentional for testing`);
 
+  // ============================================================
+  // 12. G03 REFORM ENTITIES (seed extension — mission 03-01 directive B)
+  // ============================================================
+  // Idempotent: uses findFirst+create for append-only tables (reform_approvals,
+  // reform_action_updates, reform_feedback_loops, revocations) because those
+  // tables have UNCONDITIONAL prevent_historical_update triggers (migration 0024)
+  // that block UPDATE for ALL roles. Other tables use upsert.
+  //
+  // Pattern: every fixture has a "DML Seed" prefix in its title so it can be
+  // identified and distinguished from test fixtures (which use "FA" prefix).
+  //
+  // Multi-institution coordination: Tenant A (Ministry of Planning) leads a
+  // coordination that includes Tenant B (Central Bank) as participant, with
+  // an approved shared snapshot — exercises the full D15 institutional
+  // authority separation chain on seed data.
+  // ============================================================
+  console.log("\nG03 Reform seed (mission 03-01 directive B)...");
+
+  // 12a. Reform Proposal (Tenant A) — findFirst+create (no compound unique on [tenantId,title])
+  let reformProposal = await prisma.reformProposal.findFirst({
+    where: { tenantId: tenantA.id, title: "DML Seed Reform Proposal — Monetary Discipline" },
+  });
+  if (!reformProposal) {
+    reformProposal = await prisma.reformProposal.create({
+      data: {
+        tenantId: tenantA.id,
+        title: "DML Seed Reform Proposal — Monetary Discipline",
+        problemStatement:
+          "Demolandia monetary base growth exceeded 7% in 2024, threatening price stability. " +
+          "Reform proposal explores alternative anchors for monetary policy coordination across " +
+          "the Ministry of Planning and the Central Bank of Demolandia.",
+        hypothesizedCauses: [
+          "Loose fiscal-monetary coordination",
+          "Off-budget spending not captured in headline figures",
+        ],
+        context: { sector: "finance", countryIso3: "DML", seededBy: "03-01-seed" },
+        status: "approved",
+        createdBy: adminUser.id,
+        approvedAt: new Date("2025-01-15"),
+        submittedAt: new Date("2025-01-10"),
+      },
+    });
+    console.log(`  ReformProposal: created (id=${reformProposal.id})`);
+  } else {
+    console.log(`  ReformProposal: already exists (id=${reformProposal.id})`);
+  }
+
+  // 12b. Reform Alternative (Tenant A)
+  const reformAlternative = await prisma.reformAlternative.upsert({
+    where: {
+      tenantId_proposalId_title: {
+        tenantId: tenantA.id,
+        proposalId: reformProposal.id,
+        title: "DML Seed Alternative — Inflation Targeting Framework",
+      },
+    },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      proposalId: reformProposal.id,
+      title: "DML Seed Alternative — Inflation Targeting Framework",
+      description:
+        "Adopt a 3%±1pp inflation targeting framework with quarterly accountability reports " +
+        "co-signed by the Central Bank and the Ministry of Planning.",
+      costEstimateMin: new Prisma.Decimal("500000"),
+      costEstimateMax: new Prisma.Decimal("1500000"),
+      costCurrency: "USD",
+      riskLevel: "medium",
+      feasibilityScore: "high",
+      status: "selected",
+      selectedAt: new Date("2025-01-20"),
+      selectedBy: adminUser.id,
+      draftedVia: "human",
+      simulated: false,
+      createdBy: adminUser.id,
+    },
+  });
+  console.log(`  ReformAlternative: ${reformAlternative.title}`);
+
+  // 12c. Reform Approval (APPEND-ONLY — findFirst + create pattern)
+  //   reform_approvals has prevent_historical_update trigger (migration 0024)
+  //   that blocks UPDATE for ALL roles (unconditional). We must NOT upsert.
+  const existingApproval = await prisma.reformApproval.findFirst({
+    where: { tenantId: tenantA.id, proposalId: reformProposal.id },
+  });
+  if (!existingApproval) {
+    await prisma.reformApproval.create({
+      data: {
+        tenantId: tenantA.id,
+        proposalId: reformProposal.id,
+        alternativeId: reformAlternative.id,
+        approvedBy: adminUser.id,
+        approvalNotes: "Approved per DML Seed fixture — exercises D5 human approval gate.",
+        rationale:
+          "Inflation targeting framework selected based on cross-tenant evidence convergence " +
+          "(IMF + World Bank) and Demolandia Central Bank operational capacity.",
+        supportingEvidence: [],
+        counterEvidence: [],
+        metadata: { seededBy: "03-01-seed" },
+      },
+    });
+    console.log(`  ReformApproval: created (proposal=${reformProposal.id})`);
+  } else {
+    console.log(`  ReformApproval: already exists (id=${existingApproval.id}) — skipped (append-only)`);
+  }
+
+  // 12d. Reform Action (Tenant A) — findFirst+create (no compound unique on [tenantId,proposalId,title])
+  let reformAction = await prisma.reformAction.findFirst({
+    where: { tenantId: tenantA.id, proposalId: reformProposal.id, title: "DML Seed Action — Publish Inflation Targeting Mandate" },
+  });
+  if (!reformAction) {
+    reformAction = await prisma.reformAction.create({
+      data: {
+        tenantId: tenantA.id,
+        proposalId: reformProposal.id,
+        alternativeId: reformAlternative.id,
+        title: "DML Seed Action — Publish Inflation Targeting Mandate",
+        description:
+          "Jointly publish the new inflation targeting mandate in the official gazette, " +
+          "co-signed by the Minister of Planning and the Central Bank Governor.",
+        assignedTo: adminUser.id,
+        assignedAt: new Date("2025-02-01"),
+        status: "in_progress",
+        startDate: new Date("2025-02-15"),
+        dueDate: new Date("2025-06-30"),
+        progressPercentage: 40,
+        createdBy: adminUser.id,
+      },
+    });
+    console.log(`  ReformAction: created (status=${reformAction.status}, progress=${reformAction.progressPercentage}%)`);
+  } else {
+    console.log(`  ReformAction: already exists (id=${reformAction.id})`);
+  }
+
+  // 12e. Reform Action Update (APPEND-ONLY — findFirst + create)
+  const existingUpdate = await prisma.reformActionUpdate.findFirst({
+    where: { tenantId: tenantA.id, actionId: reformAction.id, updateType: "progress" },
+  });
+  if (!existingUpdate) {
+    await prisma.reformActionUpdate.create({
+      data: {
+        tenantId: tenantA.id,
+        actionId: reformAction.id,
+        updateType: "progress",
+        notes:
+          "Draft mandate circulated to Central Bank for technical review. " +
+          "Legal review pending with Ministry of Justice.",
+        progressPercentage: 40,
+        evidenceIds: [],
+        actor: adminUser.id,
+        metadata: { seededBy: "03-01-seed" },
+      },
+    });
+    console.log(`  ReformActionUpdate: created (progress=40%)`);
+  } else {
+    console.log(`  ReformActionUpdate: already exists — skipped (append-only)`);
+  }
+
+  // 12f. Reform Verification (Tenant A) — 1:1 with action
+  const reformVerification = await prisma.reformVerification.upsert({
+    where: { tenantId_actionId: { tenantId: tenantA.id, actionId: reformAction.id } },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      actionId: reformAction.id,
+      verificationStatus: "pending",
+      verifiedAction: null,
+      evidenceSource: null,
+      notes: "Awaiting execution completion before verification can begin.",
+      metadata: { seededBy: "03-01-seed" },
+    },
+  });
+  console.log(`  ReformVerification: status=${reformVerification.verificationStatus}`);
+
+  // 12g. Reform Feedback Loop (Tenant A) — 1:1 with action
+  const reformFeedbackLoop = await prisma.reformFeedbackLoop.upsert({
+    where: { tenantId_actionId: { tenantId: tenantA.id, actionId: reformAction.id } },
+    update: {},
+    create: {
+      tenantId: tenantA.id,
+      actionId: reformAction.id,
+      comparisonType: "none",
+      descriptiveSummary:
+        "Descriptive outcome placeholder — the action is in_progress. " +
+        "Before/after observations will be linked once the action completes.",
+      attributionLevel: "descriptive",
+      createdBy: adminUser.id,
+      metadata: { seededBy: "03-01-seed" },
+    },
+  });
+  console.log(`  ReformFeedbackLoop: comparisonType=${reformFeedbackLoop.comparisonType}`);
+
+  // ============================================================
+  // 12h. MULTI-INSTITUTION COORDINATION (Tenant A + Tenant B)
+  // ============================================================
+  // Coordination: Tenant A leads, Tenant B participates (as Central Bank).
+  // This exercises the full D15 institutional authority chain on seed data:
+  //   - leadTenant (Tenant A) → adds participant (Tenant B)
+  //   - shared snapshot (approved, owned by Tenant A)
+  //   - revocation example (snapshot visibility for non-owner)
+  // ============================================================
+  let reformCoordination = await prisma.reformCoordination.findFirst({
+    where: { leadTenantId: tenantA.id, title: "DML Seed Coordination — Monetary Policy Alignment" },
+  });
+  if (!reformCoordination) {
+    reformCoordination = await prisma.reformCoordination.create({
+      data: {
+        leadTenantId: tenantA.id,
+        countryId: country.id,
+        title: "DML Seed Coordination — Monetary Policy Alignment",
+        description:
+          "Cross-institution coordination between the Ministry of Planning (Tenant A, lead) " +
+          "and the Central Bank of Demolandia (Tenant B, participant) to align fiscal and " +
+          "monetary policy under the new inflation targeting framework.",
+        approvalPolicy: "lead_only",
+        status: "active",
+        activatedAt: new Date("2025-01-25"),
+        createdBy: adminUser.id,
+        metadata: { seededBy: "03-01-seed" },
+      },
+    });
+    console.log(`  ReformCoordination: created (id=${reformCoordination.id})`);
+  } else {
+    console.log(`  ReformCoordination: already exists (id=${reformCoordination.id})`);
+  }
+
+  // 12i. Coordination Participant (Tenant B added by Tenant A admin)
+  const reformParticipant = await prisma.reformCoordinationParticipant.upsert({
+    where: {
+      coordinationId_tenantId: {
+        coordinationId: reformCoordination.id,
+        tenantId: tenantB.id,
+      },
+    },
+    update: {},
+    create: {
+      coordinationId: reformCoordination.id,
+      tenantId: tenantB.id,
+      institutionId: centralBank.id,
+      role: "contributor",
+      status: "active",
+      joinedAt: new Date("2025-01-26"),
+      addedBy: adminUser.id,
+      // B3: institutional authority fields default — NOT verified, NOT commitment-approver
+      canApproveCommitments: false,
+      metadata: { seededBy: "03-01-seed" },
+    },
+  });
+  console.log(`  ReformCoordinationParticipant: tenantB active (id=${reformParticipant.id})`);
+
+  // 12j. Coordination Invitation (record-keeping — accepted)
+  const existingInvitation = await prisma.reformCoordinationInvitation.findFirst({
+    where: { coordinationId: reformCoordination.id, invitedTenantId: tenantB.id },
+  });
+  if (!existingInvitation) {
+    await prisma.reformCoordinationInvitation.create({
+      data: {
+        coordinationId: reformCoordination.id,
+        invitedTenantId: tenantB.id,
+        invitedInstitutionId: centralBank.id,
+        invitedRole: "contributor",
+        status: "accepted",
+        expiresAt: new Date("2025-02-15"),
+        acceptedAt: new Date("2025-01-26"),
+        acceptedBy: adminUser.id, // Tenant B accepted via seeded admin user (fictional)
+        createdBy: adminUser.id,
+        metadata: { seededBy: "03-01-seed" },
+      },
+    });
+    console.log(`  ReformCoordinationInvitation: created (status=accepted)`);
+  } else {
+    console.log(`  ReformCoordinationInvitation: already exists — skipped`);
+  }
+
+  // 12k. Coordination Shared Snapshot (APPROVED — owned by Tenant A)
+  let reformSnapshot = await prisma.reformCoordinationSharedSnapshot.findFirst({
+    where: { coordinationId: reformCoordination.id, title: "DML Seed Shared Snapshot — Inflation Targeting Mandate Draft" },
+  });
+  if (!reformSnapshot) {
+    reformSnapshot = await prisma.reformCoordinationSharedSnapshot.create({
+      data: {
+        coordinationId: reformCoordination.id,
+        ownerTenantId: tenantA.id,
+        snapshotType: "commitment",
+        title: "DML Seed Shared Snapshot — Inflation Targeting Mandate Draft",
+        summary:
+          "Snapshot of the jointly-approved inflation targeting mandate, shared with the " +
+          "Central Bank of Demolandia (Tenant B) for execution reference.",
+        status: "approved",
+        approvedAt: new Date("2025-02-05"),
+        approvedBy: adminUser.id,
+        classification: "shared_within_coordination",
+        createdBy: adminUser.id,
+        metadata: { seededBy: "03-01-seed" },
+      },
+    });
+    console.log(`  ReformCoordinationSharedSnapshot: created (status=approved, id=${reformSnapshot.id})`);
+  } else {
+    console.log(`  ReformCoordinationSharedSnapshot: already exists (id=${reformSnapshot.id})`);
+  }
+
+  // 12l. Snapshot Revocation (APPEND-ONLY — findFirst + create)
+  //    Demonstrates the revocation flow (D12: approved → revoked) on seed data.
+  //    NOTE: This revokes a DIFFERENT snapshot (we don't want to revoke the
+  //    approved one above, since SEED-03 test asserts an approved snapshot
+  //    exists). We create a second snapshot and revoke it for demonstration.
+  let reformSnapshotToRevoke = await prisma.reformCoordinationSharedSnapshot.findFirst({
+    where: { coordinationId: reformCoordination.id, title: "DML Seed Shared Snapshot — Legacy Mandate Draft (REVOKED)" },
+  });
+  if (!reformSnapshotToRevoke) {
+    reformSnapshotToRevoke = await prisma.reformCoordinationSharedSnapshot.create({
+      data: {
+        coordinationId: reformCoordination.id,
+        ownerTenantId: tenantA.id,
+        snapshotType: "commitment",
+        title: "DML Seed Shared Snapshot — Legacy Mandate Draft (REVOKED)",
+        summary:
+          "Earlier draft of the inflation targeting mandate that was superseded by the " +
+          "approved version. Kept for historical audit; revoked from active visibility.",
+        status: "approved",
+        approvedAt: new Date("2025-01-28"),
+        approvedBy: adminUser.id,
+        createdBy: adminUser.id,
+        metadata: { seededBy: "03-01-seed" },
+      },
+    });
+    console.log(`  ReformCoordinationSharedSnapshot (to-revoke): created`);
+  } else {
+    console.log(`  ReformCoordinationSharedSnapshot (to-revoke): already exists`);
+  }
+
+  const existingRevocation = await prisma.reformCoordinationSharedSnapshotRevocation.findFirst({
+    where: { snapshotId: reformSnapshotToRevoke.id },
+  });
+  if (!existingRevocation) {
+    await prisma.reformCoordinationSharedSnapshotRevocation.create({
+      data: {
+        tenantId: tenantA.id,
+        coordinationId: reformCoordination.id,
+        snapshotId: reformSnapshotToRevoke.id,
+        revokedBy: adminUser.id,
+        reason: "Superseded by the final approved mandate draft.",
+        metadata: { seededBy: "03-01-seed" },
+      },
+    });
+    console.log(`  ReformCoordinationSharedSnapshotRevocation: created (snapshot now revoked)`);
+  } else {
+    console.log(`  ReformCoordinationSharedSnapshotRevocation: already exists — skipped (append-only)`);
+  }
+
+  console.log("G03 Reform seed complete.");
+  console.log("  Proposal → Alternative → Approval → Action → ActionUpdate → Verification → FeedbackLoop");
+  console.log("  Coordination (Tenant A lead) + Participant (Tenant B) + Invitation + Approved Snapshot + Revocation");
   console.log("\nG01 State Builder seed complete.");
   console.log("  Baseline test scenarios (post FIX-1/2/3/4):");
   console.log("    Tenant A: agriculture=FULL (2 indep + verified), finance=PARTIAL (1 source)");

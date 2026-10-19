@@ -159,6 +159,26 @@ jobs:
           RUN_INTEGRATION_TESTS: "1"
           SKIP_E2E_SERVER: "1"
 
+      - name: G03-01 SQL acceptance suite (real PG, real migration chain)
+        # Reviewer directive C/D: reproducible database-backed test command.
+        # Runs the G03-01 acceptance suite (25 tests) against the real PostgreSQL 16
+        # service, after migrations + seed have completed. Verifies:
+        #   - RLS enabled + forced on all 12 G03 tables
+        #   - SA-03 split into 6 independent sub-tests (approvedBy/approvedAt/
+        #     status→approved/ownerTenantId/coordinationId/content) — each
+        #     verifies denial + persisted-data unchanged
+        #   - Append-only enforcement (DELETE + UPDATE blocked, row persists)
+        #   - FUNCTION privileges (DEFINER DORMANT via EFFECTIVE call;
+        #     INVOKER EFFECTIVE call succeeds)
+        #   - Migration finished_at IS NOT NULL (not just name present)
+        #   - Seed idempotency fixtures present
+        # Fails with nonzero exit on any incorrect behavior (ON_ERROR_STOP=1).
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d balance -v ON_ERROR_STOP=1 \
+            -f scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql
+
       - name: Build (production)
         run: bun run build
         env:

@@ -1,0 +1,65 @@
+DO
+psql:scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql:58: NOTICE:  table "g03_final_results" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+
+============================================================
+G03-01 FINAL ACCEPTANCE TEST RESULTS (rev 2 — reviewer closure)
+============================================================
+ test_id |                                     description                                     |                    expected                     |                                            actual                                             | result 
+---------+-------------------------------------------------------------------------------------+-------------------------------------------------+-----------------------------------------------------------------------------------------------+--------
+ FK-01   | Cross-tenant FK: alternative tenant mismatch blocked                                | raised=TRUE                                     | raised=true                                                                                   | PASS
+ FK-02   | Cross-tenant FK: action tenant mismatch blocked                                     | raised=TRUE                                     | raised=true                                                                                   | PASS
+ FN-01   | No EXECUTE on DEFINER functions for balance_app (grant list)                        | 0                                               | 0                                                                                             | PASS
+ FN-02   | REVOKE FROM PUBLIC on DEFINER functions                                             | 0                                               | 0                                                                                             | PASS
+ FN-03   | INVOKER functions available to balance_app                                          | 2                                               | 2                                                                                             | PASS
+ FN-04   | EFFECTIVE call to DEFINER function denied (DORMANT)                                 | raised=TRUE (permission denied or similar)      | raised=true                                                                                   | PASS
+ FN-05   | EFFECTIVE call to INVOKER function succeeds                                         | returns FALSE (no revocation)                   | returned=false                                                                                | PASS
+ PM-01   | All 2026 migrations finished_at IS NOT NULL                                         | >=25 finished, 0 unfinished                     | 25 finished, 0 unfinished                                                                     | PASS
+ PM-02   | G03 migrations 0022+0023+0024+0025 all finished_at NOT NULL                         | all 4 finished_at NOT NULL                      | 0022=true 0023=true 0024=true 0025=true                                                       | PASS
+ PM-03a  | Append-only: DELETE on reform_approvals denied + row persists                       | raised=TRUE + before=1 after=1                  | raised=true before=1 after=1                                                                  | PASS
+ PM-03b  | Append-only: UPDATE on reform_approvals denied + row unchanged                      | raised=TRUE + rationale=approved                | raised=true rationale=approved                                                                | PASS
+ RLS-01  | All 12 tables RLS+FORCE verified by name                                            | all RLS=t FORCE=t                               | all verified                                                                                  | PASS
+ SA-01   | Self-withdrawal changes exactly 1 row to withdrawn                                  | 1 row + status=withdrawn                        | 1 rows + status=withdrawn                                                                     | PASS
+ SA-02   | Cross-tenant INSERT blocked (denied + count unchanged)                              | raised=TRUE + before=after                      | raised=true before=2 after=2                                                                  | PASS
+ SA-03a  | approvedBy-only change denied + persisted unchanged                                 | raised=TRUE + approvedBy=reviewer-orig          | raised=true approvedBy=reviewer-orig                                                          | PASS
+ SA-03b  | approvedAt-only change denied + persisted unchanged                                 | raised=TRUE + approvedAt unchanged              | raised=true approvedAt_match=true                                                             | PASS
+ SA-03c  | status draft->approved denied + persisted unchanged                                 | raised=TRUE + status=draft                      | raised=true status=draft                                                                      | PASS
+ SA-03d  | ownerTenantId change denied + persisted unchanged                                   | raised=TRUE + owner=cmveksd72000copg0lim5xiiw   | raised=true owner=cmveksd72000copg0lim5xiiw                                                   | PASS
+ SA-03e  | coordinationId change denied + persisted unchanged                                  | raised=TRUE + coord=fa-c3                       | raised=true coord=fa-c3                                                                       | PASS
+ SA-03f  | approved content (title) modification denied + persisted unchanged                  | raised=TRUE + title=OrigTitle                   | raised=true title=OrigTitle                                                                   | PASS
+ SA-04   | Revoked snapshot invisible to participant                                           | count=0                                         | count=0                                                                                       | PASS
+ SEED-01 | Seed fixture: reform entities present                                               | >=1 proposals, >=1 coordinations, >=1 snapshots | proposals=1 coordinations=1 snapshots=2                                                       | PASS
+ SEED-02 | Seed: multi-institution coordination present (Tenant A lead + Tenant B participant) | >=1 cross-tenant coordinations                  | count=1                                                                                       | PASS
+ SEED-03 | Seed: approved shared snapshot present                                              | >=1                                             | count=2                                                                                       | PASS
+ TRIG-01 | Migration 0025 trigger protects 5 fields independently                              | all 5 = TRUE                                    | approvedBy=true approvedAt=true status_transition=true ownerTenantId=true coordinationId=true | PASS
+(25 rows)
+
+
+ passed | failed | total 
+--------+--------+-------
+     25 |      0 |    25
+(1 row)
+
+psql:scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql:733: NOTICE:  G03-01 FINAL: ALL 25 TESTS PASSED
+DO

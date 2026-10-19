@@ -1,0 +1,58 @@
+============================================================
+G03-01 SEED IDEMPOTENCY EVIDENCE
+============================================================
+Date: 2026-10-19T02:11:58Z
+DB: balance_g03_test @ 127.0.0.1:15432
+
+Method: bunx tsx prisma/seed-ontology.ts (run twice)
+
+Run 1 output (G03 section):
+  ReformProposal: created (id=cmvembg4f001jopu2j0qspv4a)
+  ReformAlternative: DML Seed Alternative — Inflation Targeting Framework
+  ReformApproval: created (proposal=cmvembg4f001jopu2j0qspv4a)
+  ReformAction: created (status=in_progress, progress=40%)
+  ReformActionUpdate: created (progress=40%)
+  ReformVerification: status=pending
+  ReformFeedbackLoop: comparisonType=none
+  ReformCoordination: created (id=cmvembg4x001xopu23e623htx)
+  ReformCoordinationParticipant: tenantB active
+  ReformCoordinationInvitation: created (status=accepted)
+  ReformCoordinationSharedSnapshot: created (status=approved)
+  ReformCoordinationSharedSnapshot (to-revoke): created
+  ReformCoordinationSharedSnapshotRevocation: created
+
+Run 2 output (G03 section) — all 'already exists', no inserts:
+  ReformProposal: already exists (id=cmvembg4f001jopu2j0qspv4a)
+  ReformAlternative: DML Seed Alternative — Inflation Targeting Framework (upsert no-op)
+  ReformApproval: already exists — skipped (append-only)
+  ReformAction: already exists
+  ReformActionUpdate: already exists — skipped (append-only)
+  ReformVerification: status=pending (upsert no-op)
+  ReformFeedbackLoop: comparisonType=none (upsert no-op)
+  ReformCoordination: already exists
+  ReformCoordinationParticipant: tenantB active (upsert no-op)
+  ReformCoordinationInvitation: already exists — skipped
+  ReformCoordinationSharedSnapshot: already exists
+  ReformCoordinationSharedSnapshot (to-revoke): already exists
+  ReformCoordinationSharedSnapshotRevocation: already exists — skipped (append-only)
+
+Post-run row counts (verified after 2 runs — NO duplicates):
+       t        | count 
+----------------+-------
+ proposals      |     1
+ alternatives   |     1
+ approvals      |     1
+ actions        |     1
+ action_updates |     1
+ verifications  |     1
+ feedback_loops |     1
+ coordinations  |     1
+ participants   |     1
+ invitations    |     1
+ snapshots      |     2
+ revocations    |     1
+(12 rows)
+
+
+Conclusion: all 12 G03 entities have count=1 (snapshots=2: 1 approved + 1 revoked — INTENTIONAL).
+Idempotency PROVEN.
