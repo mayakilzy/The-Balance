@@ -1,0 +1,43 @@
+psql:scripts/g03-security-validation/g03_01_final_acceptance.sql:14: NOTICE:  table "g03_final_results" does not exist, skipping
+DROP TABLE
+CREATE TABLE
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+DO
+
+============================================================
+G03-01 FINAL ACCEPTANCE TEST RESULTS
+============================================================
+ test_id |                     description                      |         expected         |                                                actual                                                 | result 
+---------+------------------------------------------------------+--------------------------+-------------------------------------------------------------------------------------------------------+--------
+ FK-01   | Cross-tenant FK: alternative tenant mismatch blocked | ERROR                    | Cross-tenant violation: ReformAlternative.tenantId must match ReformProposal.tenantId                 | PASS
+ FK-02   | Cross-tenant FK: action tenant mismatch blocked      | ERROR                    | Cross-tenant violation: ReformAction.tenantId must match ReformProposal.tenantId                      | PASS
+ FN-01   | No EXECUTE on DEFINER functions for balance_app      | 0                        | 0                                                                                                     | PASS
+ FN-02   | REVOKE FROM PUBLIC on DEFINER functions              | 0                        | 0                                                                                                     | PASS
+ FN-03   | INVOKER functions available to balance_app           | 2                        | 2                                                                                                     | PASS
+ PM-01   | Total migrations applied                             | >=24                     | 24                                                                                                    | PASS
+ PM-02   | G03 migrations 0022+0023+0024 applied                | 3 applied                | 0022=1 0023=1 0024=1                                                                                  | PASS
+ RLS-01  | All 12 tables RLS+FORCE verified by name             | all RLS=t FORCE=t        | all verified                                                                                          | PASS
+ SA-01   | Self-withdrawal changes exactly 1 row to withdrawn   | 1 row + status=withdrawn | 1 rows + status=withdrawn                                                                             | PASS
+ SA-02   | Cross-tenant INSERT blocked (count unchanged)        | before=after             | RLS blocked: new row violates row-level security policy for table "reform_proposals" before=1 after=1 | PASS
+ SA-03   | Approved snapshot content+metadata immutable         | ERROR (S3 VIOLATION)     | S3 VIOLATION: cannot modify content of approved shared snapshot.                                      | PASS
+ SA-04   | Revoked snapshot invisible to participant            | count=0                  | count=0                                                                                               | PASS
+(12 rows)
+
+
+ passed | failed | total 
+--------+--------+-------
+     12 |      0 |    12
+(1 row)
+
+psql:scripts/g03-security-validation/g03_01_final_acceptance.sql:320: NOTICE:  G03-01 FINAL: ALL 12 TESTS PASSED
+DO
