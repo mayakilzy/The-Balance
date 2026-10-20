@@ -239,12 +239,36 @@ describe("CreateReformActionInputSchema", () => {
     ).toThrow();
   });
 
-  it("does NOT accept programId/projectId (D4 deferred to G03-05)", () => {
+  it("G03-05: now ACCEPTS programId/projectId (D4 activated)", () => {
+    // G03-05 activates D4 — programId/projectId are now accepted.
+    // The old G03-02 test rejected them; this test is updated.
+    const result = CreateReformActionInputSchema.parse({
+      proposalId: "x",
+      title: "valid action title",
+      programId: "prog_001",
+    });
+    expect(result.programId).toBe("prog_001");
+  });
+
+  it("G03-05: accepts allowCrossStrategyProgramLink with justification", () => {
+    const result = CreateReformActionInputSchema.parse({
+      proposalId: "x",
+      title: "valid action title",
+      programId: "prog_001",
+      allowCrossStrategyProgramLink: true,
+      crossStrategyJustification: "This cross-strategy link is justified because the program supports both strategies.",
+    });
+    expect(result.allowCrossStrategyProgramLink).toBe(true);
+  });
+
+  it("G03-05: rejects allowCrossStrategyProgramLink without justification", () => {
     expect(() =>
       CreateReformActionInputSchema.parse({
         proposalId: "x",
         title: "valid action title",
         programId: "prog_001",
+        allowCrossStrategyProgramLink: true,
+        // missing crossStrategyJustification
       })
     ).toThrow();
   });

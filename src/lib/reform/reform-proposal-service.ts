@@ -268,6 +268,38 @@ export async function approveReformProposal(
   return withAuthenticatedTenant(
     session,
     async ({ tx, tenantId, userId }) => {
+      // G03-05: Acquire alert-level advisory lock FIRST (before proposal-row lock)
+      // to serialize competing approvals for the same originating alert.
+      // This prevents two different proposals for the same alert from being
+      // approved concurrently, which could create conflicting active approvals.
+      //
+      // Lock ordering: alert-level advisory lock → proposal-row SELECT FOR UPDATE
+      //
+      // MAINTENANCE INVARIANT (R2-6):
+      // All approval paths that acquire BOTH the alert-level advisory lock and
+      // the proposal-row lock MUST acquire the alert lock FIRST. If a future
+      // mission adds a path that acquires the proposal-row lock before the
+      // advisory lock, a deadlock could occur. This ordering constraint must
+      // be preserved across all concurrent code paths.
+      //
+      // If originatingAlertId is null (human-initiated proposal without alert),
+      // skip the advisory lock and supersession — no alert to lock on.
+      const proposalForAlertLock = await tx.reformProposal.findFirst({
+        where: { id: parsed.proposalId, tenantId },
+        select: { id: true, originatingAlertId: true, strategyVersionId: true },
+      });
+      if (!proposalForAlertLock) {
+        throw new NotFoundError(
+          `Proposal ${parsed.proposalId} not found in tenant ${tenantId}`
+        );
+      }
+
+      if (proposalForAlertLock.originatingAlertId) {
+        // Acquire alert-level advisory lock (transaction-scoped)
+        const alertLockKey = `${tenantId}:${proposalForAlertLock.originatingAlertId}`;
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${alertLockKey}))`;
+      }
+
       // G03-03: Acquire proposal-row lock (SELECT FOR UPDATE) to serialize
       // competing operations (withdrawal, selection, addition).
       await lockProposalRow(tx, parsed.proposalId, tenantId);
@@ -395,6 +427,123 @@ export async function approveReformProposal(
         );
       }
 
+      // G03-05: Build evidence snapshot at approval time.
+      // Read the approved alternative's full data for the snapshot.
+      const altSnapshot = await tx.reformAlternative.findFirst({
+        where: { id: alternativeId, tenantId },
+      });
+      if (!altSnapshot) {
+        throw new NotFoundError(
+          `Alternative ${alternativeId} not found for snapshot`
+        );
+      }
+
+      // G03-05: Populate supportingEvidence from hypothesizedCauses.supportingEvidenceIds
+      // Per PRE-02: supportingEvidence is for VERIFIED EVIDENCE REFERENCES,
+      // NOT for the alternative's description/assumptions.
+      // The alternative snapshot goes into metadata.alternativeSnapshot.
+      const supportingEvidence: Array<{
+        evidenceId: string;
+        claim: string;
+        type: string;
+        verificationStatus: string;
+        sourceCode: string | null;
+      }> = [];
+      const counterEvidence: Array<{
+        evidenceId: string;
+        claim: string;
+        type: string;
+        verificationStatus: string;
+        sourceCode: string | null;
+      }> = [];
+
+      // Extract evidence IDs from hypothesizedCauses
+      const causes = Array.isArray(proposal.hypothesizedCauses)
+        ? (proposal.hypothesizedCauses as Array<Record<string, unknown>>)
+        : [];
+      const supportingIds: string[] = [];
+      const contradictingIds: string[] = [];
+      for (const cause of causes) {
+        if (Array.isArray(cause.supportingEvidenceIds)) {
+          supportingIds.push(...(cause.supportingEvidenceIds as string[]));
+        }
+        if (Array.isArray(cause.contradictingEvidenceIds)) {
+          contradictingIds.push(...(cause.contradictingEvidenceIds as string[]));
+        }
+      }
+
+      // Fetch evidence records (if any linked)
+      if (supportingIds.length > 0) {
+        const evidenceRecords = await tx.evidence.findMany({
+          where: { id: { in: supportingIds }, tenantId },
+        });
+        for (const ev of evidenceRecords) {
+          supportingEvidence.push({
+            evidenceId: ev.id,
+            claim: ev.claim,
+            type: ev.type,
+            verificationStatus: ev.verificationStatus,
+            sourceCode: null, // source link via sourceId, not denormalized
+          });
+        }
+      }
+      if (contradictingIds.length > 0) {
+        const evidenceRecords = await tx.evidence.findMany({
+          where: { id: { in: contradictingIds }, tenantId },
+        });
+        for (const ev of evidenceRecords) {
+          counterEvidence.push({
+            evidenceId: ev.id,
+            claim: ev.claim,
+            type: ev.type,
+            verificationStatus: ev.verificationStatus,
+            sourceCode: null,
+          });
+        }
+      }
+
+      // G03-05: Build the approval snapshot for metadata.
+      // Per PRE-02: metadata stores the alternative + proposal snapshot,
+      // NOT supportingEvidence (which is for evidence references).
+      const approvalMetadata = {
+        alternativeSnapshot: {
+          alternativeId: altSnapshot.id,
+          title: altSnapshot.title,
+          description: altSnapshot.description,
+          costEstimateMin:
+            altSnapshot.costEstimateMin !== null
+              ? Number(altSnapshot.costEstimateMin)
+              : null,
+          costEstimateMax:
+            altSnapshot.costEstimateMax !== null
+              ? Number(altSnapshot.costEstimateMax)
+              : null,
+          costCurrency: altSnapshot.costCurrency,
+          riskLevel: altSnapshot.riskLevel,
+          feasibilityScore: altSnapshot.feasibilityScore,
+          assumptions: Array.isArray(altSnapshot.assumptions)
+            ? (altSnapshot.assumptions as string[])
+            : [],
+          anticipatedOutcomes: Array.isArray(altSnapshot.anticipatedOutcomes)
+            ? (altSnapshot.anticipatedOutcomes as string[])
+            : [],
+          draftedVia: altSnapshot.draftedVia,
+          simulated: altSnapshot.simulated,
+          provider:
+            (altSnapshot.metadata as { provider?: string } | null)?.provider ??
+            null,
+        },
+        proposalSnapshot: {
+          proposalId: proposal.id,
+          title: proposal.title,
+          problemStatement: proposal.problemStatement,
+          strategyVersionId: proposal.strategyVersionId,
+          originatingAlertId: proposal.originatingAlertId,
+        },
+        capturedAt: new Date().toISOString(),
+        schemaVersion: 1 as const,
+      };
+
       // Create the immutable approval record (append-only)
       const approval = await tx.reformApproval.create({
         data: {
@@ -404,10 +553,50 @@ export async function approveReformProposal(
           approvedBy: userId,
           approvalNotes: parsed.approvalNotes ?? null,
           rationale: parsed.rationale,
-          supportingEvidence: [],
-          counterEvidence: [],
+          supportingEvidence, // evidence references (frozen contract)
+          counterEvidence, // counter-evidence references (frozen contract)
+          metadata: approvalMetadata, // G03-05: structured snapshot
         },
       });
+
+      // G03-05: Supersession logic.
+      // If the proposal has an originatingAlertId, check for an existing
+      // approved proposal for the same alert. If found, supersede it.
+      // This runs in the SAME transaction as the approval creation → atomic.
+      if (proposalForAlertLock.originatingAlertId) {
+        const oldApproved = await tx.reformProposal.findFirst({
+          where: {
+            tenantId,
+            originatingAlertId: proposalForAlertLock.originatingAlertId,
+            status: "approved",
+            id: { not: parsed.proposalId },
+            supersededById: null,
+          },
+        });
+        if (oldApproved) {
+          // Supersede the old proposal
+          await tx.reformProposal.update({
+            where: { id: oldApproved.id },
+            data: {
+              status: "superseded",
+              supersededAt: new Date(),
+              supersededById: parsed.proposalId,
+            },
+          });
+          // Audit the supersession (same transaction → atomic)
+          await writeAuditTx(tx, {
+            tenantId,
+            actor: userId,
+            action: "reform.proposal.superseded",
+            details: {
+              oldProposalId: oldApproved.id,
+              newProposalId: parsed.proposalId,
+              originatingAlertId: proposalForAlertLock.originatingAlertId,
+            },
+            status: "ok",
+          });
+        }
+      }
 
       // Transition proposal to approved (conditional update for safety)
       const updateResult = await tx.reformProposal.updateMany({
@@ -434,6 +623,8 @@ export async function approveReformProposal(
           proposalId: parsed.proposalId,
           approvalId: approval.id,
           alternativeId,
+          hasEvidenceSnapshot: supportingEvidence.length > 0,
+          hasMetadataSnapshot: true,
         },
         status: "ok",
       });

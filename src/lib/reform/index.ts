@@ -60,6 +60,16 @@ export {
 } from "./reform-feedback-service";
 
 // ============================================================
+// G03-05 — Enhanced Approval Workflow
+// ============================================================
+
+// Approval service (G03-05 — audit-safe wrapper + read)
+export {
+  approveReformProposalWithAuditSafe,
+  getReformApproval,
+} from "./reform-approval-service";
+
+// ============================================================
 // G03-04 — Reform Comparison + Advisor (PRE-03 corrected)
 // ============================================================
 

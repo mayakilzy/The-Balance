@@ -1,32 +1,18 @@
 // ============================================================
 // src/lib/reform/reform-action-service.ts
 // ------------------------------------------------------------
-// G03-02 — Minimum Viable Single-Tenant Reform Vertical Slice
+// G03-02 + G03-05 — Reform Action Service
 //
-// Implements:
-//   createReformAction  — only for approved proposals
-//   getReformAction
-//   listReformActions
-//   startReformAction   — planned → in_progress
-//   completeReformAction — in_progress → completed
+// G03-05 additions:
+//   - D4 Program/Project link verification (tenant + country + strategy)
+//   - programId/projectId fields on CreateReformActionInput
+//   - allowCrossStrategyProgramLink flag with justification + audit
 //
-// Lifecycle (per G03-00 INTEGRATION_CONTRACTS §3):
-//   planned → in_progress → completed
-//
-// `blocked` and `cancelled` states exist in the G03-00 enum but are NOT
-// reachable via G03-02 service transitions (deferred to G03-05 enhanced
-// action lifecycle). The service explicitly rejects attempts to set them.
-//
-// Atomicity:
-//   Every state transition writes audit_log in the SAME transaction
-//   via writeAuditTx. If the audit write fails, the entire transaction
-//   rolls back.
-//
-// D4 (cross-strategy links):
-//   G03-02 does NOT support programId/projectId linking — that requires
-//   the proposal's strategyVersionId to match the program's. This is
-//   deferred to G03-05. The service accepts no programId/projectId input
-//   in G03-02.
+// D4 Policy (per PRE-02):
+//   - Tenant match: ALWAYS enforced, NOT overridable
+//   - Country match: ALWAYS enforced, NOT overridable
+//   - Strategy match: overridable ONLY with allowCrossStrategyProgramLink:true
+//     + crossStrategyJustification (min 20 chars) + permanent audit
 // ============================================================
 import type { Session } from "next-auth";
 import { Prisma } from "@prisma/client";
@@ -47,6 +33,69 @@ import type {
   StartReformActionInput,
   CompleteReformActionInput,
 } from "./contracts";
+
+// ============================================================
+// D4: Verify Program/Project link (tenant + country + strategy)
+// ============================================================
+
+/**
+ * Verify that a program belongs to the caller's tenant and that its
+ * strategy version's country matches the caller's tenant's country.
+ *
+ * Tenant match is ALWAYS enforced — NOT overridable.
+ * Country match is ALWAYS enforced — NOT overridable.
+ * Strategy match is overridable ONLY with allowCrossStrategyProgramLink.
+ */
+async function verifyProgramLink(
+  tx: Prisma.TransactionClient,
+  tenantId: string,
+  programId: string,
+  proposalStrategyVersionId: string | null,
+  allowCrossStrategy: boolean
+): Promise<{ strategyVersionId: string; isCrossStrategy: boolean }> {
+  const program = await tx.program.findFirst({
+    where: { id: programId, tenantId },
+    include: {
+      strategyVersion: {
+        include: {
+          strategy: {
+            include: { tenant: true },
+          },
+        },
+      },
+    },
+  });
+  if (!program) {
+    throw new NotFoundError(
+      `Program ${programId} not found in tenant scope`
+    );
+  }
+
+  // Country match (ALWAYS enforced, NOT overridable)
+  const actionTenant = await tx.tenant.findUnique({ where: { id: tenantId } });
+  const programCountryId = program.strategyVersion.strategy.tenant.countryId;
+  if (actionTenant?.countryId !== programCountryId) {
+    throw new ConflictError(
+      `Country mismatch: ReformAction's tenant country must match Program's strategy version country`
+    );
+  }
+
+  // Strategy match (overridable with flag + justification)
+  const isCrossStrategy =
+    proposalStrategyVersionId !== null &&
+    program.strategyVersionId !== proposalStrategyVersionId;
+
+  if (isCrossStrategy && !allowCrossStrategy) {
+    throw new ConflictError(
+      `Strategy mismatch: Program's strategy version (${program.strategyVersionId}) does not match the proposal's strategy version (${proposalStrategyVersionId}). Set allowCrossStrategyProgramLink=true with a justification to override.`
+    );
+  }
+
+  return {
+    strategyVersionId: program.strategyVersionId,
+    isCrossStrategy,
+  };
+}
 
 // ============================================================
 // Create: only for approved proposals (analyst action)
@@ -89,11 +138,59 @@ export async function createReformAction(
         );
       }
 
+      // G03-05 D4: Verify Program/Project link (if provided)
+      let programId: string | null = null;
+      let projectId: string | null = null;
+      let crossStrategyAuditDetails: Record<string, unknown> | null = null;
+
+      if (parsed.programId) {
+        const allowCross = parsed.allowCrossStrategyProgramLink ?? false;
+        const result = await verifyProgramLink(
+          tx,
+          tenantId,
+          parsed.programId,
+          proposal.strategyVersionId,
+          allowCross
+        );
+        programId = parsed.programId;
+
+        // If cross-strategy link is allowed, verify project belongs to the program
+        if (result.isCrossStrategy && allowCross) {
+          crossStrategyAuditDetails = {
+            crossStrategyLink: true,
+            crossStrategyJustification: parsed.crossStrategyJustification,
+            programStrategyVersionId: result.strategyVersionId,
+            proposalStrategyVersionId: proposal.strategyVersionId,
+          };
+        }
+      }
+
+      if (parsed.projectId) {
+        // Verify project belongs to the same tenant and program
+        const project = await tx.project.findFirst({
+          where: { id: parsed.projectId, tenantId },
+        });
+        if (!project) {
+          throw new NotFoundError(
+            `Project ${parsed.projectId} not found in tenant scope`
+          );
+        }
+        // If programId is set, project must belong to that program
+        if (programId && project.programId !== programId) {
+          throw new ConflictError(
+            `Project ${parsed.projectId} does not belong to program ${programId}`
+          );
+        }
+        projectId = parsed.projectId;
+      }
+
       const action = await tx.reformAction.create({
         data: {
           tenantId,
           proposalId: parsed.proposalId,
           alternativeId: approval.alternativeId,
+          programId,
+          projectId,
           title: parsed.title,
           description: parsed.description ?? null,
           assignedTo: parsed.assignedTo ?? null,
@@ -122,6 +219,9 @@ export async function createReformAction(
           proposalId: parsed.proposalId,
           alternativeId: approval.alternativeId,
           title: parsed.title,
+          ...(programId ? { programId } : {}),
+          ...(projectId ? { projectId } : {}),
+          ...(crossStrategyAuditDetails ?? {}),
         },
         status: "ok",
       });

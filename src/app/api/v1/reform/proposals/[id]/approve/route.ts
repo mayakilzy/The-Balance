@@ -2,7 +2,7 @@
 // /api/v1/reform/proposals/[id]/approve — POST (under_review → approved)
 // ============================================================
 import { NextResponse } from "next/server";
-import { approveReformProposal } from "@/lib/reform";
+import { approveReformProposalWithAuditSafe } from "@/lib/reform";
 import { authenticateAndAuthorize, mapServiceError } from "../../../_lib";
 
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function POST(
   try {
     const { id } = await params;
     const body = await request.json();
-    const result = await approveReformProposal(session, {
+    const result = await approveReformProposalWithAuditSafe(session, {
       proposalId: id,
       ...body,
     });
