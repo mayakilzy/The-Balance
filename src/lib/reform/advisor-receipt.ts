@@ -47,7 +47,13 @@
 //      "draft_alternatives"). Verified at save time to match
 //      the expected purpose for the save endpoint.
 // ============================================================
-import { createHmac, randomBytes, createHash, timingSafeEqual } from "node:crypto";
+import {
+  createHmac,
+  randomBytes,
+  createHash,
+  timingSafeEqual,
+  hkdfSync,
+} from "node:crypto";
 import { z } from "zod";
 import { env } from "@/lib/env";
 import {
@@ -127,20 +133,13 @@ let _signingKey: Buffer | null = null;
 
 function getSigningKey(): Buffer {
   if (_signingKey === null) {
-    // HKDF-SHA256: extract+expand in one step using Node's hkdf
-    const { hkdfSync } = require("node:crypto") as {
-      hkdfSync: (
-        digest: string,
-        ikm: string | Buffer,
-        salt: string | Buffer,
-        info: string | Buffer,
-        keylen: number
-      ) => Buffer;
-    };
+    // R2-5: ESM-compatible top-level import (no require() inside function).
     const ikm = Buffer.from(env.AUTH_SECRET, "utf8");
     const salt = Buffer.alloc(0); // empty salt — ikm is already high-entropy
     const info = Buffer.from(SIGNING_KEY_INFO, "utf8");
-    _signingKey = Buffer.from(hkdfSync("sha256", ikm, salt, info, SIGNING_KEY_LENGTH));
+    _signingKey = Buffer.from(
+      hkdfSync("sha256", ikm, salt, info, SIGNING_KEY_LENGTH)
+    );
   }
   return _signingKey;
 }

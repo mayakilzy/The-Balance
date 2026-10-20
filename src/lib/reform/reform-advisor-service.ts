@@ -67,6 +67,13 @@ function buildResult(
   };
 }
 
+// R2-4: Warning for advisor outputs that have no save path.
+// Receipts from these endpoints serve as server-side provenance records
+// for observability but cannot be used with addReformAlternative.
+const NO_SAVE_PATH_WARNING =
+  "This receipt is advisory-only. It has no verified save path in G03-04. " +
+  "To save this content with LLM provenance, use draft-alternatives instead.";
+
 /**
  * Validate advisor output for causal language.
  * Per frozen G03-00 §7.4: REJECT (throw), not warn.
@@ -151,13 +158,18 @@ export async function draftProblemStatement(
         content: `Draft a problem statement for the following alert:\n${llmContext}`,
       },
     ],
-    traceId: `advisor-problem-${Date.now()}`,
+    traceId: `advisor-problem-${input.alertId}-${Date.now()}`,
   });
 
   // Step 4: Validate output (causal REJECTION per OD-1)
   validateAdvisorOutput(result.content);
 
   // Step 5: Issue receipt (trusted provenance — per OD-5)
+  // R2-4: Receipt is issued but cannot be used with addReformAlternative
+  // (purpose mismatch). It serves as a server-side provenance record
+  // for observability. The advisor output includes a warning that this
+  // receipt is advisory-only and has no save path.
+  // R2-5: Use alertId in the traceId for uniqueness.
   const receipt = issueReceipt({
     tenantId,
     userId,
@@ -169,8 +181,11 @@ export async function draftProblemStatement(
   });
 
   // Step 6: Return advisory draft with receipt
+  // R2-4: draftProblemStatement has no save path — receipt is advisory-only.
   return {
-    ...buildResult(result.content, provider.name, result.model),
+    ...buildResult(result.content, provider.name, result.model, [
+      NO_SAVE_PATH_WARNING,
+    ]),
     receipt,
   };
 }
@@ -332,8 +347,11 @@ export async function draftComparisonSummary(
     modelName: result.model,
   });
 
+  // R2-4: draftComparisonSummary has no save path — receipt is advisory-only.
   return {
-    ...buildResult(result.content, provider.name, result.model),
+    ...buildResult(result.content, provider.name, result.model, [
+      NO_SAVE_PATH_WARNING,
+    ]),
     receipt,
   };
 }
@@ -410,8 +428,11 @@ export async function draftAnticipatedOutcomes(
     modelName: result.model,
   });
 
+  // R2-4: draftAnticipatedOutcomes has no save path — receipt is advisory-only.
   return {
-    ...buildResult(result.content, provider.name, result.model),
+    ...buildResult(result.content, provider.name, result.model, [
+      NO_SAVE_PATH_WARNING,
+    ]),
     receipt,
   };
 }

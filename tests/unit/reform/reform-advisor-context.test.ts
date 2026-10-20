@@ -60,8 +60,9 @@ describe("reform-advisor-context — buildSanitizedContext", () => {
     expect(result).not.toMatch(/cmv[a-z0-9]{20,}/);
   });
 
-  it("U-CTX-3: enforces 8000-char limit (truncates with warning marker)", () => {
-    const longText = "A".repeat(10000);
+  it("U-CTX-3: enforces 8000-char limit (truncates with warning marker, total ≤ 8000)", () => {
+    // R2-2: Use lowercase text to avoid PII pattern redaction of long uppercase strings
+    const longText = "a".repeat(10000);
     const raw: AdvisorRawContext = {
       alert: {
         title: "Long Alert",
@@ -71,7 +72,50 @@ describe("reform-advisor-context — buildSanitizedContext", () => {
       },
     };
     const result = buildSanitizedContext(raw);
-    expect(result.length).toBeLessThanOrEqual(8100); // 8000 + truncation marker
+    // R2-2: Total context INCLUDING truncation marker must be ≤ 8000
+    expect(result.length).toBeLessThanOrEqual(8000);
+    expect(result).toContain("[CONTEXT TRUNCATED");
+  });
+
+  it("R2-2-B: boundary test for exactly 7999 chars (no truncation)", () => {
+    const raw: AdvisorRawContext = {
+      alert: {
+        title: "Test",
+        description: "a".repeat(7900),
+        severity: "warning",
+        lifecycleStage: "reviewed",
+      },
+    };
+    const result = buildSanitizedContext(raw);
+    expect(result.length).toBeLessThanOrEqual(8000);
+    expect(result).not.toContain("[CONTEXT TRUNCATED");
+  });
+
+  it("R2-2-C: boundary test for exactly 8000 chars (no truncation)", () => {
+    // Build context that is exactly 8000 chars
+    const raw: AdvisorRawContext = {
+      alert: {
+        title: "Test",
+        description: "a".repeat(7940),
+        severity: "warning",
+        lifecycleStage: "reviewed",
+      },
+    };
+    const result = buildSanitizedContext(raw);
+    expect(result.length).toBeLessThanOrEqual(8000);
+  });
+
+  it("R2-2-D: boundary test for 8001+ chars (truncation, total ≤ 8000)", () => {
+    const raw: AdvisorRawContext = {
+      alert: {
+        title: "Test",
+        description: "a".repeat(8001),
+        severity: "warning",
+        lifecycleStage: "reviewed",
+      },
+    };
+    const result = buildSanitizedContext(raw);
+    expect(result.length).toBeLessThanOrEqual(8000);
     expect(result).toContain("[CONTEXT TRUNCATED");
   });
 
