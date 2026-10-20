@@ -54,6 +54,7 @@ import type {
   ApproveReformProposalInput,
   RejectReformProposalInput,
 } from "./contracts";
+import { lockProposalRow } from "./lock-helper";
 
 // ============================================================
 // Create: analyst drafts a proposal linked to an existing G02 alert
@@ -189,25 +190,10 @@ export async function listReformProposals(
 }
 
 // ============================================================
-// Helper: acquire proposal-row lock (SELECT FOR UPDATE)
-// G03-03: Serializes competing mutations on the same proposal.
-// In unit tests where tx.$queryRaw is not mocked, this gracefully
-// skips the lock (unit tests test business logic, not concurrency).
+// Helper: lockProposalRow is imported from ./lock-helper
+// (G03-03-R1 — unified fail-closed SELECT FOR UPDATE).
+// See lock-helper.ts for the production contract.
 // ============================================================
-async function lockProposalRow(
-  tx: Prisma.TransactionClient,
-  proposalId: string,
-  tenantId: string
-): Promise<void> {
-  if (typeof (tx as unknown as { $queryRaw?: unknown }).$queryRaw !== "function") {
-    return; // Skip lock in unit test mocks
-  }
-  await tx.$queryRaw`
-    SELECT id FROM "reform_proposals"
-    WHERE id = ${proposalId} AND "tenantId" = ${tenantId}
-    FOR UPDATE
-  `;
-}
 
 // ============================================================
 // Submit: draft → under_review (analyst action)

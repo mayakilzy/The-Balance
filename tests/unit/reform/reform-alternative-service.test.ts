@@ -141,6 +141,7 @@ describe("G03-03 lifecycle rules", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformProposal: { findFirst: vi.fn().mockResolvedValue({ id: "p1", status: "under_review" }) },
             reformAlternative: { count: vi.fn().mockResolvedValue(1) },
           },
@@ -161,6 +162,8 @@ describe("G03-03 lifecycle rules", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            // $queryRaw returns [] — lock-acquire boundary rejects missing rows
+            $queryRaw: vi.fn().mockResolvedValue([]),
             reformProposal: { findFirst: vi.fn().mockResolvedValue(null) },
             reformAlternative: { count: vi.fn() },
           },
@@ -181,6 +184,7 @@ describe("G03-03 lifecycle rules", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformProposal: { findFirst: vi.fn().mockResolvedValue({ id: "p1", status: "draft" }) },
             reformAlternative: { count: vi.fn().mockResolvedValue(5) },
           },
@@ -201,6 +205,7 @@ describe("G03-03 lifecycle rules", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformAlternative: {
               findFirst: vi.fn()
                 .mockResolvedValueOnce({ id: "a1", proposalId: "p1", status: "withdrawn" }) // first find
@@ -225,6 +230,7 @@ describe("G03-03 lifecycle rules", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformAlternative: {
               findFirst: vi.fn()
                 .mockResolvedValueOnce({ id: "a1", proposalId: "p1", status: "selected" })

@@ -10,6 +10,9 @@
 // Contracts (Zod schemas + types + error classes)
 export * from "./contracts";
 
+// G03-03-R1 — Lock helper (fail-closed SELECT FOR UPDATE)
+export { lockProposalRow, LockUnavailableError } from "./lock-helper";
+
 // Proposal service (G03-02 + G03-03 modifications)
 export {
   createReformProposal,
