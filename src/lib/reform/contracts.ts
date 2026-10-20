@@ -242,9 +242,27 @@ export const CreateReformActionInputSchema = z
     description: z.string().max(2000).optional(),
     assignedTo: z.string().min(1).optional(),
     dueDate: z.string().datetime().optional(),
+    // G03-05 D4: Optional Program/Project links with strict verification.
+    // Tenant + country checks are ALWAYS enforced (non-overridable).
+    // Cross-strategy links require explicit override + justification + audit.
+    programId: z.string().min(1).optional(),
+    projectId: z.string().min(1).optional(),
+    allowCrossStrategyProgramLink: z.boolean().optional(),
+    crossStrategyJustification: z.string().min(20).max(2000).optional(),
   })
-  .strict(); // reject programId/projectId (D4 cross-strategy links deferred to G03-05)
-;
+  .strict()
+  .superRefine((data, ctx) => {
+    // D4: If allowCrossStrategyProgramLink is true, justification is required
+    if (data.allowCrossStrategyProgramLink === true) {
+      if (!data.crossStrategyJustification || data.crossStrategyJustification.trim().length < 20) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["crossStrategyJustification"],
+          message: "Cross-strategy link requires a justification of at least 20 characters.",
+        });
+      }
+    }
+  });
 export type CreateReformActionInput = z.infer<
   typeof CreateReformActionInputSchema
 >;
