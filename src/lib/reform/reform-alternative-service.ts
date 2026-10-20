@@ -240,14 +240,26 @@ export async function selectAlternative(
 
       // Conditional UPDATE: only update if still 'draft'
       // Partial unique index enforces only ONE 'selected' per proposal at DB level
-      const result = await tx.reformAlternative.updateMany({
-        where: { id: parsed.alternativeId, tenantId, status: "draft" },
-        data: {
-          status: "selected",
-          selectedAt: new Date(),
-          selectedBy: userId,
-        },
-      });
+      let result;
+      try {
+        result = await tx.reformAlternative.updateMany({
+          where: { id: parsed.alternativeId, tenantId, status: "draft" },
+          data: {
+            status: "selected",
+            selectedAt: new Date(),
+            selectedBy: userId,
+          },
+        });
+      } catch (err) {
+        // Partial unique index violation — another alternative is already selected
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("Unique constraint") || msg.includes("unique")) {
+          throw new ConflictError(
+            `Alternative ${parsed.alternativeId} could not be selected. Another alternative may already be selected for this proposal.`
+          );
+        }
+        throw err;
+      }
 
       if (result.count === 0) {
         throw new ConflictError(

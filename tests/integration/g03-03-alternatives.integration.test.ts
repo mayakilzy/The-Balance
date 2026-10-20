@@ -166,8 +166,8 @@ describeIntegration("G03-03 — Reform Alternatives", () => {
     });
     createdProposalIds.push(proposal.proposalId);
 
-    // Add 4 more alternatives (1 inline already = 5 total)
-    for (let i = 1; i <= 4; i++) {
+    // Add 5 alternatives (no inline — proposal was created without one)
+    for (let i = 0; i < 5; i++) {
       const result = await addReformAlternative(analystSession, {
         proposalId: proposal.proposalId,
         title: `${FIXTURE_PREFIX} ALT-01 Alternative ${i}`,
@@ -190,7 +190,7 @@ describeIntegration("G03-03 — Reform Alternatives", () => {
     const { proposalId } = await createProposalWithAlert();
 
     // Already has 1 inline alternative, add 4 more = 5
-    for (let i = 1; i <= 4; i++) {
+    for (let i = 0; i < 5; i++) {
       const result = await addReformAlternative(analystSession, {
         proposalId, title: `${FIXTURE_PREFIX} ALT-02 Alt ${i}`,
         description: `Test alternative ${i} description for the proposal here.`,
