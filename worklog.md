@@ -101,3 +101,71 @@ Stage Summary:
   DEFINER functions remain DORMANT. Atomic audit preserved.
 - Bundle ready for owner-assisted publishing.
 - Awaiting FINAL PASS decision.
+
+---
+Task ID: G03-03-R1-PUBLISH-02
+Agent: GLM (artifact handoff + CI closure session)
+Task: G03-03-R1-PUBLISH-02 — Verify final changes, deliver actual Git
+      bundle, publish through authorized mechanism, verify GitHub results.
+
+Work Log:
+- Step 1 — Verify the final changes:
+  * Inspected the original R1-PUBLISH commits (14d8e8b, 6fed62f, b8e856e).
+  * Found that 6fed62f had unjustified modifications to package.json
+    (changed prisma + @prisma/client from ^6.11.1 to 6.11.1) and bun.lock
+    (downgraded from 6.19.3 to 6.11.1).
+  * Reviewer correctly identified: ^6.11.1 under standard semver does NOT
+    allow major version 8 (caret preserves leftmost non-zero digit, so
+    ^6.11.1 = >=6.11.1 <7.0.0). My earlier justification was wrong.
+
+  * Root cause analysis of why I previously saw prisma 8.0.0-rc.23:
+    - The first `bun install` after the fresh clone produced an incomplete
+      install (no node_modules/.bin/prisma).
+    - `bunx prisma --version` then fell back to bun's global package cache,
+      which contained prisma 8.0.0-rc.23 from an unrelated prior operation.
+    - This was a transient install failure, NOT a semver resolution issue.
+    - The fix is simply to run `bun install --frozen-lockfile` again,
+      which correctly installs prisma 6.19.3 per the original bun.lock.
+
+  * Reverted package.json + bun.lock to their original state at 9faca81.
+  * Reset to 14d8e8b (clean R1 commit).
+  * Recovered the lock-contention test file from the old 6fed62f commit.
+  * Re-committed as 811f2c6 with ONLY the test file (no dep changes).
+  * Re-synced node_modules with original bun.lock — prisma 6.19.3 installed.
+  * Re-ran L1-L5: 9/9 PASS with prisma 6.19.3.
+
+- Step 2 — Final commits:
+  * 14d8e8b fix(G03-03-R1): fail-closed lock helper + C1-C7 (unchanged)
+  * 811f2c6 test(G03-03-R1-PUBLISH): deterministic lock-contention L1-L5 (NEW, no dep changes)
+
+- Step 3 — Deliver the actual Git bundle:
+  * Created g03-03-r1-publish-02.bundle (incremental; requires 9faca81).
+  * git bundle verify: bundle is okay, contains HEAD ref, requires 9faca81.
+  * SHA-256 computed.
+  * Patch file G03-03-R1-PUBLISH-02.patch also produced.
+  * All artifacts in /home/z/my-project/download/.
+
+- Step 4 — Publish through authorized mechanism:
+  * Searched once (per directive): env vars, ~/.netrc, ~/.git-credentials,
+    gh CLI, SSH keys, keyring. None present.
+  * git push --dry-run: fatal: could not read Username for github.com.
+  * Per directive, did NOT repeat filesystem-wide credential searches.
+  * Stopped with verified bundle preserved. Bundle is downloadable at
+    /home/z/my-project/download/g03-03-r1-publish-02.bundle.
+
+- Step 5 — Local verification (PostgreSQL 17.11 + pgvector 0.8.0, prisma 6.19.3):
+  * Full unit + integration regression: 989/989 PASS (71 files).
+  * L1-L5: 9/9 PASS.
+  * C1-C7: 7/7 PASS.
+  * ALT-01..12: 12/12 PASS.
+  * G03-02 HTTP E2E: skipped locally (needs running Next.js server);
+    verified by prior CI run on 9faca81 (13/13 PASS).
+  * G03-01 SQL acceptance: 25/25 PASS.
+  * Lint: 0 errors. Typecheck: 0 errors. Build: SUCCESS.
+
+Stage Summary:
+- Three corrective commits preserved (R1 + L1-L5 + worklog), no dep changes.
+- Lock-contention evidence is deterministic and proven on real PostgreSQL.
+- Bundle + patch + publishing guide delivered as portable artifacts.
+- No GitHub credentials available in workspace — owner must push the bundle.
+- Awaiting CI/Recovery URLs after owner-assisted push.
