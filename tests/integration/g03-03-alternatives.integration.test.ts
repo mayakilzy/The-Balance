@@ -189,7 +189,7 @@ describeIntegration("G03-03 — Reform Alternatives", () => {
 
     const { proposalId } = await createProposalWithAlert();
 
-    // Already has 1 inline alternative, add 4 more = 5
+    // Add 5 alternatives to reach max (inline may or may not exist)
     for (let i = 0; i < 5; i++) {
       const result = await addReformAlternative(analystSession, {
         proposalId, title: `${FIXTURE_PREFIX} ALT-02 Alt ${i}`,
