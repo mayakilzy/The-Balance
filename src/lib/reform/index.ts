@@ -58,3 +58,36 @@ export {
   getReformFeedbackLoop,
   closeOriginatingAlert,
 } from "./reform-feedback-service";
+
+// ============================================================
+// G03-04 — Reform Comparison + Advisor (PRE-03 corrected)
+// ============================================================
+
+// Comparison service (deterministic, no LLM)
+export { compareReformAlternatives } from "./reform-comparison-service";
+
+// Advisor service (LLM-assisted, advisory only)
+export {
+  draftProblemStatement,
+  draftReformAlternatives,
+  draftComparisonSummary,
+  draftAnticipatedOutcomes,
+} from "./reform-advisor-service";
+
+// Receipt module (trusted provenance — HMAC-SHA256 with HKDF-derived key)
+export {
+  issueReceipt,
+  verifyReceipt,
+  computeDraftHash,
+  type AdvisorReceiptPayload,
+  type VerifiedReceipt,
+} from "./advisor-receipt";
+
+// Context builder (curated + sanitized LLM context)
+export {
+  buildSanitizedContext,
+  stripPii,
+  enforceSizeLimit,
+  ADVISORY_SYSTEM_PROMPT,
+  type AdvisorRawContext,
+} from "./reform-advisor-context";

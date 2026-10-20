@@ -23,6 +23,8 @@ import { requirePermissionWithCurrentRole } from "@/lib/permissions";
 import {
   NotFoundError,
   ConflictError,
+  CausalRejectionError,
+  ReceiptVerificationError,
 } from "@/lib/reform/contracts";
 import { PermissionDeniedError } from "@/lib/permissions";
 import { childLogger } from "@/lib/observability";
@@ -61,6 +63,17 @@ export function mapServiceError(err: unknown): NextResponse {
       { status: 403 }
     );
   }
+  // 403: receipt verification failure — safe to expose the reason
+  // (NOT the receipt contents, just the rejection reason)
+  if (err instanceof ReceiptVerificationError) {
+    return NextResponse.json(
+      {
+        error: "Receipt Verification Failed",
+        reason: err.reason,
+      },
+      { status: 403 }
+    );
+  }
   // 404: not found — message describes what was not found; safe to expose
   if (err instanceof NotFoundError) {
     return NextResponse.json(
@@ -73,6 +86,20 @@ export function mapServiceError(err: unknown): NextResponse {
     return NextResponse.json(
       { error: "Conflict", detail: err.message },
       { status: 409 }
+    );
+  }
+  // 422: causal rejection — per G03-00 §7.4, advisor output with causal
+  // language is REJECTED (not warned). Safe to expose the detected patterns
+  // so the analyst knows what to edit.
+  if (err instanceof CausalRejectionError) {
+    return NextResponse.json(
+      {
+        error: "Causal Language Detected in Advisor Output",
+        detail:
+          "Advisor output rejected per G03-00 §7.4. The analyst may retry or draft manually.",
+        detectedPatterns: err.detectedPatterns,
+      },
+      { status: 422 }
     );
   }
   // 400: Zod validation errors — safe to expose (input shape only)
