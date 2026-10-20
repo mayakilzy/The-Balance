@@ -146,7 +146,9 @@ export const CreateReformProposalInputSchema = z
       .string()
       .min(20, "problemStatement must be at least 20 characters"),
     hypothesizedCauses: z.array(z.string().min(1)).max(5).optional().default([]),
-    // Minimal single-alternative representation (defers multi-alternative to G03-03)
+    // G03-03: alternative is now optional (was required in G03-02).
+    // If provided, creates an inline alternative (G03-02 backward compat).
+    // If omitted, alternatives are added separately via addReformAlternative.
     alternative: z
       .object({
         title: z.string().min(5).max(200),
@@ -160,7 +162,8 @@ export const CreateReformProposalInputSchema = z
           .optional()
           .default("unknown"),
       })
-      .strict(), // reject unknown fields (e.g. canApproveCommitments — authority-bearing fields are NEVER client-set)
+      .strict()
+      .optional(), // G03-03: now optional
   })
   .strict(); // reject unknown fields (defense-in-depth against authority-bearing field injection)
 ;
@@ -476,4 +479,69 @@ export const CloseOriginatingAlertInputSchema = z.object({
 });
 export type CloseOriginatingAlertInput = z.infer<
   typeof CloseOriginatingAlertInputSchema
+>;
+
+// ============================================================
+// G03-03 — Reform Alternatives (additive schemas)
+// ------------------------------------------------------------
+// Per G03-00 §4.2 and §6:
+//   - addReformAlternative: analyst adds alternatives to a draft proposal
+//   - selectAlternative: reviewer selects exactly ONE (partial unique index)
+//   - withdrawAlternative: reviewer withdraws a draft or selected alternative
+//
+// D1: Max 5 active (non-withdrawn) alternatives per proposal
+// D3: Alternatives can only be added while proposal is "draft"
+// D4: Conditional auto-selection for single-alternative (G03-02 compat)
+// ============================================================
+
+export const ReformAlternativeStatusSchema = z.enum([
+  "draft",
+  "selected",
+  "withdrawn",
+]);
+export type ReformAlternativeStatus = z.infer<
+  typeof ReformAlternativeStatusSchema
+>;
+
+export const CreateReformAlternativeInputSchema = z
+  .object({
+    proposalId: z.string().min(1),
+    title: z.string().min(5, "title must be at least 5 characters").max(200),
+    description: z.string().min(20, "description must be at least 20 characters"),
+    costEstimateMin: z.number().nonnegative().optional(),
+    costEstimateMax: z.number().nonnegative().optional(),
+    costCurrency: z.string().length(3).optional().default("USD"),
+    riskLevel: z.enum(["low", "medium", "high"]).optional().default("medium"),
+    feasibilityScore: z
+      .enum(["unknown", "low", "medium", "high"])
+      .optional()
+      .default("unknown"),
+    anticipatedOutcomes: z.array(z.string().min(1)).max(10).optional().default([]),
+    assumptions: z.array(z.string().min(1)).max(10).optional().default([]),
+  })
+  .strict();
+export type CreateReformAlternativeInput = z.infer<
+  typeof CreateReformAlternativeInputSchema
+>;
+
+export const SelectAlternativeInputSchema = z
+  .object({
+    alternativeId: z.string().min(1),
+  })
+  .strict();
+export type SelectAlternativeInput = z.infer<
+  typeof SelectAlternativeInputSchema
+>;
+
+export const WithdrawAlternativeInputSchema = z
+  .object({
+    alternativeId: z.string().min(1),
+    withdrawalReason: z
+      .string()
+      .min(20, "withdrawalReason must be at least 20 characters")
+      .max(2000),
+  })
+  .strict();
+export type WithdrawAlternativeInput = z.infer<
+  typeof WithdrawAlternativeInputSchema
 >;
