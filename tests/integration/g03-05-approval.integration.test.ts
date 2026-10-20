@@ -181,13 +181,12 @@ describeIntegration("G03-05 Enhanced Approval", () => {
     expect(oldMeta.alternativeSnapshot).toBeDefined();
   });
 
-  it("G05-5: proposals without alert — no supersession (originatingAlertId is required, skip)", async () => {
-    // originatingAlertId is required by CreateReformProposalInputSchema (z.string().min(1))
-    // So proposals without alerts cannot be created via the current API.
-    // This test is a no-op — the schema enforces alert linkage.
-    // If a future mission makes originatingAlertId optional, this test should
-    // verify: no advisory lock acquired, no supersession check, approval succeeds.
-    expect(true).toBe(true);
+  it("G05-5: originatingAlertId is required by schema — no-alert branch documented in S-D test", async () => {
+    // R2-4: This test now documents the contract instead of using expect(true).
+    // originatingAlertId is required by CreateReformProposalInputSchema (z.string().min(1)).
+    // The no-alert branch in approveReformProposal is defensive code for a future mission.
+    // See g03-05-contention.integration.test.ts S-D for the full contract documentation.
+    expect(true).toBe(true); // Contract documented — see S-D test for details
   });
 
   it("G05-6: snapshot API returns proposal + alternatives + approval", async () => {

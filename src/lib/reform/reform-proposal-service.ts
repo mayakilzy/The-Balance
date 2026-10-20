@@ -274,7 +274,13 @@ export async function approveReformProposal(
       // approved concurrently, which could create conflicting active approvals.
       //
       // Lock ordering: alert-level advisory lock → proposal-row SELECT FOR UPDATE
-      // This ordering is consistent across all approval paths → no deadlocks.
+      //
+      // MAINTENANCE INVARIANT (R2-6):
+      // All approval paths that acquire BOTH the alert-level advisory lock and
+      // the proposal-row lock MUST acquire the alert lock FIRST. If a future
+      // mission adds a path that acquires the proposal-row lock before the
+      // advisory lock, a deadlock could occur. This ordering constraint must
+      // be preserved across all concurrent code paths.
       //
       // If originatingAlertId is null (human-initiated proposal without alert),
       // skip the advisory lock and supersession — no alert to lock on.
