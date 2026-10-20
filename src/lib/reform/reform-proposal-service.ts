@@ -54,6 +54,7 @@ import type {
   ApproveReformProposalInput,
   RejectReformProposalInput,
 } from "./contracts";
+import { lockProposalRow } from "./lock-helper";
 
 // ============================================================
 // Create: analyst drafts a proposal linked to an existing G02 alert
@@ -61,7 +62,7 @@ import type {
 export async function createReformProposal(
   session: Session | null,
   input: CreateReformProposalInput
-): Promise<{ proposalId: string; alternativeId: string }> {
+): Promise<{ proposalId: string; alternativeId?: string }> {
   await requirePermissionWithCurrentRole(session, "reform:proposal:write");
 
   const parsed = CreateReformProposalInputSchema.parse(input);
@@ -79,7 +80,7 @@ export async function createReformProposal(
         );
       }
 
-      // Create proposal + single alternative atomically
+      // Create proposal
       const proposal = await tx.reformProposal.create({
         data: {
           tenantId,
@@ -92,27 +93,33 @@ export async function createReformProposal(
         },
       });
 
-      const alternative = await tx.reformAlternative.create({
-        data: {
-          tenantId,
-          proposalId: proposal.id,
-          title: parsed.alternative.title,
-          description: parsed.alternative.description,
-          costEstimateMin: parsed.alternative.costEstimateMin
-            ? new Prisma.Decimal(parsed.alternative.costEstimateMin)
-            : null,
-          costEstimateMax: parsed.alternative.costEstimateMax
-            ? new Prisma.Decimal(parsed.alternative.costEstimateMax)
-            : null,
-          costCurrency: parsed.alternative.costCurrency,
-          riskLevel: parsed.alternative.riskLevel,
-          feasibilityScore: parsed.alternative.feasibilityScore,
-          status: "draft",
-          draftedVia: "human",
-          simulated: false,
-          createdBy: userId,
-        },
-      });
+      // G03-03: alternative is optional. If provided, create inline (G03-02 backward compat).
+      // If not, alternatives are added separately via addReformAlternative.
+      let alternativeId: string | undefined;
+      if (parsed.alternative) {
+        const alternative = await tx.reformAlternative.create({
+          data: {
+            tenantId,
+            proposalId: proposal.id,
+            title: parsed.alternative.title,
+            description: parsed.alternative.description,
+            costEstimateMin: parsed.alternative.costEstimateMin
+              ? new Prisma.Decimal(parsed.alternative.costEstimateMin)
+              : null,
+            costEstimateMax: parsed.alternative.costEstimateMax
+              ? new Prisma.Decimal(parsed.alternative.costEstimateMax)
+              : null,
+            costCurrency: parsed.alternative.costCurrency,
+            riskLevel: parsed.alternative.riskLevel,
+            feasibilityScore: parsed.alternative.feasibilityScore,
+            status: "draft",
+            draftedVia: "human",
+            simulated: false,
+            createdBy: userId,
+          },
+        });
+        alternativeId = alternative.id;
+      }
 
       await writeAuditTx(tx, {
         tenantId,
@@ -120,14 +127,14 @@ export async function createReformProposal(
         action: "reform.proposal.created",
         details: {
           proposalId: proposal.id,
-          alternativeId: alternative.id,
+          alternativeId: alternativeId ?? null,
           originatingAlertId: parsed.originatingAlertId,
           title: parsed.title,
         },
         status: "ok",
       });
 
-      return { proposalId: proposal.id, alternativeId: alternative.id };
+      return { proposalId: proposal.id, ...(alternativeId ? { alternativeId } : {}) };
     }
   );
 }
@@ -183,7 +190,15 @@ export async function listReformProposals(
 }
 
 // ============================================================
+// Helper: lockProposalRow is imported from ./lock-helper
+// (G03-03-R1 — unified fail-closed SELECT FOR UPDATE).
+// See lock-helper.ts for the production contract.
+// ============================================================
+
+// ============================================================
 // Submit: draft → under_review (analyst action)
+// G03-03: Added proposal-row lock (SELECT FOR UPDATE) to prevent
+// concurrent alternative addition during the status transition.
 // ============================================================
 export async function submitForReview(
   session: Session | null,
@@ -196,6 +211,10 @@ export async function submitForReview(
   return withAuthenticatedTenant(
     session,
     async ({ tx, tenantId, userId }) => {
+      // G03-03: Acquire proposal-row lock to serialize with concurrent
+      // alternative additions.
+      await lockProposalRow(tx, parsed.proposalId, tenantId);
+
       // Conditional update: only draft proposals can be submitted.
       // This prevents duplicate submission from creating inconsistent state.
       const result = await tx.reformProposal.updateMany({
@@ -249,7 +268,11 @@ export async function approveReformProposal(
   return withAuthenticatedTenant(
     session,
     async ({ tx, tenantId, userId }) => {
-      // Verify proposal exists + is in under_review status
+      // G03-03: Acquire proposal-row lock (SELECT FOR UPDATE) to serialize
+      // competing operations (withdrawal, selection, addition).
+      await lockProposalRow(tx, parsed.proposalId, tenantId);
+
+      // Verify proposal exists + is in under_review status (re-read after lock)
       const proposal = await tx.reformProposal.findFirst({
         where: { id: parsed.proposalId, tenantId },
       });
@@ -274,30 +297,17 @@ export async function approveReformProposal(
         );
       }
 
-      // Resolve the alternative to attach to the approval.
-      // G03-02 minimal: there is exactly ONE alternative per proposal.
-      // If the caller provides alternativeId, it must match. If not,
-      // the service picks the single existing alternative.
+      // D4: Conditional auto-selection for alternative resolution.
+      // - If caller provides alternativeId → verify it's the selected one
+      // - If 1 selected exists → use it (G03-03 explicit selection flow)
+      // - If 0 selected + exactly 1 draft → auto-select it (G03-02 backward compat)
+      // - If 0 selected + >1 draft → ConflictError (requires explicit selection)
+      // - If 0 selected + 0 alternatives → ConflictError
       let alternativeId = parsed.alternativeId;
-      if (!alternativeId) {
-        const alternatives = await tx.reformAlternative.findMany({
-          where: { proposalId: parsed.proposalId, tenantId },
-        });
-        if (alternatives.length === 0) {
-          throw new ConflictError(
-            `Proposal ${parsed.proposalId} has no alternative to attach to the approval. This indicates a data integrity issue.`
-          );
-        }
-        if (alternatives.length > 1) {
-          // G03-02 invariant: only ONE alternative per proposal. Multiple
-          // alternatives belong to G03-03. If we ever see >1, fail closed.
-          throw new ConflictError(
-            `Proposal ${parsed.proposalId} has ${alternatives.length} alternatives; G03-02 supports exactly 1. Multi-alternative flows belong to G03-03.`
-          );
-        }
-        alternativeId = alternatives[0]!.id;
-      } else {
-        // Verify the provided alternativeId belongs to this proposal + tenant
+
+      if (alternativeId) {
+        // Caller provided alternativeId — verify it belongs to this proposal
+        // and is the selected one (or can be auto-selected if single draft)
         const alt = await tx.reformAlternative.findFirst({
           where: {
             id: alternativeId,
@@ -310,17 +320,80 @@ export async function approveReformProposal(
             `Alternative ${alternativeId} not found for proposal ${parsed.proposalId} in tenant ${tenantId}`
           );
         }
+        if (alt.status === "withdrawn") {
+          throw new ConflictError(
+            `Alternative ${alternativeId} has been withdrawn and cannot be used for approval.`
+          );
+        }
+        // If it's draft (not yet selected), auto-select it (backward compat)
+        if (alt.status === "draft") {
+          await tx.reformAlternative.update({
+            where: { id: alternativeId },
+            data: {
+              status: "selected",
+              selectedAt: new Date(),
+              selectedBy: userId,
+            },
+          });
+        }
+        // If already selected, use as-is
+      } else {
+        // No alternativeId provided — resolve from existing alternatives
+        const selectedAlts = await tx.reformAlternative.findMany({
+          where: { proposalId: parsed.proposalId, tenantId, status: "selected" },
+        });
+
+        if (selectedAlts.length === 1) {
+          // G03-03: explicit selection exists — use it
+          alternativeId = selectedAlts[0]!.id;
+        } else if (selectedAlts.length === 0) {
+          // No selected alternative — check for auto-selection (G03-02 compat)
+          const draftAlts = await tx.reformAlternative.findMany({
+            where: { proposalId: parsed.proposalId, tenantId, status: "draft" },
+          });
+
+          if (draftAlts.length === 0) {
+            throw new ConflictError(
+              `Proposal ${parsed.proposalId} has no alternative to attach to the approval.`
+            );
+          }
+
+          if (draftAlts.length === 1) {
+            // G03-02 backward compat: auto-select the single draft alternative
+            alternativeId = draftAlts[0]!.id;
+            await tx.reformAlternative.update({
+              where: { id: alternativeId },
+              data: {
+                status: "selected",
+                selectedAt: new Date(),
+                selectedBy: userId,
+              },
+            });
+          } else {
+            // G03-03: multiple draft alternatives, none selected — require explicit selection
+            throw new ConflictError(
+              `Proposal ${parsed.proposalId} has ${draftAlts.length} draft alternatives but none is selected. Reviewer must select one before approval.`
+            );
+          }
+        } else {
+          // Multiple selected — impossible (partial unique index prevents), but fail closed
+          throw new ConflictError(
+            `Proposal ${parsed.proposalId} has ${selectedAlts.length} selected alternatives. Data integrity issue.`
+          );
+        }
       }
 
-      // Mark alternative as "selected"
-      await tx.reformAlternative.update({
-        where: { id: alternativeId },
-        data: {
-          status: "selected",
-          selectedAt: new Date(),
-          selectedBy: userId,
-        },
+      // Defense-in-depth: verify the alternative is still 'selected' (not withdrawn concurrently)
+      // This is redundant with the proposal lock but provides extra safety.
+      const verifyAlt = await tx.reformAlternative.findFirst({
+        where: { id: alternativeId, tenantId, status: "selected" },
+        select: { id: true },
       });
+      if (!verifyAlt) {
+        throw new ConflictError(
+          `Alternative ${alternativeId} is no longer in 'selected' status. Cannot proceed with approval.`
+        );
+      }
 
       // Create the immutable approval record (append-only)
       const approval = await tx.reformApproval.create({

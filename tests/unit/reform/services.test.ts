@@ -188,6 +188,7 @@ describe("G03-02 lifecycle transitions", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformProposal: {
               updateMany: vi.fn().mockResolvedValue({ count: 0 }),
               findFirst: vi.fn().mockResolvedValue({ id: "p1", status: "approved" }),
@@ -208,6 +209,8 @@ describe("G03-02 lifecycle transitions", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            // $queryRaw returns [] — lock-acquire boundary rejects missing rows
+            $queryRaw: vi.fn().mockResolvedValue([]),
             reformProposal: {
               updateMany: vi.fn().mockResolvedValue({ count: 0 }),
               findFirst: vi.fn().mockResolvedValue(null),
@@ -228,6 +231,7 @@ describe("G03-02 lifecycle transitions", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformProposal: {
               findFirst: vi.fn().mockResolvedValue({ id: "p1", status: "draft" }),
               updateMany: vi.fn(),
@@ -258,6 +262,7 @@ describe("G03-02 lifecycle transitions", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformProposal: {
               findFirst: vi
                 .fn()
@@ -444,6 +449,7 @@ describe("G03-02 atomic audit propagation", () => {
       async (_s: Session, fn: (ctx: unknown) => Promise<unknown>) => {
         return fn({
           tx: {
+            $queryRaw: vi.fn().mockResolvedValue([{ id: "p1" }]),
             reformProposal: {
               updateMany: vi.fn().mockResolvedValue({ count: 1 }),
               findFirst: vi.fn(),

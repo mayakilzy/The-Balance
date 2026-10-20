@@ -1,15 +1,19 @@
 // ============================================================
-// src/lib/reform/index.ts — Barrel export for G03-02 vertical slice
+// src/lib/reform/index.ts — Barrel export for G03-02 + G03-03
 // ------------------------------------------------------------
-// Exports ONLY the approved minimal services + contracts.
-// Multi-alternative, comparison, advisor, enhanced approval,
-// coordination, and query services are deferred to G03-03+.
+// Exports the approved services + contracts.
+// G03-03: Alternative service added (CRUD + selection + withdrawal).
+// Comparison, advisor, enhanced approval, coordination, and query
+// services are deferred to G03-04+.
 // ============================================================
 
 // Contracts (Zod schemas + types + error classes)
 export * from "./contracts";
 
-// Proposal service (G03-02)
+// G03-03-R1 — Lock helper (fail-closed SELECT FOR UPDATE)
+export { lockProposalRow, LockUnavailableError } from "./lock-helper";
+
+// Proposal service (G03-02 + G03-03 modifications)
 export {
   createReformProposal,
   getReformProposal,
@@ -18,6 +22,14 @@ export {
   approveReformProposal,
   rejectReformProposal,
 } from "./reform-proposal-service";
+
+// Alternative service (G03-03)
+export {
+  addReformAlternative,
+  listReformAlternatives,
+  selectAlternative,
+  withdrawAlternative,
+} from "./reform-alternative-service";
 
 // Action service (G03-02)
 export {

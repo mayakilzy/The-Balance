@@ -75,8 +75,8 @@ describe("CreateReformProposalInputSchema", () => {
   it("accepts a valid proposal input", () => {
     const result = CreateReformProposalInputSchema.parse(validInput);
     expect(result.title).toBe("Reform monetary policy framework");
-    expect(result.alternative.costCurrency).toBe("USD"); // default
-    expect(result.alternative.riskLevel).toBe("medium"); // default
+    expect(result.alternative?.costCurrency).toBe("USD"); // default
+    expect(result.alternative?.riskLevel).toBe("medium"); // default
   });
 
   it("requires originatingAlertId", () => {
@@ -109,19 +109,18 @@ describe("CreateReformProposalInputSchema", () => {
     ).toThrow();
   });
 
-  it("requires the alternative sub-object", () => {
-    expect(() =>
-      CreateReformProposalInputSchema.parse({
-        originatingAlertId: "x",
-        title: "valid title",
-        problemStatement: "valid problem statement here",
-      })
-    ).toThrow();
+  it("accepts proposal without alternative sub-object (G03-03: optional)", () => {
+    const result = CreateReformProposalInputSchema.parse({
+      originatingAlertId: "x",
+      title: "valid title",
+      problemStatement: "valid problem statement here",
+    });
+    expect(result.alternative).toBeUndefined();
   });
 
   it("defaults costCurrency to USD when not provided", () => {
     const result = CreateReformProposalInputSchema.parse(validInput);
-    expect(result.alternative.costCurrency).toBe("USD");
+    expect(result.alternative?.costCurrency).toBe("USD");
   });
 
   it("rejects unknown authority-bearing fields in the alternative", () => {
