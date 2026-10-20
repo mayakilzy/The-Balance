@@ -183,6 +183,7 @@ jobs:
             -f scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql
 
       - name: Build (production)
+        if: always()
         run: bun run build
         env:
           DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
@@ -190,9 +191,11 @@ jobs:
           LLM_PROVIDER: "stub"
 
       - name: Install Playwright browsers
+        if: always()
         run: bunx playwright install --with-deps chromium
 
       - name: Start Next.js server for Playwright
+        if: always()
         run: |
           # Create .env file for the dev server to read
           cat > .env <<ENV

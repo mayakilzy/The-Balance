@@ -190,6 +190,10 @@ afterAll(async () => {
     // Cleanup this suite's indicator + period
     await adminClient.indicatorDefinition.deleteMany({ where: { code: "G03-02-ATOMIC-IND" } });
     await adminClient.observationPeriod.deleteMany({ where: { periodValue: "G03-02-ATOMIC-Q1" } });
+    // Cleanup unique periods created by makeUniquePeriod (ATOMIC-1/2/3)
+    if (createdPeriodIds.length > 0) {
+      await adminClient.observationPeriod.deleteMany({ where: { id: { in: createdPeriodIds } } });
+    }
 
     await adminClient.$executeRawUnsafe(`ALTER TABLE "reform_feedback_loops" ENABLE TRIGGER prevent_delete_reform_feedback_loops`);
     await adminClient.$executeRawUnsafe(`ALTER TABLE "reform_action_updates" ENABLE TRIGGER prevent_delete_reform_action_updates`);
@@ -270,6 +274,9 @@ async function setupVerifiedAction(suffix: string): Promise<string> {
 }
 
 // Helper: create a unique observation period for a single test
+// Track ALL created periods for cleanup in afterAll
+let createdPeriodIds: string[] = [];
+
 async function makeUniquePeriod(suffix: string): Promise<string> {
   const period = await adminClient.observationPeriod.create({
     data: {
@@ -280,6 +287,7 @@ async function makeUniquePeriod(suffix: string): Promise<string> {
       endAt: new Date("2026-03-31T23:59:59Z"),
     },
   });
+  createdPeriodIds.push(period.id);
   return period.id;
 }
 
