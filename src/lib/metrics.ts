@@ -21,6 +21,16 @@ interface Metrics {
   totalLatencyMs: number;
   failedTasks: number;
   rateLimitedRequests: number;
+  // G03-04 (PRE-02 OD-4): Advisor invocation counter.
+  // Low-cardinality labels only — NO tenant_id (per OD-4 + ADR-0012
+  // single-process metrics constraint).
+  reformAdvisorInvocations: {
+    byProviderCategory: Record<string, number>; // "stub" | "real"
+    bySimulated: { true: number; false: number };
+    bySuccess: { true: number; false: number };
+    byFailureReason: Record<string, number>; // "none" | "causal_rejection" | "provider_error" | "timeout"
+    byLatencyBucket: { fast: number; medium: number; slow: number };
+  };
 }
 
 const metrics: Metrics = {
@@ -29,6 +39,13 @@ const metrics: Metrics = {
   totalLatencyMs: 0,
   failedTasks: 0,
   rateLimitedRequests: 0,
+  reformAdvisorInvocations: {
+    byProviderCategory: {},
+    bySimulated: { true: 0, false: 0 },
+    bySuccess: { true: 0, false: 0 },
+    byFailureReason: {},
+    byLatencyBucket: { fast: 0, medium: 0, slow: 0 },
+  },
 };
 
 /**
@@ -91,7 +108,52 @@ export function getMetrics() {
       metrics.requestCount > 0
         ? (metrics.errorCount / metrics.requestCount) * 100
         : 0,
+    reformAdvisorInvocations: metrics.reformAdvisorInvocations,
   };
+}
+
+// ============================================================
+// G03-04 — Advisor invocation metrics (low-cardinality labels per OD-4)
+// ============================================================
+
+export type AdvisorFailureReason =
+  | "none"
+  | "causal_rejection"
+  | "provider_error"
+  | "timeout";
+
+/**
+ * Record an advisor invocation.
+ *
+ * Per OD-4: Low-cardinality labels only — NO tenant_id label.
+ * (tenant_id would produce hundreds of time series in a multi-tenant
+ * deployment, exhausting memory in single-process metrics per ADR-0012.)
+ *
+ * Labels:
+ *   - providerCategory: "stub" | "real" (2 values)
+ *   - simulated: boolean (2 values)
+ *   - success: boolean (2 values)
+ *   - failureReason: "none" | "causal_rejection" | "provider_error" | "timeout" (4 values)
+ *   - latencyBucket: "fast" (<1s) | "medium" (1-5s) | "slow" (>5s) (3 values)
+ */
+export function recordAdvisorInvocation(opts: {
+  providerCategory: "stub" | "real";
+  simulated: boolean;
+  success: boolean;
+  failureReason?: AdvisorFailureReason;
+  latencyMs: number;
+}): void {
+  const bucket: "fast" | "medium" | "slow" =
+    opts.latencyMs < 1000 ? "fast" : opts.latencyMs < 5000 ? "medium" : "slow";
+  const reason: AdvisorFailureReason = opts.failureReason ?? "none";
+
+  const ai = metrics.reformAdvisorInvocations;
+  ai.byProviderCategory[opts.providerCategory] =
+    (ai.byProviderCategory[opts.providerCategory] ?? 0) + 1;
+  ai.bySimulated[opts.simulated ? "true" : "false"]++;
+  ai.bySuccess[opts.success ? "true" : "false"]++;
+  ai.byFailureReason[reason] = (ai.byFailureReason[reason] ?? 0) + 1;
+  ai.byLatencyBucket[bucket]++;
 }
 
 /**
@@ -105,4 +167,11 @@ export function __resetMetricsForTesting(): void {
   metrics.totalLatencyMs = 0;
   metrics.failedTasks = 0;
   metrics.rateLimitedRequests = 0;
+  metrics.reformAdvisorInvocations = {
+    byProviderCategory: {},
+    bySimulated: { true: 0, false: 0 },
+    bySuccess: { true: 0, false: 0 },
+    byFailureReason: {},
+    byLatencyBucket: { fast: 0, medium: 0, slow: 0 },
+  };
 }

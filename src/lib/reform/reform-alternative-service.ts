@@ -31,7 +31,7 @@ import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { writeAuditTx } from "@/lib/audit";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
 import {
-  CreateReformAlternativeInputSchema,
+  CreateReformAlternativeInputSchemaWithReceipt,
   SelectAlternativeInputSchema,
   WithdrawAlternativeInputSchema,
   NotFoundError,
@@ -39,11 +39,23 @@ import {
 } from "./contracts";
 import type {
   ReformAlternative,
-  CreateReformAlternativeInput,
+  CreateReformAlternativeInputWithReceipt,
   SelectAlternativeInput,
   WithdrawAlternativeInput,
 } from "./contracts";
 import { lockProposalRow } from "./lock-helper";
+import { verifyReceipt } from "./advisor-receipt";
+
+// G03-04-PRE-03: The original CreateReformAlternativeInputSchema uses
+// .strict() and does NOT accept advisorReceipt. We use the extended
+// schema (CreateReformAlternativeInputSchemaWithReceipt) which is
+// backward compatible (advisorReceipt is optional) AND accepts the
+// receipt field.
+//
+// NOTE: draftedVia, simulated, provider, model are NOT in this schema —
+// they are DERIVED from the verified advisorReceipt (if provided) and
+// never accepted from client claims. This is the OD-5 trusted-provenance
+// boundary.
 
 // ============================================================
 // Helper: lockProposalRow is imported from ./lock-helper
@@ -53,14 +65,33 @@ import { lockProposalRow } from "./lock-helper";
 
 // ============================================================
 // Add: analyst adds an alternative to a draft proposal
+// ------------------------------------------------------------
+// G03-04-PRE-03: Extended to accept an optional advisorReceipt.
+// If provided, the receipt is verified server-side and provenance
+// (draftedVia, simulated, metadata) is DERIVED from the receipt —
+// never from client claims.
+//
+// Per OD-5 reviewer directive:
+//   - A nonce and TTL alone do not enforce one-time use. Bounded reuse
+//     is permitted: every save independently satisfies authorization,
+//     proposal status, alternative limits, locking, and atomic audit.
+//     The receipt is a provenance WITNESS, not the sole security gate.
+//   - "hybrid" means a valid AI-generated draft was ASSOCIATED with
+//     the human submission. It does NOT claim that every word
+//     originated from the model or that the edit was semantically
+//     derived from the original.
 // ============================================================
 export async function addReformAlternative(
   session: Session | null,
-  input: CreateReformAlternativeInput
+  input: CreateReformAlternativeInputWithReceipt
 ): Promise<{ alternativeId: string }> {
   await requirePermissionWithCurrentRole(session, "reform:alternative:write");
 
-  const parsed = CreateReformAlternativeInputSchema.parse(input);
+  // Parse with the extended schema (accepts optional advisorReceipt).
+  // draftedVia/simulated/provider/model are NOT in this schema — they
+  // are DERIVED from the verified receipt (if provided).
+  const parsed = CreateReformAlternativeInputSchemaWithReceipt.parse(input);
+  const advisorReceipt = parsed.advisorReceipt; // optional, opaque
 
   return withAuthenticatedTenant(
     session,
@@ -96,6 +127,35 @@ export async function addReformAlternative(
         );
       }
 
+      // G03-04-PRE-03: Derive provenance from receipt (if provided).
+      // Client CANNOT set draftedVia/simulated/provider/model — these
+      // are DERIVED from the trusted server-side receipt.
+      let draftedVia: "human" | "llm_advisory" | "hybrid" = "human";
+      let simulated = false;
+      let metadata: Prisma.InputJsonValue = {};
+
+      if (advisorReceipt !== undefined) {
+        // Verify receipt (throws ReceiptVerificationError on failure)
+        const verified = verifyReceipt(
+          advisorReceipt,
+          {
+            tenantId, // from authenticated session
+            userId, // from authenticated session
+            proposalId: parsed.proposalId, // from parsed input
+            purpose: "draft_alternatives", // the only purpose valid for saving an alternative
+          },
+          parsed.description // the submitted content
+        );
+
+        draftedVia = verified.draftedVia; // "llm_advisory" or "hybrid"
+        simulated = verified.simulated; // from receipt (trusted)
+        metadata = {
+          provider: verified.provider,
+          model: verified.model,
+          traceId: verified.traceId,
+        };
+      }
+
       const alternative = await tx.reformAlternative.create({
         data: {
           tenantId,
@@ -114,8 +174,9 @@ export async function addReformAlternative(
           anticipatedOutcomes: parsed.anticipatedOutcomes,
           assumptions: parsed.assumptions,
           status: "draft",
-          draftedVia: "human",
-          simulated: false,
+          draftedVia, // DERIVED (not from client)
+          simulated, // DERIVED (not from client)
+          metadata, // DERIVED (not from client)
           createdBy: userId,
         },
       });
@@ -128,6 +189,8 @@ export async function addReformAlternative(
           proposalId: parsed.proposalId,
           alternativeId: alternative.id,
           title: parsed.title,
+          draftedVia, // audit the derived provenance
+          simulated,
         },
         status: "ok",
       });

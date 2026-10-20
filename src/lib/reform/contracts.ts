@@ -545,3 +545,206 @@ export const WithdrawAlternativeInputSchema = z
 export type WithdrawAlternativeInput = z.infer<
   typeof WithdrawAlternativeInputSchema
 >;
+
+// ============================================================
+// G03-04 — Reform Comparison + Advisor contracts (additive)
+// ------------------------------------------------------------
+// Per G03-00 §7 frozen acceptance criteria + PRE-03 corrections:
+//   OD-1: Causal REJECTION (throw, not warn) per frozen §7.4
+//   OD-2: Curated + sanitized context; LLM outside DB tx
+//   OD-3: Deterministic matrix with actual content + provenance + honesty block
+//   OD-4: Low-cardinality metrics
+//   OD-5: Signed receipt pattern for trusted provenance
+// ============================================================
+
+// --- Standalone enums (for comparison output) ---
+export const ReformRiskLevelSchema = z.enum(["low", "medium", "high"]);
+export type ReformRiskLevel = z.infer<typeof ReformRiskLevelSchema>;
+
+export const ReformFeasibilityScoreSchema = z.enum([
+  "unknown",
+  "low",
+  "medium",
+  "high",
+]);
+export type ReformFeasibilityScore = z.infer<
+  typeof ReformFeasibilityScoreSchema
+>;
+
+// --- Advisor receipt purpose (PRE-03: cross-purpose reuse prevention) ---
+export const AdvisorReceiptPurposeSchema = z.enum([
+  "draft_problem_statement",
+  "draft_alternatives",
+  "draft_comparison_summary",
+  "draft_anticipated_outcomes",
+]);
+export type AdvisorReceiptPurpose = z.infer<typeof AdvisorReceiptPurposeSchema>;
+
+// --- AlternativeComparison output (PRE-02: actual content, not just counts) ---
+export const AlternativeComparisonSchema = z
+  .object({
+    proposalId: z.string(),
+    alternatives: z.array(
+      z.object({
+        alternativeId: z.string(),
+        title: z.string(),
+        status: ReformAlternativeStatusSchema,
+        costRange: z
+          .object({
+            min: z.number().nullable(),
+            max: z.number().nullable(),
+            currency: z.string(),
+          })
+          .nullable(),
+        riskLevel: ReformRiskLevelSchema,
+        feasibilityScore: ReformFeasibilityScoreSchema,
+        assumptions: z.array(z.string()), // ACTUAL text (PRE-02 correction)
+        anticipatedOutcomes: z.array(z.string()), // ACTUAL text (PRE-02 correction)
+        assumptionCount: z.number().int().nonnegative(), // preserved (frozen interface)
+        anticipatedOutcomeCount: z.number().int().nonnegative(), // preserved (frozen interface)
+        provenance: z.object({
+          draftedVia: z.enum(["human", "llm_advisory", "hybrid"]),
+          simulated: z.boolean(),
+          provider: z.string().nullable(),
+        }),
+      })
+    ),
+    comparisonMatrix: z.object({
+      dimensions: z.array(z.string()),
+      notes: z.string(),
+    }),
+    honestyBlock: z.object({
+      simulatedData: z.boolean(),
+      knownLimitations: z.array(z.string()),
+    }),
+    // NO "recommended", "ranking", "confidenceScore" — by design
+  })
+  .strict();
+export type AlternativeComparison = z.infer<typeof AlternativeComparisonSchema>;
+
+// --- AdvisorDraftResult output (frozen per INTEGRATION_CONTRACTS §4.4 + PRE-03 receipt) ---
+export const AdvisorDraftResultSchema = z
+  .object({
+    draft: z.string(),
+    simulated: z.boolean(),
+    provider: z.string(),
+    model: z.string(),
+    warnings: z.array(z.string()),
+    receipt: z.string().optional(), // PRE-03: signed receipt token
+    // NO "confidence", "recommended", "ranking", "selection" — by design
+  })
+  .strict();
+export type AdvisorDraftResult = z.infer<typeof AdvisorDraftResultSchema>;
+
+// --- Advisor input schemas ---
+export const DraftProblemStatementInputSchema = z
+  .object({
+    alertId: z.string().min(1),
+    includeVariance: z.boolean().optional(),
+  })
+  .strict();
+export type DraftProblemStatementInput = z.infer<
+  typeof DraftProblemStatementInputSchema
+>;
+
+export const DraftAlternativesInputSchema = z
+  .object({
+    proposalId: z.string().min(1),
+    count: z.number().int().min(1).max(5).optional(),
+  })
+  .strict();
+export type DraftAlternativesInput = z.infer<
+  typeof DraftAlternativesInputSchema
+>;
+
+export const DraftAnticipatedOutcomesInputSchema = z
+  .object({
+    alternativeId: z.string().min(1),
+  })
+  .strict();
+export type DraftAnticipatedOutcomesInput = z.infer<
+  typeof DraftAnticipatedOutcomesInputSchema
+>;
+
+// --- CausalRejectionError (PRE-02 — REJECT, not warn, per frozen §7.4) ---
+// Thrown when advisor output contains causal language patterns.
+export class CausalRejectionError extends Error {
+  constructor(public readonly detectedPatterns: string[]) {
+    super(
+      `Advisor output rejected: causal language detected. ` +
+        `Patterns: ${detectedPatterns.join(", ")}. ` +
+        `Per G03-00 §7.4, advisor output must not contain causal assertions. ` +
+        `The analyst may retry or draft manually.`
+    );
+    this.name = "CausalRejectionError";
+  }
+}
+
+// --- Advisor causal-language patterns (for REJECTION per OD-1) ---
+export const ADVISOR_CAUSAL_PATTERNS = [
+  /\bcaused?\b/i,
+  /\bdue to\b/i,
+  /\bas a result of\b/i,
+  /\bbecause of\b/i,
+  /\bwill (cause|reduce|increase|decrease|improve)\b/i,
+  /\bthe reform (will|shall|must)\b/i,
+  /\bthis action (will|shall|must)\b/i,
+  /\blead to\b/i,
+  /\bled to\b/i,
+  /\bresulted in\b/i,
+  /\bcontributed to\b/i,
+  /\battributable to\b/i,
+];
+
+export function detectAdvisorCausalLanguage(text: string): string[] {
+  return ADVISOR_CAUSAL_PATTERNS.filter((p) => p.test(text)).map(
+    (p) => p.source
+  );
+}
+
+// --- ReceiptVerificationError (PRE-03 — thrown when receipt fails verification) ---
+export type ReceiptRejectionReason =
+  | "malformed"
+  | "invalid_signature"
+  | "expired"
+  | "cross_tenant"
+  | "cross_user"
+  | "cross_proposal"
+  | "cross_purpose"
+  | "schema_invalid";
+
+export class ReceiptVerificationError extends Error {
+  constructor(public readonly reason: ReceiptRejectionReason) {
+    super(`Advisor receipt verification failed: ${reason}`);
+    this.name = "ReceiptVerificationError";
+  }
+}
+
+// --- Extend CreateReformAlternativeInputSchema with optional advisorReceipt (PRE-03) ---
+// NOTE: draftedVia, simulated, provider, model are NOT accepted from client.
+//       They are DERIVED from the verified advisorReceipt (if provided).
+export const CreateReformAlternativeInputSchemaWithReceipt = z
+  .object({
+    proposalId: z.string().min(1),
+    title: z.string().min(5, "title must be at least 5 characters").max(200),
+    description: z.string().min(20, "description must be at least 20 characters"),
+    costEstimateMin: z.number().nonnegative().optional(),
+    costEstimateMax: z.number().nonnegative().optional(),
+    costCurrency: z.string().length(3).optional().default("USD"),
+    riskLevel: z.enum(["low", "medium", "high"]).optional().default("medium"),
+    feasibilityScore: z
+      .enum(["unknown", "low", "medium", "high"])
+      .optional()
+      .default("unknown"),
+    anticipatedOutcomes: z
+      .array(z.string().min(1))
+      .max(10)
+      .optional()
+      .default([]),
+    assumptions: z.array(z.string().min(1)).max(10).optional().default([]),
+    advisorReceipt: z.string().optional(), // PRE-03: opaque signed token
+  })
+  .strict();
+export type CreateReformAlternativeInputWithReceipt = z.infer<
+  typeof CreateReformAlternativeInputSchemaWithReceipt
+>;
