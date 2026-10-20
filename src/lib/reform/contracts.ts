@@ -640,7 +640,7 @@ export type AdvisorDraftResult = z.infer<typeof AdvisorDraftResultSchema>;
 export const DraftProblemStatementInputSchema = z
   .object({
     alertId: z.string().min(1),
-    includeVariance: z.boolean().optional().default(true),
+    includeVariance: z.boolean().optional(),
   })
   .strict();
 export type DraftProblemStatementInput = z.infer<
@@ -650,7 +650,7 @@ export type DraftProblemStatementInput = z.infer<
 export const DraftAlternativesInputSchema = z
   .object({
     proposalId: z.string().min(1),
-    count: z.number().int().min(1).max(5).optional().default(3),
+    count: z.number().int().min(1).max(5).optional(),
   })
   .strict();
 export type DraftAlternativesInput = z.infer<

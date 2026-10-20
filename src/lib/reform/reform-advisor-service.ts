@@ -90,6 +90,7 @@ export async function draftProblemStatement(
   await requirePermissionWithCurrentRole(session, "reform:proposal:write");
 
   // Step 1: Read permitted context inside SHORT-LIVED DB transaction
+  const includeVariance = input.includeVariance ?? true;
   const { rawContext, tenantId, userId } = await withAuthenticatedTenant(
     session,
     async ({ tx, tenantId, userId }) => {
@@ -110,7 +111,7 @@ export async function draftProblemStatement(
       }
 
       let variance: AdvisorRawContext["variance"] = null;
-      if (input.includeVariance && alert.varianceRecordId) {
+      if (includeVariance && alert.varianceRecordId) {
         const v = await tx.varianceRecord.findFirst({
           where: { id: alert.varianceRecordId, tenantId },
           select: {
@@ -219,7 +220,8 @@ export async function draftReformAlternatives(
   const provider = getLLMProvider();
   const results: AdvisorDraftResult[] = [];
 
-  for (let i = 0; i < input.count; i++) {
+  const count = input.count ?? 3;
+  for (let i = 0; i < count; i++) {
     const result = await provider.complete({
       messages: [
         { role: "system", content: ADVISORY_SYSTEM_PROMPT },
