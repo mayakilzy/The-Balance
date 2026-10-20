@@ -173,6 +173,9 @@ jobs:
         #   - Migration finished_at IS NOT NULL (not just name present)
         #   - Seed idempotency fixtures present
         # Fails with nonzero exit on any incorrect behavior (ON_ERROR_STOP=1).
+        # if: always() — runs even when the test step fails, so security
+        # regression is always verified regardless of integration test outcomes.
+        if: always()
         env:
           PGPASSWORD: postgres
         run: |
@@ -180,6 +183,7 @@ jobs:
             -f scripts/g03-security-validation/g03_01_final_acceptance_rev2.sql
 
       - name: Build (production)
+        if: always()
         run: bun run build
         env:
           DATABASE_URL: "postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
@@ -187,9 +191,11 @@ jobs:
           LLM_PROVIDER: "stub"
 
       - name: Install Playwright browsers
+        if: always()
         run: bunx playwright install --with-deps chromium
 
       - name: Start Next.js server for Playwright
+        if: always()
         run: |
           # Create .env file for the dev server to read
           cat > .env <<ENV
@@ -253,3 +259,69 @@ jobs:
           name: playwright-screenshots
           path: test-results/screenshots/
           retention-days: 7
+
+      - name: G03-02 Reform HTTP E2E tests (real server + real PG)
+        # Runs the 13 authenticated HTTP E2E tests for the G03-02 reform vertical
+        # slice. These tests start a real Next.js dev server, make authenticated
+        # HTTP requests with cookie persistence, and verify the full reform
+        # lifecycle: Alert → Proposal → Submit → Approve → Action → Updates →
+        # Complete → Verify (F6) → Feedback → Observation → Alert Closure.
+        # This step is separate from the vitest test step (which skips E2E
+        # via SKIP_E2E_SERVER=1) and from Playwright (which only runs
+        # tests/browser/ specs).
+        if: always()
+        run: |
+          # Ensure .env exists (created by the Playwright step above; recreate if skipped)
+          cat > .env <<ENV
+          NODE_ENV=development
+          DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
+          DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
+          AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
+          AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
+          AUTH_TRUST_HOST="true"
+          LLM_PROVIDER="stub"
+          LOG_LEVEL="warn"
+          ENV
+
+          # Start dev server on port 3001
+          bunx next dev -p 3001 &
+          SERVER_PID=$!
+          echo "Server PID: $SERVER_PID"
+
+          # Wait for server to be ready
+          READY=0
+          for i in $(seq 1 60); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/v1/meta 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "Server ready after ${i} attempts"
+              READY=1
+              break
+            fi
+            echo "Waiting... (attempt $i, HTTP $HTTP_CODE)"
+            sleep 2
+          done
+
+          if [ "$READY" = "0" ]; then
+            echo "ERROR: Server did not start within 120 seconds"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          # Run the G03-02 reform HTTP E2E tests via vitest
+          # RUN_E2E_HTTP_TESTS=1 enables the tests
+          # No SKIP_E2E_SERVER — tests need the running server
+          DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public" \
+          DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public" \
+          AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public" \
+          AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars" \
+          AUTH_TRUST_HOST="true" \
+          LLM_PROVIDER="stub" \
+          RUN_E2E_HTTP_TESTS=1 \
+          bunx vitest run tests/e2e/g03-02-reform-e2e.test.ts --reporter=verbose
+          E2E_EXIT=$?
+
+          # Kill server
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          exit $E2E_EXIT

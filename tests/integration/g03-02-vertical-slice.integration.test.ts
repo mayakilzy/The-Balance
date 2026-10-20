@@ -40,8 +40,6 @@ let adminUserId: string;
 let observerUserId: string;
 let tenantBAnalystUserId: string;
 let strategyVersionId: string;
-let indicatorId: string;
-let observationPeriodId: string;
 let sourceId: string;
 let createdAlertIds: string[] = [];
 let createdProposalIds: string[] = [];
@@ -203,52 +201,13 @@ beforeAll(async () => {
   }
   sourceId = src.id;
 
-  let period = await adminClient.observationPeriod.findFirst({
-    where: { tenantId: tenantAId, periodType: "quarterly", periodValue: "2026-Q1" },
-  });
-  if (!period) {
-    period = await adminClient.observationPeriod.create({
-      data: {
-        tenantId: tenantAId,
-        periodType: "quarterly",
-        periodValue: "2026-Q1",
-        startAt: new Date("2026-01-01T00:00:00Z"),
-        endAt: new Date("2026-03-31T23:59:59Z"),
-      },
-    });
-  }
-  observationPeriodId = period.id;
-
-  let ind = await adminClient.indicatorDefinition.findFirst({
-    where: { tenantId: tenantAId, code: "G0302_TEST_IND" },
-  });
-  if (!ind) {
-    ind = await adminClient.indicatorDefinition.create({
-      data: {
-        tenantId: tenantAId,
-        strategyVersionId,
-        code: "G0302_TEST_IND",
-        displayName: "G03-02 Test Indicator",
-        unit: "percent",
-        preferredDirection: "decrease",
-        defaultTargetValue: 5.0,
-        targetTimeHorizon: "multi_year",
-        alertThresholds: [
-          {
-            metric: "varianceAbsolute",
-            operator: "gt",
-            value: 0.5,
-            logicalOp: "and",
-            severity: "warning",
-            rationale: "Test threshold for G03-02 alert generation",
-            sourceRef: "synthetic:demolandia-g0302-test-001",
-          },
-        ],
-        createdBy: analystUserId,
-      },
-    });
-  }
-  indicatorId = ind.id;
+  // NOTE: We intentionally do NOT create a test indicator + observation period
+  // in this suite's beforeAll. Doing so would leak into G02 observatory snapshot
+  // tests (which filter by strategyVersionId) and cause test pollution
+  // (g02-observatory-snapshot H-06/H-07/H-08 expected exactly 1 indicator but
+  // got 2). The reform workflow does not require a pre-existing indicator —
+  // proposals originate from alerts, not indicators. If a test needs an
+  // observation, it creates its own scoped fixtures.
 });
 
 afterAll(async () => {

@@ -17,11 +17,15 @@
 //
 // Observation Integration (per G03-00 INTEGRATION_CONTRACTS §4.10):
 //   - If `newAfterObservation` is provided, the service calls G02
-//     `ingestObservation` to create a NEW observation. The returned
-//     observationId is set as `afterObservationId`.
+//     `ingestObservationTx` (the transaction-aware variant of
+//     `ingestObservation`) to create a NEW observation IN THE SAME
+//     TRANSACTION as the feedback loop. The returned observationId is
+//     set as `afterObservationId`. This guarantees atomicity: if the
+//     feedback loop creation fails, the observation is rolled back too.
 //   - The existing `beforeObservationId` (if any) is NEVER mutated.
-//   - G02 `ingestObservation` is the canonical entry point — the service
-//     does NOT write directly to the `observations` table.
+//   - G02 business rules (provenance validation, country scope, E3
+//     cross-country check) are reused via `ingestObservationTx` —
+//     NO business logic duplication.
 //
 // Alert Closure (per G03-00 INTEGRATION_CONTRACTS §4.10):
 //   - closeOriginatingAlert uses the G02 `closeAlert` contract, NOT
@@ -35,14 +39,16 @@
 //
 // Atomicity:
 //   - createReformFeedbackLoop writes feedback + (optional) new observation
-//     + audit_log in the SAME transaction. If any step fails, all rolls back.
+//     + audit_log in the SAME transaction via `ingestObservationTx`. If any
+//     step fails, ALL rolled back (observation included — no orphan).
 //   - closeOriginatingAlert is a separate operation (not part of the feedback
 //     transaction) because the G02 closeAlert uses its own transaction via
 //     withAuthenticatedTenant. This is intentional: alert closure is an
 //     independent institutional action that requires its own audit record.
 //
 // Authorization:
-//   - createReformFeedbackLoop: reform:action:write (analyst, admin)
+//   - createReformFeedbackLoop: reform:action:write (analyst, admin) +
+//     observatory:observation:ingest (when newAfterObservation is provided)
 //   - getReformFeedbackLoop: reform:verification:read (analyst, reviewer, admin)
 //   - closeOriginatingAlert: observatory:alert:act (reviewer, admin)
 // ============================================================
@@ -50,7 +56,8 @@ import type { Session } from "next-auth";
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { writeAuditTx } from "@/lib/audit";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
-import { ingestObservation } from "@/lib/state-observatory/observation-service";
+import { ingestObservationTx } from "@/lib/state-observatory/observation-service";
+import { IngestObservationInputSchema } from "@/lib/state-observatory/contracts";
 import { closeAlert } from "@/lib/state-observatory/alert-service";
 import {
   CreateReformFeedbackLoopInputSchema,
@@ -70,9 +77,19 @@ export async function createReformFeedbackLoop(
   session: Session | null,
   input: CreateReformFeedbackLoopInput
 ): Promise<{ feedbackLoopId: string; newObservationId?: string }> {
+  // The analyst creating the feedback needs reform:action:write.
   await requirePermissionWithCurrentRole(session, "reform:action:write");
 
+  // If a new observation is requested, the analyst ALSO needs
+  // observatory:observation:ingest permission. We check this BEFORE
+  // entering the transaction to fail fast on authorization.
   const parsed = CreateReformFeedbackLoopInputSchema.parse(input);
+  if (parsed.newAfterObservation) {
+    await requirePermissionWithCurrentRole(
+      session,
+      "observatory:observation:ingest"
+    );
+  }
 
   return withAuthenticatedTenant(
     session,
@@ -117,33 +134,18 @@ export async function createReformFeedbackLoop(
       }
 
       // Optional: ingest a NEW observation via the G02 contract.
-      // This MUST happen INSIDE the same transaction so that if the
-      // feedback loop creation fails, the observation is also rolled back.
+      // CRITICAL ATOMICITY: this uses `ingestObservationTx` (the transaction-aware
+      // variant) which accepts OUR `tx` client. The observation INSERT + its
+      // audit_log entry commit/roll back WITH the feedback loop creation.
+      // If the feedback loop creation fails (e.g., DB trigger violation),
+      // the observation is rolled back too — no orphan observations.
       let newObservationId: string | undefined;
       if (parsed.newAfterObservation) {
-        // NOTE: ingestObservation uses its own withAuthenticatedTenant
-        // transaction internally. To make this atomic with the feedback
-        // loop creation, we'd need to refactor ingestObservation to accept
-        // a transaction client. For G03-02 vertical slice, we call it
-        // OUTSIDE the current transaction — if it fails, we propagate the
-        // error and DO NOT create the feedback loop. If it succeeds but
-        // the feedback loop creation fails, we have an orphan observation,
-        // which is acceptable (observations are append-only and not
-        // causal — they represent measured reality regardless of feedback
-        // loop state).
-        //
-        // TODO (G03-05 or later): refactor G02 services to accept tx
-        // for true atomic cross-service operations. For now, document
-        // the limitation honestly.
-        const newObs = await ingestObservation(session, {
-          indicatorDefinitionId: parsed.newAfterObservation.indicatorDefinitionId,
-          observationPeriodId: parsed.newAfterObservation.observationPeriodId,
-          observedValue: parsed.newAfterObservation.observedValue,
-          originType: parsed.newAfterObservation.originType,
-          sourceId: parsed.newAfterObservation.sourceId,
-          derivationMethod: parsed.newAfterObservation.derivationMethod,
-          isSynthetic: parsed.newAfterObservation.isSynthetic,
-        });
+        // Validate the observation input via G02's Zod schema (defense-in-depth)
+        const obsInput = IngestObservationInputSchema.parse(
+          parsed.newAfterObservation
+        );
+        const newObs = await ingestObservationTx(obsInput, tx, tenantId, userId);
         newObservationId = newObs.id;
       }
 

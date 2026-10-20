@@ -52,3 +52,73 @@ Stage Summary:
 - G02 services reused correctly (ingestObservation, closeAlert).
 - F6 + attribution + append-only sentinels verify DB trigger enforcement.
 - Awaiting reviewer FINAL PASS decision.
+
+---
+Task ID: G03-02-patch-recovery
+Agent: GLM (patch recovery session)
+Task: Apply the published G03-02-R1-R4-Recovery.patch to a fresh review branch,
+      verify implementation, run all possible local tests, attempt push.
+
+Work Log:
+- Step 1 — Recover the code:
+    * Cloned https://github.com/mayakilzy/The-Balance.git fresh.
+    * HEAD on main: 247c018 (commit that uploaded the patch file).
+    * Original implementation baseline: c8bf4f9 (parent of 247c018).
+    * Verified patch file exists at g03-02-r1-r4-review/G03-02-R1-R4-Recovery.patch.
+    * Verified patch SHA-256: a8462da71e9fc949441c715c8d8f91f0809a6c430fd0b1c8eebfea412fa5f53d
+      (matches the authoritative SHA-256 published by the owner).
+    * Created review branch: g03-02-r1-r4-review.
+    * git apply --check: PASS (patch applies cleanly on c8bf4f9).
+    * git apply: SUCCESS — 7 files (5 modified + 2 new).
+
+- Step 2 — Verify implementation (all 4 corrections confirmed present):
+    * R1: leaked G0302_TEST_IND + observationPeriodId removed from
+      g03-02-vertical-slice.integration.test.ts beforeAll. NOTE comment
+      explains why no pre-existing indicator is needed.
+    * R2: ingestObservationTx extracted from ingestObservation in
+      observation-service.ts. Public ingestObservation(session, input)
+      UNCHANGED — delegates to ingestObservationTx inside its own
+      withAuthenticatedTenant. createReformFeedbackLoop now calls
+      ingestObservationTx with the SAME tx.
+    * R3: mapServiceError returns generic 500 + childLogger server-side
+      logging. 400/401/403/404/409 retain detail field.
+    * R4: E2E step 11 passes newAfterObservation; step 13 verifies
+      observation exists + linkage + audit_log entry for
+      observatory.observation.ingested.
+
+- Step 3 — Run validation:
+    * Typecheck: PASS (0 errors)
+    * Lint: PASS (0 errors, 3 pre-existing warnings in src/app/tasks/page.tsx — unrelated)
+    * Build: PASS (all 14 reform routes registered)
+    * Unit tests: 372 PASS (291 existing + 81 new)
+    * Integration tests: 30 skipped (no PostgreSQL in this workspace; will run in CI)
+    * HTTP E2E: skipped (no PostgreSQL; will run in CI)
+    * G03-01 SQL acceptance: skipped (no PostgreSQL; will run in CI)
+
+- Step 4 — Commit and publish:
+    * Committed as 65cf703ced2cc8ca22d37b244c7ae21d8213fcd6 on branch
+      g03-02-r1-r4-review (7 files, 1006 insertions, 277 deletions).
+    * Push attempt: FAILED — GitHub authentication unavailable in this
+      workspace (no gh CLI, no SSH keys, no GH_TOKEN env var, no
+      credential.helper, no stored credentials).
+    * Produced portable artifacts for owner-assisted publishing:
+      - g03-02-r1-r4-review.bundle (Git bundle, 1.8MB, SHA-256:
+        1f3927368a714b4b6f85a8ba474375d5d1c0287632ada80571599cd3e95c06a4)
+      - G03-02-R1-R4-Applied.patch (fresh patch from final commit,
+        SHA-256: 296187d777ea51d9c909398ff645af705ce72c8661cab33541c8fbb575fc42b1)
+    * Both artifacts in /home/z/my-project/download/.
+
+- Step 5 — CI and Recovery:
+    * BLOCKED — branch not pushed. Awaiting owner to publish via
+      connected GitHub integration. Once pushed, CI + Recovery will
+      run automatically on the Pull Request.
+
+Stage Summary:
+- Patch applied cleanly. All 7 files verified.
+- 372 unit tests PASS. Typecheck + lint + build PASS.
+- Commit 65cf703 ready on branch g03-02-r1-r4-review (local).
+- Push blocked by missing GitHub credentials.
+- Two portable artifacts produced for owner-assisted publishing.
+- G02 public contract preserved (ingestObservation unchanged).
+- No security protections weakened. No migrations rewritten.
+- DEFINER functions remain DORMANT.
