@@ -184,15 +184,24 @@ describeIntegration("G03-03 — Reform Alternatives", () => {
   });
 
   it("ALT-02: reject 6th alternative (D1 max 5)", async () => {
+    const { createReformProposal } = await import("@/lib/reform/reform-proposal-service");
     const { addReformAlternative } = await import("@/lib/reform/reform-alternative-service");
     const analystSession = makeSession({ id: analystUserId, tenantId: tenantAId, roleCode: "analyst", membershipStatus: "active" });
 
-    const { proposalId } = await createProposalWithAlert();
+    // Create proposal WITHOUT inline alternative
+    const alertId = await createTestAlert();
+    const proposal = await createReformProposal(analystSession, {
+      originatingAlertId: alertId,
+      title: `${FIXTURE_PREFIX} ALT-02 Proposal`,
+      problemStatement: "Test proposal for max alternatives rejection testing.",
+      hypothesizedCauses: [],
+    });
+    createdProposalIds.push(proposal.proposalId);
 
-    // Add 5 alternatives to reach max (inline may or may not exist)
-    for (let i = 0; i < 5; i++) {
+    // Add 5 alternatives (max allowed)
+    for (let i = 1; i <= 5; i++) {
       const result = await addReformAlternative(analystSession, {
-        proposalId, title: `${FIXTURE_PREFIX} ALT-02 Alt ${i}`,
+        proposalId: proposal.proposalId, title: `${FIXTURE_PREFIX} ALT-02 Alt ${i}`,
         description: `Test alternative ${i} description for the proposal here.`,
         costCurrency: "USD", riskLevel: "low", feasibilityScore: "medium",
         anticipatedOutcomes: [], assumptions: [],
@@ -203,7 +212,7 @@ describeIntegration("G03-03 — Reform Alternatives", () => {
     // 6th should fail
     const { raised, message } = await expectDenial(() =>
       addReformAlternative(analystSession, {
-        proposalId, title: `${FIXTURE_PREFIX} ALT-02 6th`,
+        proposalId: proposal.proposalId, title: `${FIXTURE_PREFIX} ALT-02 6th`,
         description: "This should be rejected because max is 5.",
         costCurrency: "USD", riskLevel: "low", feasibilityScore: "medium",
         anticipatedOutcomes: [], assumptions: [],
