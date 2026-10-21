@@ -260,34 +260,31 @@ CREATE TRIGGER reform_proposal_status_to_events_trigger
 -- ============================================================
 -- 9. DERIVED FUNCTION: is_coordination_fully_approved
 -- ============================================================
--- SECURITY DEFINER (closes cross-tenant visibility gap — function sees ALL
--- events/participants/coordinations via balance_coordination_admin's permissive
--- RLS). Returns only a BOOLEAN — no private data exposed.
+-- SECURITY DEFINER — the function runs as balance_coordination_admin
+-- (permissive RLS — sees ALL events/participants/coordinations) to close
+-- the cross-tenant visibility gap. Returns only a BOOLEAN — no private data.
 --
--- TRUSTED AUTHORIZATION (PR-05-SECURITY-CLOSURE):
---   The authorization gate verifies BOTH:
---     (a) current_setting('app.tenant_id') is the lead OR an active participant
---     (b) current_setting('app.user_id') has an active membership in
---         current_setting('app.tenant_id') — verified via DB JOIN against
---         the memberships table (not via GUC trust alone)
+-- EXECUTE BOUNDARY (PR05-FIX-02):
+--   EXECUTE is granted ONLY to balance_coordination_admin — a NOLOGIN role
+--   that CANNOT be assumed by ordinary database callers. balance_app and
+--   PUBLIC have EXECUTE REVOKED. An attacker with balance_app credentials
+--   CANNOT invoke this function directly.
 --
---   This closes the direct-DB-impersonation vector:
---   - A direct caller with balance_app credentials CANNOT enumerate user_ids
---     for other tenants (balance_app's RLS on memberships only shows their
---     own row: userId = current_setting('app.user_id') AND tenantId =
---     current_setting('app.tenant_id'))
---   - Setting app.tenant_id to another tenant + app.user_id to any value →
---     memberships JOIN fails (the user has no membership in that tenant) →
---     function returns FALSE (fail-closed)
---   - The only way to pass the gate is to know a valid (user_id, tenant_id)
---     pair where the user has an active membership — which an ordinary DB
---     caller cannot obtain for any tenant other than their own
+--   The application calls this function through a TRUSTED execution path
+--   (Phase B dependency): a dedicated database connection authenticated as
+--   a role that has EXECUTE, established after the application verifies the
+--   user's session via withAuthenticatedTenant. This is NOT a spoofable GUC
+--   — it is a separate connection with separate credentials.
 --
---   The memberships table is granted SELECT to balance_coordination_admin
---   (additive — no existing privilege removed) with a permissive RLS policy.
---   balance_coordination_admin is NOLOGIN — it can only read memberships
---   inside SECURITY DEFINER functions, not via direct connection. The function
---   returns only a BOOLEAN — no membership data is exposed to the caller.
+--   The function still checks current_setting('app.tenant_id') for the
+--   lead/participant authorization, but this is now a SECONDARY check on top
+--   of the connection-level EXECUTE boundary — not the primary authentication.
+--   The primary authentication is: "does the caller have EXECUTE?" Only the
+--   trusted application connection does.
+--
+--   Phase B will implement the trusted connection path. Until then, the
+--   function is callable only by balance_coordination_admin (NOLOGIN) and
+--   balance_admin (inspection only — returns the same BOOLEAN, no content).
 --
 -- EVENT ORDERING CONTRACT (PHASE-A-FIX-01):
 --   sequenceNumber provides deterministic ordering ONLY when event-producing
@@ -301,9 +298,9 @@ CREATE TRIGGER reform_proposal_status_to_events_trigger
 --   The function itself does NOT acquire L-COORD. The caller must hold it.
 --   Concurrency acceptance is NOT claimed until Phase D contention tests.
 --
--- 6 conditions:
---   1. Trusted authorization: (app.user_id, app.tenant_id) has active membership
---      AND app.tenant_id is lead OR active participant of the coordination
+-- 5 conditions:
+--   1. Authorization gate: caller's tenant is lead OR active participant
+--      (secondary check — primary is the EXECUTE boundary above)
 --   2. Coordination status = 'plan_approved'
 --   3. ≥1 active participant
 --   4. ≥1 linked proposal (PRE-05 fix — prevents zero-proposal activation)
@@ -320,22 +317,20 @@ STABLE
 SET search_path = public, pg_temp
 AS $$
     SELECT
-        -- Trusted authorization gate (PR-05-SECURITY-CLOSURE):
-        -- (a) The caller's (app.user_id, app.tenant_id) must correspond to an
-        --     ACTIVE membership in the memberships table — verified via DB JOIN,
-        --     not GUC trust alone. This closes the direct-DB-impersonation
-        --     vector: an attacker with balance_app credentials cannot enumerate
-        --     user_ids for other tenants (RLS blocks), so they cannot forge a
-        --     valid (user_id, tenant_id) pair for a tenant they don't belong to.
-        -- (b) The caller's tenant must be the lead OR an active participant of
-        --     the coordination.
+        -- Authorization gate (PR05-FIX-02 — secondary check):
+        -- The PRIMARY authentication is the EXECUTE boundary: only
+        -- balance_coordination_admin (NOLOGIN) and balance_admin can invoke
+        -- this function. balance_app and PUBLIC have EXECUTE REVOKED.
+        --
+        -- This secondary check ensures the caller's tenant context matches
+        -- the coordination's lead or an active participant. It is NOT the
+        -- primary authentication — the GUC is still caller-controllable —
+        -- but it provides defense-in-depth on top of the EXECUTE boundary.
+        --
+        -- Phase B will establish the trusted connection path: the application
+        -- authenticates the user via withAuthenticatedTenant, then calls this
+        -- function through a connection that has EXECUTE (not balance_app).
         EXISTS (
-            SELECT 1 FROM public.memberships m
-            WHERE m."userId" = current_setting('app.user_id', true)
-              AND m."tenantId" = current_setting('app.tenant_id', true)
-              AND m."status" = 'active'
-        )
-        AND EXISTS (
             SELECT 1 FROM public.reform_coordinations c
             WHERE c."id" = p_coordination_id
               AND (
@@ -400,38 +395,28 @@ AS $$
         )
 $$;
 ALTER FUNCTION public.is_coordination_fully_approved(TEXT) OWNER TO balance_coordination_admin;
-GRANT EXECUTE ON FUNCTION public.is_coordination_fully_approved(TEXT) TO balance_app;
-GRANT EXECUTE ON FUNCTION public.is_coordination_fully_approved(TEXT) TO balance_admin;
+-- PR05-FIX-02: EXECUTE boundary — revoke from balance_app and PUBLIC.
+-- Only balance_coordination_admin (NOLOGIN — cannot be assumed by ordinary
+-- callers) and balance_admin (inspection) can invoke this function.
+-- The application calls it through a trusted connection path (Phase B).
+REVOKE EXECUTE ON FUNCTION public.is_coordination_fully_approved(TEXT) FROM balance_app;
 REVOKE EXECUTE ON FUNCTION public.is_coordination_fully_approved(TEXT) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.is_coordination_fully_approved(TEXT) TO balance_admin;
 
 -- ============================================================
--- 10. MEMBERSHIPS READ ACCESS for balance_coordination_admin (PR-05-SECURITY-CLOSURE)
--- ============================================================
--- The is_coordination_fully_approved function (SECURITY DEFINER, owned by
--- balance_coordination_admin) needs to verify the caller's membership via
--- DB JOIN. This requires balance_coordination_admin to have SELECT on the
--- memberships table.
---
--- This is an ADDITIVE grant — no existing privilege on memberships is
--- removed. The existing policies (balance_app self-in-tenant, balance_auth
--- read-all, balance_admin all) are UNCHANGED.
---
--- balance_coordination_admin is NOLOGIN — it cannot connect directly. It can
--- only read memberships inside SECURITY DEFINER functions. The function
--- returns only a BOOLEAN — no membership data is exposed to the caller.
--- ============================================================
-
-GRANT SELECT ON "memberships" TO balance_coordination_admin;
-
-CREATE POLICY "memberships_cadmin_select" ON "memberships"
-    FOR SELECT TO balance_coordination_admin USING (true);
-
--- ============================================================
--- 11. RLS POLICY MODIFICATION on reform_coordination_participants
+-- 10. RLS POLICY MODIFICATION on reform_coordination_participants
 -- ============================================================
 -- Additive OR clause — preserves the existing constraint.
 -- Allows coordination leads to see participant rows for coordinations they lead.
 -- INSERT, UPDATE, DELETE policies UNCHANGED.
+--
+-- NOTE (PR05-FIX-02): the permissive memberships RLS policy and GRANT SELECT
+-- on memberships to balance_coordination_admin (added in the prior commit
+-- de42489) are REMOVED. They were added to support the memberships JOIN
+-- verification, which turned out to be an unenforceable authentication
+-- boundary (the function runs as balance_coordination_admin with permissive
+-- RLS, so it sees ALL memberships — a forged (user_id, tenant_id) pair passes).
+-- The memberships table access is reverted to its original G03-00 state.
 
 DROP POLICY "reform_coord_participants_select_app" ON "reform_coordination_participants";
 
