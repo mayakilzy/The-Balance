@@ -406,15 +406,10 @@ export async function acceptCoordinationInvitation(
     const lockKey = coordinationLockKey(invitation.coordinationId);
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
 
-    await tx.reformCoordinationInvitation.update({
-      where: { id: invitation.id },
-      data: {
-        status: "accepted",
-        acceptedAt: new Date(),
-        acceptedBy: userId,
-      },
-    });
-
+    // G03-06 HTTP Acceptance fix: Insert participant BEFORE updating invitation
+    // status. The RLS policy on reform_coordination_participants (migration 30)
+    // requires a PENDING invitation to exist for the caller's tenant at INSERT
+    // time. If we update the invitation status first, the EXISTS check fails.
     const participant = await tx.reformCoordinationParticipant.create({
       data: {
         coordinationId: invitation.coordinationId,
@@ -424,6 +419,16 @@ export async function acceptCoordinationInvitation(
         status: "active",
         joinedAt: new Date(),
         addedBy: userId,
+      },
+    });
+
+    // Now safe to transition the invitation to 'accepted' (participant already inserted)
+    await tx.reformCoordinationInvitation.update({
+      where: { id: invitation.id },
+      data: {
+        status: "accepted",
+        acceptedAt: new Date(),
+        acceptedBy: userId,
       },
     });
 
@@ -744,25 +749,27 @@ export async function approveSharedSnapshot(
       throw new ConflictError(`Snapshot ${input.snapshotId} is not in draft status`);
     }
 
-    await tx.reformCoordinationSharedSnapshot.update({
-      where: { id: snapshot.id },
-      data: {
-        status: "approved",
-        approvedAt: new Date(),
-        approvedBy: userId,
-      },
-    });
-
-    await writeAuditTx(tx, {
-      tenantId,
-      actor: userId,
-      action: "reform.coordination.snapshot_approved",
-      details: {
-        coordinationId: snapshot.coordinationId,
-        snapshotId: snapshot.id,
-      },
-      status: "ok",
-    });
+    // G03-06 HTTP Acceptance fix: invoke the SECURITY DEFINER function
+    // approve_coordination_shared_snapshot (migration 30) instead of a
+    // direct UPDATE. The function runs as balance_coordination_admin
+    // (NOLOGIN), which is exempt from the G03-01 trigger
+    // `enforce_shared_snapshot_immutable_after_approval` (it only fires
+    // when current_user = 'balance_app'). The function performs its own
+    // lead-tenant verification (GUC vs parameter) and writes the audit
+    // entry as part of the same transaction.
+    const approvalNotes = input.approvalNotes ?? "";
+    const rows = await tx.$queryRaw<{ approve_coordination_shared_snapshot: boolean }[]>`
+      SELECT public.approve_coordination_shared_snapshot(
+        ${snapshot.id}::text,
+        ${userId}::text,
+        ${tenantId}::text,
+        ${approvalNotes}::text
+      ) AS approve_coordination_shared_snapshot
+    `;
+    const result = rows[0];
+    if (!result || !result.approve_coordination_shared_snapshot) {
+      throw new Error(`approve_coordination_shared_snapshot returned false for snapshot ${snapshot.id}`);
+    }
 
     return { snapshotId: snapshot.id, status: "approved" };
   });
