@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createCoordination, listCoordinations } from "@/lib/reform/coordination-service";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { auth } from "@/lib/auth";
 import { CreateCoordinationInputSchema, ListCoordinationsInputSchema } from "@/lib/reform/coordination-contracts";
 import { ZodError } from "zod";
 
 export async function POST(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   try {
     const body = await req.json();
     const input = CreateCoordinationInputSchema.parse(body);
@@ -21,7 +20,7 @@ export async function POST(req: NextRequest) {
 }
 
 export async function GET(req: NextRequest) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   try {
     const params = Object.fromEntries(new URL(req.url).searchParams);
     const input = ListCoordinationsInputSchema.parse({

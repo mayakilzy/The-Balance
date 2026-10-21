@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSharedSnapshot, listSharedSnapshots } from "@/lib/reform/coordination-service";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/lib/auth";
+import { auth } from "@/lib/auth";
 import { CreateSharedSnapshotInputSchema, ListSharedSnapshotsInputSchema } from "@/lib/reform/coordination-contracts";
 import { ZodError } from "zod";
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   try {
     const { id } = await params;
     const body = await req.json();
@@ -21,7 +20,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 }
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const session = await getServerSession(authOptions);
+  const session = await auth();
   try {
     const { id } = await params;
     const result = await listSharedSnapshots(session, ListSharedSnapshotsInputSchema.parse({ coordinationId: id }));
