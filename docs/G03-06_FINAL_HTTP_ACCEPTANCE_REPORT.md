@@ -6,6 +6,7 @@
 **PR:** https://github.com/mayakilzy/The-Balance/pull/5
 **Approved Baseline:** `79510da97a747d90b96bb4e08776735a5a613ba0`
 **Starting SHA:** `79510da97a747d90b96bb4e08776735a5a613ba0`
+**Final SHA:** `b7a8e691de6d87dc1f3fe93e460f53fb668865ab`
 
 ## 1. Environment
 
@@ -218,18 +219,48 @@ The following G03-05 / G03-06 frozen contracts were NOT modified:
 
 ## 13. CI + Recovery Evidence
 
-The new HEAD includes:
+The new HEAD (`b7a8e69`) includes:
 - 1 new migration (`20261022000030_g03_06_http_acceptance_rls_fixes`)
-- 1 new service-code change in `src/lib/reform/coordination-service.ts` (approveSharedSnapshot reorder + SECURITY DEFINER call)
+- 1 new service-code change in `src/lib/reform/coordination-service.ts` (approveSharedSnapshot reorder + SECURITY DEFINER call + accept-invitation reorder)
 - 1 new seed script (`scripts/seed-http-acceptance.ts`)
-- 1 new test file (`tests/e2e/g03-06-coordination-http.e2e.test.ts`)
+- 1 new test file (`tests/e2e/g03-06-coordination-http.e2e.test.ts` — 45 cases)
+- 1 CI workflow update (`.github/workflows/ci.yml`) — adds seed step + extends E2E step
 
-CI (`bun run lint && bun run typecheck && bun run test`) passes locally:
-- `lint`: 0 errors, 3 pre-existing warnings (unrelated to G03-06).
-- `typecheck`: passes (no TypeScript errors).
-- `test`: 473 pass / 0 fail / 676 skipped (E2E/browser gates).
+CI verification on the final HEAD:
 
-CI + Fresh-Install-Recovery on GitHub Actions for the pushed HEAD is requested as the final verification step.
+| Check | Status | URL |
+|-------|--------|-----|
+| **Lint + Typecheck + Test + Integration (RLS + Append-only)** | ✅ **SUCCESS** | https://github.com/mayakilzy/The-Balance/actions/runs/39691852601 |
+| **Fresh Install + Restart + Backup/Restore** | ✅ **SUCCESS** | https://github.com/mayakilzy/The-Balance/actions/runs/39691852545 |
+
+### Detailed CI step results (Lint + Typecheck + Test workflow)
+
+| Step | Result |
+|------|--------|
+| Setup Bun | success |
+| Install dependencies | success |
+| Generate Prisma client | success |
+| Wait for Postgres (PG 16 + pgvector) | success |
+| Setup database roles + extensions | success |
+| Run migrations (all 30, including migration 30) | success |
+| Seed ontology | success |
+| Verify role privileges | success |
+| Verify DB connection + schema + RLS | success |
+| Lint | success |
+| Typecheck | success |
+| Test (unit + integration with RLS + append-only on real PG) | success |
+| G03-01 SQL acceptance suite (real PG, real migration chain) | success |
+| Build (production) | success |
+| Install Playwright browsers | success |
+| Start Next.js server for Playwright | success |
+| Upload Playwright screenshots | success |
+| **Seed G03-06 HTTP acceptance test users** (NEW step) | success |
+| **G03-02 Reform HTTP E2E tests** (now runs BOTH g03-02 + g03-06 e2e test files) | **success — 58/58 tests pass** |
+
+The G03-02 Reform HTTP E2E step executed both E2E test files together against a real Next.js dev server on port 3001:
+- `tests/e2e/g03-02-reform-e2e.test.ts` — 13 tests (existing)
+- `tests/e2e/g03-06-coordination-http.e2e.test.ts` — 45 tests (NEW)
+- **Total: 58 passed / 0 failed / Duration 36.51s**
 
 ## 14. Merge Readiness
 
