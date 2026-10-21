@@ -1075,6 +1075,7 @@ model ReformProposal {
   supersededBy          ReformProposal?     @relation("ReformProposalSupersession", fields: [supersededById], references: [id])
   supersedes            ReformProposal[]    @relation("ReformProposalSupersession")
   sharedSnapshots       ReformCoordinationSharedSnapshot[]
+  approvalEvents        ReformCoordinationApprovalEvent[]
 
   @@index([tenantId, status])
   @@index([tenantId, originatingAlertId])
@@ -1293,6 +1294,7 @@ model ReformCoordination {
   invitations       ReformCoordinationInvitation[]
   sharedSnapshots   ReformCoordinationSharedSnapshot[]
   proposals         ReformProposal[]
+  approvalEvents    ReformCoordinationApprovalEvent[]
   supersededBy      ReformCoordination? @relation("CoordinationSupersession", fields: [supersededById], references: [id])
   supersedes        ReformCoordination[] @relation("CoordinationSupersession")
 
@@ -1411,4 +1413,43 @@ model ReformCoordinationSharedSnapshotRevocation {
   @@unique([snapshotId])
   @@index([coordinationId])
   @@map("reform_coordination_shared_snapshot_revocations")
+}
+
+/// G03-06: Append-only event log for coordination approval state.
+/// Each row represents ONE event (proposal_linked, approved, superseded, withdrawn).
+/// No UPDATE or DELETE permitted for ANY role (verified by RLS + triggers).
+/// Current approval state is DERIVED by querying the latest event per proposal
+/// via the is_coordination_fully_approved() SQL function.
+///
+/// The `sequenceNumber` column (BIGINT GENERATED ALWAYS AS IDENTITY) provides
+/// deterministic event ordering — no timestamp-tie ambiguity. The activation
+/// predicate uses sequenceNumber > (strictly greater) for all ordering comparisons.
+///
+/// Trust boundary:
+///   - balance_app: SELECT only (coordination-aware RLS — lead sees all events
+///     for their coordinations; participants see only their own tenant's events).
+///   - balance_coordination_admin: SELECT + INSERT only (for SECURITY DEFINER
+///     trigger functions). NO UPDATE or DELETE.
+///   - balance_admin: SELECT only (inspection; no modification).
+///   - NO FOR ALL policy. NO UPDATE or DELETE policy for ANY role.
+///   - 3 layers of protection: GRANT + RLS (FORCE) + append-only triggers.
+model ReformCoordinationApprovalEvent {
+  id                      String   @id @default(cuid())
+  sequenceNumber          BigInt   @default(autoincrement())
+  coordinationId          String
+  participantTenantId     String
+  proposalId              String
+  eventType               String
+  eventAt                 DateTime @default(now())
+  eventBy                 String
+  supersededByProposalId  String?
+  createdAt               DateTime @default(now())
+  metadata                Json     @default("{}")
+
+  coordination            ReformCoordination @relation(fields: [coordinationId], references: [id], onDelete: Restrict)
+  proposal                ReformProposal     @relation(fields: [proposalId], references: [id], onDelete: Restrict)
+
+  @@index([coordinationId, proposalId, sequenceNumber])
+  @@index([participantTenantId, sequenceNumber])
+  @@map("reform_coordination_approval_events")
 }
