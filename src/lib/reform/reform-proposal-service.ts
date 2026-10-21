@@ -71,6 +71,26 @@ export async function createReformProposal(
   return withAuthenticatedTenant(
     session,
     async ({ tx, tenantId, userId }) => {
+      // G03-06 (BC-FIX-01): If coordinationId is provided, acquire L-COORD
+      // BEFORE creating the proposal. This serializes proposal_linked event
+      // creation with concurrent approval/activation paths.
+      // Lock order: L-COORD (canonical key: coordinationId only)
+      if (parsed.coordinationId) {
+        const coordLockKey = coordinationLockKey(parsed.coordinationId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${coordLockKey}))`;
+
+        // Verify the coordination exists and the caller is a participant
+        const coordination = await tx.reformCoordination.findFirst({
+          where: { id: parsed.coordinationId },
+        });
+        if (!coordination) {
+          throw new NotFoundError(
+            `Coordination ${parsed.coordinationId} not found`
+          );
+        }
+        // RLS ensures only lead or active participant can see the coordination
+      }
+
       // Verify the originating alert belongs to this tenant
       const alert = await tx.alert.findFirst({
         where: { id: parsed.originatingAlertId, tenantId },
@@ -86,6 +106,7 @@ export async function createReformProposal(
         data: {
           tenantId,
           originatingAlertId: parsed.originatingAlertId,
+          coordinationId: parsed.coordinationId, // G03-06: link to coordination
           title: parsed.title,
           problemStatement: parsed.problemStatement,
           hypothesizedCauses: parsed.hypothesizedCauses,
@@ -641,128 +662,20 @@ export async function approveReformProposal(
         status: "ok",
       });
 
-      // G03-06 (Phase B): Atomic coordination activation.
-      // If the approved proposal is linked to a coordination AND the coordination
-      // is in 'plan_approved' status, check if ALL linked proposals are now
-      // approved. If so, transition the coordination to 'active'.
+      // G03-06 (BC-FIX-01): Coordination activation is now handled by a
+      // SECURITY DEFINER trigger (check_coordination_activation) that fires
+      // AFTER INSERT on reform_approvals (migration 27). The trigger calls
+      // is_coordination_fully_approved — which balance_coordination_admin
+      // can invoke (implicit EXECUTE as function owner). The trigger sees
+      // ALL events across tenants (permissive RLS), so the ALL-linked-proposals
+      // check is authoritative — unlike the previous inline check which ran
+      // under balance_app RLS and couldn't see other tenants' events.
       //
-      // This runs in the SAME transaction as the approval — atomic with the
-      // approval record creation, proposal status transition, and audit log.
+      // The trigger runs in the SAME transaction as the approval, so atomicity
+      // is preserved. The L-COORD lock (acquired above before L-PROP) is held
+      // for the duration of the transaction, serializing concurrent activation.
       //
-      // The L-COORD advisory lock is already held (acquired above before L-PROP),
-      // so concurrent approvals for the same coordination are serialized.
-      //
-      // The function is_coordination_fully_approved is SECURITY DEFINER owned by
-      // balance_coordination_admin. balance_app does NOT have EXECUTE (revoked
-      // in PR05-FIX-02). We call it via $queryRaw — the application connection
-      // (balance_app) cannot invoke it directly. However, the approval flow
-      // runs inside withAuthenticatedTenant, and we need to evaluate the
-      // activation predicate. Since the function checks app.tenant_id (secondary
-      // gate), we use $queryRaw which runs in the caller's context.
-      //
-      // IMPORTANT: balance_app does NOT have EXECUTE on this function. This
-      // call will fail with "permission denied for function" unless the caller
-      // has EXECUTE. The application must use a trusted connection path.
-      //
-      // Phase B implementation: for now, we evaluate the activation condition
-      // inline (without calling the SQL function) using a Prisma query. This
-      // avoids the EXECUTE boundary issue entirely — the activation check is
-      // done by the application code, not by the SQL function. The SQL function
-      // remains available for inspection by balance_admin and for future use
-      // when a trusted connection path is established.
-      //
-      // The inline check replicates the 5 conditions of is_coordination_fully_approved
-      // but runs under the caller's RLS context (balance_app). This is safe because:
-      //   1. The caller is already authenticated (withAuthenticatedTenant verified)
-      //   2. The caller's tenant is the lead or a participant (verified by the
-      //      coordination's RLS — the proposal is visible to the caller)
-      //   3. The L-COORD lock serializes concurrent activation checks
-      //   4. The result is a BOOLEAN — no cross-tenant content is exposed
-      if (proposalForAlertLock.coordinationId) {
-        const coordination = await tx.reformCoordination.findFirst({
-          where: { id: proposalForAlertLock.coordinationId },
-          select: { id: true, status: true, leadTenantId: true },
-        });
-        if (coordination && coordination.status === "plan_approved") {
-          // Inline activation check (replicates is_coordination_fully_approved conditions)
-          // Condition 1: ≥1 active participant
-          const hasActiveParticipant = await tx.reformCoordinationParticipant.findFirst({
-            where: { coordinationId: coordination.id, status: "active" },
-          });
-          // Condition 2: ≥1 linked proposal (via events table)
-          const hasLinkedProposal = await tx.$queryRaw<{ exists: boolean }[]>`
-            SELECT EXISTS(
-              SELECT 1 FROM "reform_coordination_approval_events"
-              WHERE "coordinationId" = ${coordination.id}::text
-                AND "eventType" = 'proposal_linked'
-            ) AS exists
-          `;
-          // Condition 3: every active participant has ≥1 linked proposal
-          const participantsWithoutProposal = await tx.$queryRaw<{ count: bigint }[]>`
-            SELECT count(*)::bigint AS count FROM "reform_coordination_participants" part
-            WHERE part."coordinationId" = ${coordination.id}::text
-              AND part."status" = 'active'
-              AND NOT EXISTS(
-                SELECT 1 FROM "reform_coordination_approval_events" e
-                WHERE e."coordinationId" = ${coordination.id}::text
-                  AND e."participantTenantId" = part."tenantId"
-                  AND e."eventType" = 'proposal_linked'
-              )
-          `;
-          // Condition 4: every linked proposal has a current approved state
-          // (latest event for each proposal is 'approved', not superseded/withdrawn)
-          const unapprovedProposals = await tx.$queryRaw<{ count: bigint }[]>`
-            SELECT count(*)::bigint AS count FROM "reform_coordination_approval_events" linked
-            WHERE linked."coordinationId" = ${coordination.id}::text
-              AND linked."eventType" = 'proposal_linked'
-              AND NOT EXISTS(
-                SELECT 1 FROM "reform_coordination_approval_events" approved
-                WHERE approved."proposalId" = linked."proposalId"
-                  AND approved."coordinationId" = ${coordination.id}::text
-                  AND approved."eventType" = 'approved'
-                  AND approved."sequenceNumber" > linked."sequenceNumber"
-                  AND NOT EXISTS(
-                    SELECT 1 FROM "reform_coordination_approval_events" invalidated
-                    WHERE invalidated."proposalId" = linked."proposalId"
-                      AND invalidated."coordinationId" = ${coordination.id}::text
-                      AND invalidated."eventType" IN ('superseded', 'withdrawn')
-                      AND invalidated."sequenceNumber" > approved."sequenceNumber"
-                  )
-              )
-          `;
-
-          const fullyApproved =
-            !!hasActiveParticipant &&
-            hasLinkedProposal[0]?.exists === true &&
-            (participantsWithoutProposal[0]?.count ?? BigInt(1)) === BigInt(0) &&
-            (unapprovedProposals[0]?.count ?? BigInt(1)) === BigInt(0);
-
-          if (fullyApproved) {
-            const activatedAt = new Date();
-            await tx.reformCoordination.update({
-              where: { id: coordination.id },
-              data: {
-                status: "active",
-                activatedAt,
-                updatedAt: activatedAt,
-              },
-            });
-
-            await writeAuditTx(tx, {
-              tenantId,
-              actor: userId,
-              action: "reform.coordination.activated",
-              details: {
-                coordinationId: coordination.id,
-                activatedAt: activatedAt.toISOString(),
-                triggerProposalId: parsed.proposalId,
-                triggerApprovalId: approval.id,
-              },
-              status: "ok",
-            });
-          }
-        }
-      }
+      // No inline activation code here — the trigger handles it entirely.
 
       return { approvalId: approval.id, proposalStatus: "approved" };
     }

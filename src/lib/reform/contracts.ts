@@ -141,6 +141,7 @@ export type ReformFeedbackComparisonType = z.infer<typeof ReformFeedbackComparis
 export const CreateReformProposalInputSchema = z
   .object({
     originatingAlertId: z.string().min(1, "originatingAlertId is required"),
+    coordinationId: z.string().min(1).optional(), // G03-06: optional coordination linkage
     title: z.string().min(5, "title must be at least 5 characters").max(200),
     problemStatement: z
       .string()
