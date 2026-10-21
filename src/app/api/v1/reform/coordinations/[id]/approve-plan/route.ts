@@ -9,10 +9,18 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   try {
     const { id } = await params;
     const body = await req.json().catch(() => ({}));
-    if (body.action === 'submit') {
+    // Explicit action validation — reject unknown actions
+    if (body.action !== "submit" && body.action !== "approve") {
+      return NextResponse.json(
+        { error: "validation", message: "action must be 'submit' or 'approve'" },
+        { status: 400 }
+      );
+    }
+    if (body.action === "submit") {
       const result = await submitCoordinationPlan(session, SubmitCoordinationPlanInputSchema.parse({ coordinationId: id }));
       return NextResponse.json(result);
     }
+    // body.action === "approve"
     const result = await approveCoordinationPlan(session, ApproveCoordinationPlanInputSchema.parse({ coordinationId: id, approvalNotes: body.approvalNotes }));
     return NextResponse.json(result);
   } catch (e: unknown) {
