@@ -260,6 +260,15 @@ jobs:
           path: test-results/screenshots/
           retention-days: 7
 
+      - name: Seed G03-06 HTTP acceptance test users
+        # Adds adminb@demolandia.test, reviewera@demolandia.test, observera@demolandia.test
+        # for G03-06 HTTP acceptance tests (tests/e2e/g03-06-coordination-http.e2e.test.ts).
+        # Idempotent — uses upserts by email.
+        if: always()
+        run: bunx tsx scripts/seed-http-acceptance.ts
+        env:
+          DIRECT_URL: "postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
+
       - name: G03-02 Reform HTTP E2E tests (real server + real PG)
         # Runs the 13 authenticated HTTP E2E tests for the G03-02 reform vertical
         # slice. These tests start a real Next.js dev server, make authenticated
@@ -317,7 +326,7 @@ jobs:
           AUTH_TRUST_HOST="true" \
           LLM_PROVIDER="stub" \
           RUN_E2E_HTTP_TESTS=1 \
-          bunx vitest run tests/e2e/g03-02-reform-e2e.test.ts --reporter=verbose
+          bunx vitest run tests/e2e/g03-02-reform-e2e.test.ts tests/e2e/g03-06-coordination-http.e2e.test.ts --reporter=verbose
           E2E_EXIT=$?
 
           # Kill server
