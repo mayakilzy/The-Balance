@@ -116,6 +116,11 @@ beforeAll(async () => {
     throw new Error(`Next.js server not reachable at ${BASE_URL}/api/v1/meta`);
   }
 
+  // Wait 5s before signins to let the rate-limit window recover from
+  // the g01 E2E test's signins (vitest runs files sequentially but
+  // without delay between them).
+  await new Promise((r) => setTimeout(r, 10000));
+
   // Sign in once per role (avoid rate limit on /api/v1/auth/signin: 10/min).
   // Stagger signins to stay under the limit.
   adminACookies = await signIn(ADMIN_A);
@@ -127,7 +132,7 @@ beforeAll(async () => {
   reviewerACookies = await signIn(REVIEWER_A);
   await new Promise((r) => setTimeout(r, 500));
   observerACookies = await signIn(OBSERVER_A);
-}, 120_000);
+}, 180_000);
 
 afterAll(async () => {
   if (!RUN_E2E) return;
@@ -956,7 +961,20 @@ describeE2E("G03-06 HTTP — NEG-9: Invalid or revoked membership cannot bypass 
 
   it("User with revoked membership cannot list coordinations", async () => {
     // Revoked user can authenticate but has no active membership
-    const cookies = await signIn(REVOKED);
+    // Retry on 429 (rate limit) — g01 test may have consumed rate budget
+    let cookies: string[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        cookies = await signIn(REVOKED);
+        break;
+      } catch (e) {
+        if (attempt < 2 && e instanceof Error && e.message.includes("429")) {
+          await new Promise((r) => setTimeout(r, 65000)); // wait 30s and retry
+          continue;
+        }
+        throw e;
+      }
+    }
     const meRes = await fetchWithCookies(cookies, "/api/v1/auth/me");
     const me = await meRes.json();
     if (me.authenticated) {
@@ -966,7 +984,7 @@ describeE2E("G03-06 HTTP — NEG-9: Invalid or revoked membership cannot bypass 
     }
     const res = await fetchWithCookies(cookies, "/api/v1/reform/coordinations");
     expect([401, 403]).toContain(res.status);
-  });
+  }, 120_000);
 
   it("Reviewer (no coordination:manage) cannot submit plan → 403", async () => {
     const coordId = await createCoordinationAsAdminA("neg-reviewer-submit");
