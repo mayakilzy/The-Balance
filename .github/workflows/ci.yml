@@ -592,7 +592,7 @@ jobs:
           ZAI_MODEL: "glm-4-plus"
           RUN_REAL_LLM_TESTS: "1"
         run: |
-          bunx vitest run tests/intelligence/zai-provider.integration.test.ts --reporter=verbose
+          bunx vitest run tests/integration/zai-provider.integration.test.ts --reporter=verbose
           E2E_EXIT=$?
           if [ "$E2E_EXIT" -ne 0 ]; then
             echo "WARNING: Real ZAI provider integration test failed or was skipped."
