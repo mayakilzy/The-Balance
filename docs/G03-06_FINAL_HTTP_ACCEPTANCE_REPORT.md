@@ -6,7 +6,7 @@
 **PR:** https://github.com/mayakilzy/The-Balance/pull/5
 **Approved Baseline:** `79510da97a747d90b96bb4e08776735a5a613ba0`
 **Starting SHA:** `79510da97a747d90b96bb4e08776735a5a613ba0`
-**Final SHA:** `b7a8e691de6d87dc1f3fe93e460f53fb668865ab`
+**Final SHA:** `a88050e0aab83febb0a052cb8809600fee45e7cc` (G03-06-TRUST-BOUNDARY-CLOSURE — includes Migration 32 privileged DB connection)
 
 ## 1. Environment
 
@@ -281,3 +281,29 @@ The G03-02 Reform HTTP E2E step executed both E2E test files together against a 
 | CI + Recovery on new HEAD | _(awaiting GitHub Actions)_ |
 
 **MERGE_READY = YES** (pending owner's final authorization; do NOT merge automatically).
+
+---
+
+## 15. G03-06 Closure (Owner Decision — 2026-10-22)
+
+The owner has reviewed the final HEAD `a88050e` and confirmed:
+
+- CI + Recovery: SUCCESS on the final commit.
+- Migration 32 established a real trust boundary via dedicated privileged DB connection (`balance_snapshot_approver` LOGIN role, separate credentials in `PRIVILEGED_DATABASE_URL`).
+- The GUC-spoofing vulnerability is closed: `balance_app` cannot approve snapshots, cannot `SET ROLE` to the approver, cannot connect as the approver.
+- UPDATE + audit INSERT are atomic on the privileged connection.
+- Authorization (Phase 1, as `balance_app`) and privileged execution (Phase 2, as `balance_snapshot_approver`) are separated — practical for this stage.
+
+**G03-06 is ACCEPTED FOR CLOSURE.**
+
+### Deployment notes
+
+Production deployment MUST:
+1. Set `PRIVILEGED_DATABASE_URL` with a strong, unique password for `balance_snapshot_approver`.
+2. Run `scripts/run-setup-roles.sh` with `PGPASSWORD_BALANCE_SNAPSHOT_APPROVER=<strong-secret>`.
+3. Never use the dev-default password `balance_snapshot_approver_dev_only` in production.
+4. The `balance_snapshot_approver` role is created by Migration 32 with the dev-default password — `run-setup-roles.sh` overrides it with the env-var-supplied password.
+
+### Next step
+
+PR #5 awaits the owner's explicit merge authorization. After merge, the next development mission is `G04-01-REFORM-UI` (see `NEXT_FUNCTIONAL_DELIVERY.md`).
