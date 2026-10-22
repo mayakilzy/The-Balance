@@ -11,23 +11,36 @@
 //   3. Do NOT import z-ai-web-dev-sdk at the top level of this file —
 //      only inside the factory, so unused providers don't inflate the
 //      bundle.
+//
+// Delivery 04: the `zai` provider is now registered + functional.
+// Set LLM_PROVIDER=zai in production to enable real LLM calls.
+// The factory uses dynamic import so the SDK is only loaded when
+// actually needed (LLM_PROVIDER=zai); when LLM_PROVIDER=stub,
+// the SDK is never imported.
 // ============================================================
 import { env } from "@/lib/env";
 import type { LLMProvider } from "./provider";
 import { StubProvider } from "./stub-provider";
 
-type ProviderFactory = () => LLMProvider;
+type ProviderFactory = () => LLMProvider | Promise<LLMProvider>;
 
 const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   stub: () => new StubProvider(),
-  // zai: () => import("./zai-provider").then(m => new m.ZaiProvider()),
+  zai: async () => {
+    const { ZaiProvider } = await import("./zai-provider");
+    return new ZaiProvider();
+  },
   // openai: () => import("./openai-provider").then(m => new m.OpenAIProvider()),
   // anthropic: () => import("./anthropic-provider").then(m => new m.AnthropicProvider()),
 };
 
 let _provider: LLMProvider | null = null;
+let _providerPromise: Promise<LLMProvider> | null = null;
 
 export function getLLMProvider(): LLMProvider {
+  // Synchronous accessor — returns the cached provider or throws
+  // if async init hasn't completed. For async-safe initialization,
+  // use getLLMProviderAsync() below.
   if (_provider === null) {
     const factory = PROVIDER_FACTORIES[env.LLM_PROVIDER];
     if (!factory) {
@@ -36,13 +49,63 @@ export function getLLMProvider(): LLMProvider {
           `Available: ${Object.keys(PROVIDER_FACTORIES).join(", ")}`
       );
     }
-    _provider = factory();
+    // The stub factory is synchronous — assign directly
+    if (env.LLM_PROVIDER === "stub") {
+      _provider = factory() as LLMProvider;
+    } else {
+      // For async providers (zai, openai, etc.), throw if not yet
+      // initialized via getLLMProviderAsync(). The caller should
+      // call the async variant first.
+      throw new Error(
+        `LLM_PROVIDER='${env.LLM_PROVIDER}' requires async initialization. ` +
+          `Call getLLMProviderAsync() first to await SDK setup, then use getLLMProvider().`
+      );
+    }
   }
   return _provider;
 }
 
+/**
+ * Async initializer for LLM providers that require SDK setup
+ * (zai, openai, anthropic). Safe to call multiple times — caches
+ * the init promise so concurrent callers wait for the same init.
+ *
+ * For the stub provider (default), this is a no-op (returns
+ * immediately).
+ */
+export async function getLLMProviderAsync(): Promise<LLMProvider> {
+  if (_provider !== null) return _provider;
+  if (_providerPromise !== null) return _providerPromise;
+
+  const factory = PROVIDER_FACTORIES[env.LLM_PROVIDER];
+  if (!factory) {
+    throw new Error(
+      `Unknown LLM_PROVIDER='${env.LLM_PROVIDER}'. ` +
+        `Available: ${Object.keys(PROVIDER_FACTORIES).join(", ")}`
+    );
+  }
+
+  _providerPromise = Promise.resolve(factory()).then((p) => {
+    _provider = p;
+    return p;
+  });
+  return _providerPromise;
+}
+
 export function resetLLMProviderForTesting(): void {
   _provider = null;
+  _providerPromise = null;
+}
+
+/**
+ * Test-only: inject a custom provider (e.g., a FailingProvider that
+ * always throws LLMProviderError) so the intelligence-service's error
+ * handling can be tested deterministically without depending on a
+ * real external LLM call.
+ */
+export function setLLMProviderForTesting(provider: LLMProvider): void {
+  _provider = provider;
+  _providerPromise = null;
 }
 
 // Re-export public types
@@ -58,3 +121,4 @@ export type {
 } from "./provider";
 export { LLMProviderError, LLMUnsupportedError } from "./provider";
 export { StubProvider } from "./stub-provider";
+export { ZaiProvider } from "./zai-provider";
