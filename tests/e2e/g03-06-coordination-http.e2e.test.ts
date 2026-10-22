@@ -1119,10 +1119,9 @@ describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () 
 
   it("legitimate HTTP snapshot approval still works (trigger fires correctly)", async () => {
     const coordId = await createCoordinationAsAdminA("security-fix-approval");
-    const cookies = await signIn(ADMIN_A);
 
     // Create a draft snapshot
-    const createRes = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots`, {
+    const createRes = await fetchWithCookies(adminACookies, `/api/v1/reform/coordinations/${coordId}/snapshots`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1134,7 +1133,7 @@ describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () 
     const snapId = (await createRes.json()).snapshotId;
 
     // Approve via the HTTP API (uses RLS-gated INSERT + trigger)
-    const res = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
+    const res = await fetchWithCookies(adminACookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ approvalNotes: "Approval after security fix." }),
@@ -1168,10 +1167,9 @@ describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () 
 
   it("duplicate snapshot approval rejected without duplicate audit entry", async () => {
     const coordId = await createCoordinationAsAdminA("security-fix-duplicate");
-    const cookies = await signIn(ADMIN_A);
 
     // Create + approve
-    const createRes = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots`, {
+    const createRes = await fetchWithCookies(adminACookies, `/api/v1/reform/coordinations/${coordId}/snapshots`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -1182,14 +1180,14 @@ describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () 
     });
     const snapId = (await createRes.json()).snapshotId;
 
-    await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
+    await fetchWithCookies(adminACookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
     });
 
     // Second approval should fail (snapshot no longer draft)
-    const secondRes = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
+    const secondRes = await fetchWithCookies(adminACookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({}),
