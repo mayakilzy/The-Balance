@@ -258,7 +258,8 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       createdStrategyIds.push(composeBody.alternatives[0].strategyId);
     }
 
-    if (!versionId) return; // skip if compose returned no alternatives
+    // Compose MUST return alternatives — fail if it didn't (no early-return guard)
+    expect(versionId).toBeTruthy();
     const res = await fetchWithCookies(analystCookies, "/api/v1/state-builder/programs", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -329,7 +330,8 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
     for (const a of composeBody.alternatives) {
       if (a.strategyId) createdStrategyIds.push(a.strategyId);
     }
-    if (!alt1) return; // skip if compose returned no alternatives
+    // Compose MUST return alternatives — fail if it didn't (no early-return guard)
+    expect(alt1).toBeTruthy();
 
     const res = await fetchWithCookies(analystCookies, "/api/v1/state-builder/comparison", {
       method: "POST",
@@ -351,7 +353,8 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
     for (const a of composeBody.alternatives) {
       if (a.strategyId) createdStrategyIds.push(a.strategyId);
     }
-    if (!altId1) return; // skip if compose returned no alternatives
+    // Compose MUST return alternatives — fail if it didn't (no early-return guard)
+    expect(altId1).toBeTruthy();
 
     const res = await fetchWithCookies(analystCookies, "/api/v1/state-builder/advisor", {
       method: "POST",
@@ -366,8 +369,8 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
     const advisorBody = await res.json();
     // Advisor output must include conditional disclaimer (honesty)
     expect(advisorBody.disclaimer ?? advisorBody.conditionalDisclaimer).toBeTruthy();
-    // Must be labeled simulated
-    expect(advisorBody.simulated ?? advisorBody.modelVersion).toBeTruthy();
+    // Must be labeled simulated: true (honesty — no alternative field accepted)
+    expect(advisorBody.simulated).toBe(true);
   });
 
   it("POST /state-builder/roadmap → 200 (implementation roadmap)", async () => {
@@ -399,13 +402,14 @@ describeE2E("G01 State Builder HTTP — Human Approval + Authorization", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ countryId, objectiveIds: createdObjectiveIds.length > 0 ? createdObjectiveIds : ["temp"] }),
     });
-    if (composeRes.status !== 201) return; // skip if compose failed
+    expect(composeRes.status).toBe(201);
     const composeBody = await composeRes.json();
     const versionId = composeBody.alternatives[0]?.versionId;
-    if (!versionId) return;
-    for (const a of composeBody.alternatives) {
-      if (a.strategyId) createdStrategyIds.push(a.strategyId);
-    }
+    const strategyId = composeBody.alternatives[0]?.strategyId;
+    // Compose MUST return a versionId + strategyId — fail if it didn't
+    expect(versionId).toBeTruthy();
+    expect(strategyId).toBeTruthy();
+    createdStrategyIds.push(strategyId);
 
     // Expand programs first (required before approval)
     await fetchWithCookies(analystCookies, "/api/v1/state-builder/programs", {
@@ -415,8 +419,6 @@ describeE2E("G01 State Builder HTTP — Human Approval + Authorization", () => {
     });
 
     // Try to approve as analyst → 403
-    const strategyId = composeBody.alternatives[0]?.strategyId;
-    if (!strategyId) return;
     const res = await fetchWithCookies(analystCookies, `/api/v1/state-builder/strategies/${strategyId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -432,11 +434,13 @@ describeE2E("G01 State Builder HTTP — Human Approval + Authorization", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ countryId, objectiveIds: createdObjectiveIds.length > 0 ? createdObjectiveIds : ["temp"] }),
     });
-    if (composeRes.status !== 201) return;
+    expect(composeRes.status).toBe(201);
     const composeBody = await composeRes.json();
     const versionId = composeBody.alternatives[0]?.versionId;
     const strategyId = composeBody.alternatives[0]?.strategyId;
-    if (!versionId || !strategyId) return;
+    // Compose MUST return a versionId + strategyId — fail if it didn't
+    expect(versionId).toBeTruthy();
+    expect(strategyId).toBeTruthy();
     createdStrategyIds.push(strategyId);
 
     // Expand programs
@@ -459,8 +463,8 @@ describeE2E("G01 State Builder HTTP — Human Approval + Authorization", () => {
   });
 
   it("Approved strategy version is retrievable via GET /strategies/:id", async () => {
-    // Use the strategy from the previous test
-    if (createdStrategyIds.length === 0) return;
+    // Use the strategy from the previous test — MUST exist
+    expect(createdStrategyIds.length).toBeGreaterThan(0);
     const strategyId = createdStrategyIds[createdStrategyIds.length - 1];
     const res = await fetchWithCookies(adminCookies, `/api/v1/state-builder/strategies/${strategyId}`);
     expect(res.status).toBe(200);
