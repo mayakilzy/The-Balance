@@ -26,11 +26,16 @@
 //  16. RLS isolation: Tenant B GET /alerts/[id from A] → 404 (NotFound, NOT 403)
 //      (no cross-tenant leak)
 //
-// Server is spawned in beforeAll on port 3002 (avoids 3001 used by g01
-// + http-auth in case of overlap). Torn down in afterAll.
+// Convention (matches g01-state-builder-http.e2e.test.ts):
+//   - The CI e2e step starts ONE Next.js dev server on port 3001 (shared
+//     across g01/g03-02/g03-06/g02). This test EXPECTS that server.
+//   - It does NOT spawn its own server (avoids .next/dev cache collision
+//     with the shared 3001 instance).
+//   - For LOCAL runs, start the server first:
+//         bun run dev -- -p 3001
+//     Then run with: RUN_E2E_HTTP_TESTS=1 bunx vitest run tests/e2e/g02-state-observatory-http.e2e.test.ts
 // ============================================================
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
-import { spawn, type ChildProcess } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
 import { hashPassword } from "@/lib/password";
 
@@ -39,7 +44,7 @@ const RUN_E2E =
   process.env.SKIP_E2E_SERVER !== "1";
 const describeE2E = RUN_E2E ? describe : describe.skip;
 
-const BASE_URL = "http://localhost:3002";
+const BASE_URL = "http://localhost:3001";
 const DIRECT_URL =
   process.env.DIRECT_URL ??
   "postgresql://balance_admin:balance_admin_dev_only@localhost:5433/balance?schema=public";
@@ -58,7 +63,6 @@ const TENANT_B_ANALYST = {
 };
 
 let adminDb: PrismaClient;
-let serverProcess: ChildProcess | null = null;
 let tenantAId: string;
 let tenantBId: string;
 let countryId: string;
@@ -125,7 +129,7 @@ async function signIn(creds: {
   return cookies;
 }
 
-async function waitForServer(timeoutMs = 120000): Promise<void> {
+async function waitForServer(timeoutMs = 60000): Promise<void> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -136,7 +140,10 @@ async function waitForServer(timeoutMs = 120000): Promise<void> {
     }
     await new Promise((resolve) => setTimeout(resolve, 1000));
   }
-  throw new Error(`Server did not start within ${timeoutMs}ms`);
+  throw new Error(
+    `Server not reachable at ${BASE_URL}/api/v1/meta within ${timeoutMs}ms. ` +
+      `For local runs: bun run dev -- -p 3001 in a separate terminal first.`
+  );
 }
 
 // ============================================================
@@ -340,34 +347,13 @@ beforeAll(async () => {
 
   await ensureG02Fixtures();
 
-  // Spawn Next.js dev server on port 3002
-  serverProcess = spawn(
-    "bun",
-    ["run", "dev", "--", "-p", "3002"],
-    {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        PORT: "3002",
-        NODE_ENV: "development",
-      },
-      stdio: ["ignore", "pipe", "pipe"],
-      detached: false,
-    }
-  );
-
-  serverProcess.stdout?.on("data", (data) => {
-    const text = data.toString();
-    if (process.env.E2E_DEBUG) process.stdout.write("[server] " + text);
-  });
-  serverProcess.stderr?.on("data", (data) => {
-    const text = data.toString();
-    if (process.env.E2E_DEBUG) process.stderr.write("[server error] " + text);
-  });
-
+  // Probe the shared Next.js dev server on port 3001 (matches g01 + g03-06 convention).
+  // CI's e2e step starts this server BEFORE running the vitest e2e command.
+  // For LOCAL runs, start the server first: `bun run dev -- -p 3001`
   await waitForServer();
 
   // Wait 2s to avoid rate-limit collision with other signin-happy tests
+  // (signin endpoint allows 10 POSTs/min; g01 + g03-06 use 7 slots before us)
   await new Promise((r) => setTimeout(r, 2000));
 
   analystCookies = await signIn(ANALYST);
@@ -375,13 +361,9 @@ beforeAll(async () => {
   reviewerCookies = await signIn(REVIEWER);
   await new Promise((r) => setTimeout(r, 500));
   tenantBCookies = await signIn(TENANT_B_ANALYST);
-}, 180_000);
+}, 120_000);
 
 afterAll(async () => {
-  if (serverProcess) {
-    serverProcess.kill("SIGTERM");
-    serverProcess = null;
-  }
   if (adminDb) {
     // Clean up G02 artifacts created by this test run
     await adminDb.alert.deleteMany({
