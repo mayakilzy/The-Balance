@@ -66,7 +66,7 @@ describeReal("ZAI Real Provider Integration", () => {
     expect(result.content.toLowerCase()).toContain("ok");
   }, 60_000);
 
-  it("real provider produces structured JSON when asked (for intelligence analysis)", async () => {
+  it("real provider produces structured JSON when asked — STRICT validation (fails if unparseable)", async () => {
     const { ZaiProvider } = await import("@/lib/llm/zai-provider");
     const provider = new ZaiProvider();
 
@@ -75,7 +75,7 @@ describeReal("ZAI Real Provider Integration", () => {
         {
           role: "system",
           content:
-            "You are a test assistant. Return a JSON object with the field 'status' set to 'ok'. Return ONLY the JSON.",
+            "You are a test assistant. Return a JSON object with the field 'status' set to 'ok'. Return ONLY the JSON. No markdown, no prose.",
         },
         { role: "user", content: "Return the JSON object now." },
       ],
@@ -85,32 +85,44 @@ describeReal("ZAI Real Provider Integration", () => {
 
     expect(result.content).toBeTruthy();
 
-    // The response should be parseable as JSON (allowing for markdown fences)
+    // STRICT: the response MUST be parseable as JSON. If it is not,
+    // the test FAILS — no fallback to "accept any non-empty text".
+    // This is the owner's directive: "اجعل اختبار مزود Z.ai الحقيقي
+    // يفشل إذا لم تكن الاستجابة JSON صحيحة ومطابقة للعقد المطلوب."
     let text = result.content.trim();
+    // Strip markdown fences if present
     if (text.startsWith("```")) {
       text = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
     }
-    let parsed: unknown = null;
+
+    let parsed: unknown;
     try {
       parsed = JSON.parse(text);
-    } catch (e) {
-      // Some LLMs add prose around the JSON. Try to extract the JSON object.
+    } catch {
+      // Try extracting JSON object from prose
       const match = text.match(/\{[\s\S]*\}/);
       if (match) {
         try {
           parsed = JSON.parse(match[0]);
         } catch {
-          // Still failed — log but don't fail the test (LLM variability)
-          console.warn("Could not parse LLM output as JSON:", text.slice(0, 200));
+          // STRICT FAILURE: the LLM's response is not valid JSON
+          throw new Error(
+            `STRICT JSON VALIDATION FAILED: real LLM response is not parseable as JSON. ` +
+              `Raw content (first 500 chars): ${result.content.slice(0, 500)}`
+          );
         }
+      } else {
+        throw new Error(
+          `STRICT JSON VALIDATION FAILED: no JSON object found in LLM response. ` +
+            `Raw content (first 500 chars): ${result.content.slice(0, 500)}`
+        );
       }
     }
-    // If we got a parseable object, verify it has the expected field
-    if (parsed && typeof parsed === "object") {
-      expect((parsed as Record<string, unknown>).status).toBe("ok");
-    }
-    // If not parseable, the test still passes — we only verify the
-    // plumbing works (non-empty content + correct provider/model).
+
+    // Verify the parsed object matches the contract
+    expect(parsed).toBeDefined();
+    expect(typeof parsed).toBe("object");
+    expect((parsed as Record<string, unknown>).status).toBe("ok");
   }, 60_000);
 
   it("real provider health check returns true", async () => {
@@ -183,7 +195,10 @@ EVIDENCE (authorized records):
       text = text.replace(/^```(?:json)?\s*/, "").replace(/\s*```$/, "");
     }
 
-    let parsed: unknown = null;
+    // STRICT: the LLM MUST produce valid JSON matching the intelligence
+    // analysis contract (summary + blocks[]). If it doesn't, the test
+    // FAILS — no tolerance for unparseable output.
+    let parsed: unknown;
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -192,21 +207,48 @@ EVIDENCE (authorized records):
         try {
           parsed = JSON.parse(match[0]);
         } catch {
-          // Tolerate LLM variability — log but don't fail
-          console.warn(
-            "Real LLM did not produce parseable JSON. Raw (first 500 chars):",
-            text.slice(0, 500)
+          throw new Error(
+            `STRICT CONTRACT VALIDATION FAILED: real LLM did not produce parseable JSON for intelligence analysis. ` +
+              `Raw content (first 500 chars): ${text.slice(0, 500)}`
           );
         }
+      } else {
+        throw new Error(
+          `STRICT CONTRACT VALIDATION FAILED: no JSON object found in intelligence analysis response. ` +
+            `Raw content (first 500 chars): ${text.slice(0, 500)}`
+        );
       }
     }
 
-    if (parsed && typeof parsed === "object") {
-      const obj = parsed as Record<string, unknown>;
-      expect(obj.summary).toBeDefined();
-      expect(Array.isArray(obj.blocks)).toBe(true);
+    // Verify the parsed object matches the intelligence analysis contract
+    expect(parsed).toBeDefined();
+    expect(typeof parsed).toBe("object");
+    const obj = parsed as Record<string, unknown>;
+    expect(obj.summary).toBeDefined();
+    expect(typeof obj.summary).toBe("string");
+    expect(Array.isArray(obj.blocks)).toBe(true);
+    expect((obj.blocks as unknown[]).length).toBeGreaterThan(0);
+
+    // Verify each block has the required fields (kind + text)
+    const validKinds = new Set([
+      "factual_evidence",
+      "calculation",
+      "model_inference",
+      "missing_information",
+      "uncertainty",
+    ]);
+    for (const block of obj.blocks as Array<Record<string, unknown>>) {
+      expect(block.kind).toBeDefined();
+      expect(validKinds.has(block.kind as string)).toBe(true);
+      expect(block.text).toBeDefined();
+      expect(typeof block.text).toBe("string");
     }
-    // Test passes regardless of JSON parseability — we verified the
-    // plumbing works (real LLM call + response shape correct).
+
+    // Verify the analysis includes at least one model_inference block
+    // (the LLM's reasoning — clearly distinguished from factual_evidence)
+    const blockKinds = (obj.blocks as Array<Record<string, unknown>>).map(
+      (b) => b.kind
+    );
+    expect(blockKinds).toContain("model_inference");
   }, 120_000);
 });

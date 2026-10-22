@@ -97,6 +97,17 @@ export function resetLLMProviderForTesting(): void {
   _providerPromise = null;
 }
 
+/**
+ * Test-only: inject a custom provider (e.g., a FailingProvider that
+ * always throws LLMProviderError) so the intelligence-service's error
+ * handling can be tested deterministically without depending on a
+ * real external LLM call.
+ */
+export function setLLMProviderForTesting(provider: LLMProvider): void {
+  _provider = provider;
+  _providerPromise = null;
+}
+
 // Re-export public types
 export type {
   LLMProvider,
