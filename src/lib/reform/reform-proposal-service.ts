@@ -55,6 +55,7 @@ import type {
   RejectReformProposalInput,
 } from "./contracts";
 import { lockProposalRow } from "./lock-helper";
+import { coordinationLockKey } from "./coordination-contracts";
 
 // ============================================================
 // Create: analyst drafts a proposal linked to an existing G02 alert
@@ -70,6 +71,26 @@ export async function createReformProposal(
   return withAuthenticatedTenant(
     session,
     async ({ tx, tenantId, userId }) => {
+      // G03-06 (BC-FIX-01): If coordinationId is provided, acquire L-COORD
+      // BEFORE creating the proposal. This serializes proposal_linked event
+      // creation with concurrent approval/activation paths.
+      // Lock order: L-COORD (canonical key: coordinationId only)
+      if (parsed.coordinationId) {
+        const coordLockKey = coordinationLockKey(parsed.coordinationId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${coordLockKey}))`;
+
+        // Verify the coordination exists and the caller is a participant
+        const coordination = await tx.reformCoordination.findFirst({
+          where: { id: parsed.coordinationId },
+        });
+        if (!coordination) {
+          throw new NotFoundError(
+            `Coordination ${parsed.coordinationId} not found`
+          );
+        }
+        // RLS ensures only lead or active participant can see the coordination
+      }
+
       // Verify the originating alert belongs to this tenant
       const alert = await tx.alert.findFirst({
         where: { id: parsed.originatingAlertId, tenantId },
@@ -85,6 +106,7 @@ export async function createReformProposal(
         data: {
           tenantId,
           originatingAlertId: parsed.originatingAlertId,
+          coordinationId: parsed.coordinationId, // G03-06: link to coordination
           title: parsed.title,
           problemStatement: parsed.problemStatement,
           hypothesizedCauses: parsed.hypothesizedCauses,
@@ -286,7 +308,7 @@ export async function approveReformProposal(
       // skip the advisory lock and supersession — no alert to lock on.
       const proposalForAlertLock = await tx.reformProposal.findFirst({
         where: { id: parsed.proposalId, tenantId },
-        select: { id: true, originatingAlertId: true, strategyVersionId: true },
+        select: { id: true, originatingAlertId: true, strategyVersionId: true, coordinationId: true },
       });
       if (!proposalForAlertLock) {
         throw new NotFoundError(
@@ -298,6 +320,17 @@ export async function approveReformProposal(
         // Acquire alert-level advisory lock (transaction-scoped)
         const alertLockKey = `${tenantId}:${proposalForAlertLock.originatingAlertId}`;
         await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${alertLockKey}))`;
+      }
+
+      // G03-06 (Phase C): Acquire coordination-level advisory lock BEFORE proposal-row lock.
+      // Lock ordering: L-ALERT → L-COORD → L-PROP
+      // L-COORD uses a CANONICAL key: hashtext(coordinationId) — NOT tenantId.
+      // This ensures all participants share the same lock across tenants.
+      // A lead in tenant-A and a participant in tenant-B approving proposals for
+      // the same coordination will acquire the SAME lock, serializing activation.
+      if (proposalForAlertLock.coordinationId) {
+        const coordLockKey = coordinationLockKey(proposalForAlertLock.coordinationId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${coordLockKey}))`;
       }
 
       // G03-03: Acquire proposal-row lock (SELECT FOR UPDATE) to serialize
@@ -629,6 +662,21 @@ export async function approveReformProposal(
         status: "ok",
       });
 
+      // G03-06 (BC-FIX-01): Coordination activation is now handled by a
+      // SECURITY DEFINER trigger (check_coordination_activation) that fires
+      // AFTER INSERT on reform_approvals (migration 27). The trigger calls
+      // is_coordination_fully_approved — which balance_coordination_admin
+      // can invoke (implicit EXECUTE as function owner). The trigger sees
+      // ALL events across tenants (permissive RLS), so the ALL-linked-proposals
+      // check is authoritative — unlike the previous inline check which ran
+      // under balance_app RLS and couldn't see other tenants' events.
+      //
+      // The trigger runs in the SAME transaction as the approval, so atomicity
+      // is preserved. The L-COORD lock (acquired above before L-PROP) is held
+      // for the duration of the transaction, serializing concurrent activation.
+      //
+      // No inline activation code here — the trigger handles it entirely.
+
       return { approvalId: approval.id, proposalStatus: "approved" };
     }
   );
@@ -648,6 +696,22 @@ export async function rejectReformProposal(
   return withAuthenticatedTenant(
     session,
     async ({ tx, tenantId, userId }) => {
+      // G03-06 Phase C: acquire L-COORD before updating the proposal,
+      // to serialize with approval/activation paths.
+      const proposalForCoordLock = await tx.reformProposal.findFirst({
+        where: { id: parsed.proposalId, tenantId },
+        select: { id: true, coordinationId: true },
+      });
+      if (!proposalForCoordLock) {
+        throw new NotFoundError(
+          `Proposal ${parsed.proposalId} not found in tenant ${tenantId}`
+        );
+      }
+      if (proposalForCoordLock.coordinationId) {
+        const coordLockKey = coordinationLockKey(proposalForCoordLock.coordinationId);
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${coordLockKey}))`;
+      }
+
       // Conditional update: only under_review proposals can be rejected
       const result = await tx.reformProposal.updateMany({
         where: {

@@ -25,17 +25,19 @@ DB_SUPERUSER="${DB_SUPERUSER:-postgres}"
 ADMIN_PW="${PGPASSWORD_BALANCE_ADMIN:-balance_admin_dev_only}"
 APP_PW="${PGPASSWORD_BALANCE_APP:-balance_app_dev_only}"
 AUTH_PW="${PGPASSWORD_BALANCE_AUTH:-balance_auth_dev_only}"
+APPROVER_PW="${PGPASSWORD_BALANCE_SNAPSHOT_APPROVER:-balance_snapshot_approver_dev_only}"
 
 # Warn if using dev defaults
-if [ "$ADMIN_PW" = "balance_admin_dev_only" ] || [ "$APP_PW" = "balance_app_dev_only" ] || [ "$AUTH_PW" = "balance_auth_dev_only" ]; then
+if [ "$ADMIN_PW" = "balance_admin_dev_only" ] || [ "$APP_PW" = "balance_app_dev_only" ] || [ "$AUTH_PW" = "balance_auth_dev_only" ] || [ "$APPROVER_PW" = "balance_snapshot_approver_dev_only" ]; then
     echo "WARNING: Using dev-default passwords. NOT FOR PRODUCTION." >&2
-    echo "  Set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP + PGPASSWORD_BALANCE_AUTH for production." >&2
+    echo "  Set PGPASSWORD_BALANCE_ADMIN + PGPASSWORD_BALANCE_APP + PGPASSWORD_BALANCE_AUTH + PGPASSWORD_BALANCE_SNAPSHOT_APPROVER for production." >&2
 fi
 
 # Ensure non-empty (defense in depth)
 if [ -z "$ADMIN_PW" ]; then ADMIN_PW="balance_admin_dev_only"; fi
 if [ -z "$APP_PW" ]; then APP_PW="balance_app_dev_only"; fi
 if [ -z "$AUTH_PW" ]; then AUTH_PW="balance_auth_dev_only"; fi
+if [ -z "$APPROVER_PW" ]; then APPROVER_PW="balance_snapshot_approver_dev_only"; fi
 
 # Run the SQL script.
 PGPASSWORD="${PGPASSWORD_POSTGRES:-postgres}" \
@@ -45,6 +47,7 @@ psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_SUPERUSER" -d "$DB_NAME" \
 \set balance_admin_pw \`printf '%s' "$ADMIN_PW"\`
 \set balance_app_pw \`printf '%s' "$APP_PW"\`
 \set balance_auth_pw \`printf '%s' "$AUTH_PW"\`
+\set balance_snapshot_approver_pw \`printf '%s' "$APPROVER_PW"\`
 \i scripts/setup-roles.sql
 PSQL_EOF
 
