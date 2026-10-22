@@ -223,7 +223,7 @@ describe("Provider Failure Handling (deterministic — no real LLM call)", () =>
       (b) => b.kind === "missing_information"
     );
     expect(missingInfoBlocks.length).toBeGreaterThan(0);
-    const failureBlock = missingInfoBlocks[0];
+    const failureBlock = missingInfoBlocks[0]!;
     expect(failureBlock.text).toContain("LLM provider failed");
     expect(failureBlock.text).toContain("TIMEOUT");
     expect(failureBlock.text).toContain("deterministic failure test");
@@ -256,7 +256,7 @@ describe("Provider Failure Handling (deterministic — no real LLM call)", () =>
 
     const missingBlocks = result.blocks.filter((b) => b.kind === "missing_information");
     expect(missingBlocks.length).toBeGreaterThan(0);
-    expect(missingBlocks[0].text).toContain("AUTH_FAILED");
+    expect(missingBlocks[0]!.text).toContain("AUTH_FAILED");
     expect(result.provider).toBe("auth-failing");
   }, 30_000);
 });
