@@ -346,11 +346,12 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       body: JSON.stringify({ countryId, objectiveIds: createdObjectiveIds }),
     });
     const composeBody = await composeRes.json();
-    const altId = composeBody.alternatives[0]?.versionId;
+    const altId1 = composeBody.alternatives[0]?.versionId;
+    const altId2 = composeBody.alternatives[1]?.versionId ?? altId1;
     for (const a of composeBody.alternatives) {
       if (a.strategyId) createdStrategyIds.push(a.strategyId);
     }
-    if (!altId) return; // skip if compose returned no alternatives
+    if (!altId1) return; // skip if compose returned no alternatives
 
     const res = await fetchWithCookies(analystCookies, "/api/v1/state-builder/advisor", {
       method: "POST",
@@ -358,7 +359,7 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       body: JSON.stringify({
         countryId,
         objectiveIds: createdObjectiveIds,
-        alternativeIds: [altId],
+        alternativeIds: [altId1, altId2],
       }),
     });
     expect(res.status).toBe(200);

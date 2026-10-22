@@ -119,7 +119,7 @@ beforeAll(async () => {
   // Wait 5s before signins to let the rate-limit window recover from
   // the g01 E2E test's signins (vitest runs files sequentially but
   // without delay between them).
-  await new Promise((r) => setTimeout(r, 5000));
+  await new Promise((r) => setTimeout(r, 10000));
 
   // Sign in once per role (avoid rate limit on /api/v1/auth/signin: 10/min).
   // Stagger signins to stay under the limit.

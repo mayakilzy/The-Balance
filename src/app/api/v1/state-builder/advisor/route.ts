@@ -11,7 +11,7 @@ export const dynamic = "force-dynamic";
 const AdviseBodySchema = z.object({
   countryId: z.string().min(1),
   objectiveIds: z.array(z.string().min(1)).min(1),
-  alternativeIds: z.array(z.string().min(1)).min(1),
+  alternativeIds: z.array(z.string().min(1)).min(2),
 });
 
 export async function POST(request: Request) {
