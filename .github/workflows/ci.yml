@@ -330,7 +330,7 @@ jobs:
           AUTH_TRUST_HOST="true" \
           LLM_PROVIDER="stub" \
           RUN_E2E_HTTP_TESTS=1 \
-          bunx vitest run tests/e2e/g03-02-reform-e2e.test.ts tests/e2e/g03-06-coordination-http.e2e.test.ts --reporter=verbose
+          bunx vitest run tests/e2e/g03-02-reform-e2e.test.ts tests/e2e/g03-06-coordination-http.e2e.test.ts tests/e2e/g01-state-builder-http.e2e.test.ts --reporter=verbose
           E2E_EXIT=$?
 
           # Kill server
