@@ -242,6 +242,11 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
   });
 
   it("POST /state-builder/programs → 201 (expand programs)", async () => {
+    // Verify session has correct tenantId
+    const meRes = await fetchWithCookies(analystCookies, "/api/v1/auth/me");
+    const me = await meRes.json();
+    console.log("DEBUG analyst session: tenantId=", me.user?.tenantId, "countryId=", countryId);
+
     // Use the first alternative's versionId
     const composeRes = await fetchWithCookies(analystCookies, "/api/v1/state-builder/strategies", {
       method: "POST",
