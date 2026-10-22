@@ -194,7 +194,6 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       body: JSON.stringify({ countryId }),
     });
     expect(res.status).toBe(201);
-    const baselineBody = await res.json();
     const body = await res.json();
     expect(body.taskId).toBeTruthy();
     expect(body.report).toBeTruthy();
