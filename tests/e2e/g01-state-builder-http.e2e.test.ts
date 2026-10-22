@@ -194,6 +194,8 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       body: JSON.stringify({ countryId }),
     });
     expect(res.status).toBe(201);
+    const baselineBody = await res.json();
+    console.log("DEBUG baseline dimensions:", baselineBody.report?.dimensions?.map((d: any) => ({ sector: d.sector, indicators: d.indicators?.length })));
     const body = await res.json();
     expect(body.taskId).toBeTruthy();
     expect(body.report).toBeTruthy();
