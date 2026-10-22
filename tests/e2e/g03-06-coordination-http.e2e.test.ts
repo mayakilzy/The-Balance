@@ -136,6 +136,9 @@ afterAll(async () => {
     await adminDb.reformCoordinationSharedSnapshotRevocation.deleteMany({
       where: { coordinationId: { in: createdCoordinationIds } },
     }).catch(() => {});
+    await adminDb.reformCoordinationSnapshotApprovalRequest.deleteMany({
+      where: { snapshot: { coordinationId: { in: createdCoordinationIds } } },
+    }).catch(() => {});
     await adminDb.reformCoordinationSharedSnapshot.deleteMany({
       where: { coordinationId: { in: createdCoordinationIds } },
     }).catch(() => {});
@@ -1059,5 +1062,147 @@ describeE2E("G03-06 HTTP — DB persistence + audit records", () => {
     expect(actions).toContain("reform.coordination.created");
     expect(actions).toContain("reform.coordination.plan_submitted");
     expect(actions).toContain("reform.coordination.plan_approved");
+  });
+});
+
+// ============================================================
+// SECURITY FIX: Direct privileged function execution is DENIED
+// ------------------------------------------------------------
+// Migration 31 dropped the direct-call function
+// approve_coordination_shared_snapshot and replaced it with a
+// trigger-based pattern. balance_app CANNOT call any privileged
+// function directly — the ONLY path is through the RLS-gated INSERT
+// on reform_coordination_snapshot_approval_requests.
+// ============================================================
+describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () => {
+  it("approve_coordination_shared_snapshot function does not exist (dropped)", async () => {
+    const result = await adminDb.$queryRaw<{ exists: boolean }[]>`
+      SELECT EXISTS(
+        SELECT 1 FROM pg_proc
+        WHERE proname = 'approve_coordination_shared_snapshot'
+      ) AS exists
+    `;
+    expect(result[0]?.exists).toBe(false);
+  });
+
+  it("process_snapshot_approval_request has NO EXECUTE grant to balance_app", async () => {
+    const result = await adminDb.$queryRaw<{ has_execute: boolean }[]>`
+      SELECT has_function_privilege('balance_app', 'process_snapshot_approval_request()', 'EXECUTE') AS has_execute
+    `;
+    expect(result[0]?.has_execute).toBe(false);
+  });
+
+  it("balance_coordination_admin UPDATE on shared_snapshots is column-scoped", async () => {
+    // Should NOT have table-level UPDATE
+    const tableResult = await adminDb.$queryRaw<{ has_update: boolean }[]>`
+      SELECT has_table_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'UPDATE') AS has_update
+    `;
+    expect(tableResult[0]?.has_update).toBe(false);
+
+    // Should have column-level UPDATE on status, approvedAt, approvedBy
+    const colResult = await adminDb.$queryRaw<{ status: boolean; approved_at: boolean; approved_by: boolean }[]>`
+      SELECT
+        has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'status', 'UPDATE') AS status,
+        has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'approvedAt', 'UPDATE') AS approved_at,
+        has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'approvedBy', 'UPDATE') AS approved_by
+    `;
+    expect(colResult[0]?.status).toBe(true);
+    expect(colResult[0]?.approved_at).toBe(true);
+    expect(colResult[0]?.approved_by).toBe(true);
+
+    // Should NOT have column-level UPDATE on title (content field)
+    const titleResult = await adminDb.$queryRaw<{ has_title_update: boolean }[]>`
+      SELECT has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'title', 'UPDATE') AS has_title_update
+    `;
+    expect(titleResult[0]?.has_title_update).toBe(false);
+  });
+
+  it("legitimate HTTP snapshot approval still works (trigger fires correctly)", async () => {
+    const coordId = await createCoordinationAsAdminA("security-fix-approval");
+    const cookies = await signIn(ADMIN_A);
+
+    // Create a draft snapshot
+    const createRes = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        snapshotType: "custom",
+        title: "Post-Security-Fix Snapshot",
+        summary: "Snapshot to verify approval works after Migration 31.",
+      }),
+    });
+    const snapId = (await createRes.json()).snapshotId;
+
+    // Approve via the HTTP API (uses RLS-gated INSERT + trigger)
+    const res = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approvalNotes: "Approval after security fix." }),
+    });
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.status).toBe("approved");
+
+    // Verify the snapshot is approved in the DB
+    const snap = await adminDb.reformCoordinationSharedSnapshot.findUnique({ where: { id: snapId } });
+    expect(snap!.status).toBe("approved");
+    expect(snap!.approvedBy).toBeTruthy();
+
+    // Verify an approval_request row was created
+    const req = await adminDb.reformCoordinationSnapshotApprovalRequest.findFirst({
+      where: { snapshotId: snapId },
+    });
+    expect(req).toBeTruthy();
+    expect(req!.processedAt).toBeTruthy();
+
+    // Verify the audit log entry
+    const audit = await adminDb.auditLog.findFirst({
+      where: {
+        action: "reform.coordination.snapshot_approved",
+        details: { path: ["snapshotId"], equals: snapId } as any,
+      },
+      orderBy: { at: "desc" },
+    });
+    expect(audit).toBeTruthy();
+  });
+
+  it("duplicate snapshot approval rejected without duplicate audit entry", async () => {
+    const coordId = await createCoordinationAsAdminA("security-fix-duplicate");
+    const cookies = await signIn(ADMIN_A);
+
+    // Create + approve
+    const createRes = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        snapshotType: "custom",
+        title: "Duplicate Approval Test",
+        summary: "Snapshot to verify duplicate approval is rejected.",
+      }),
+    });
+    const snapId = (await createRes.json()).snapshotId;
+
+    await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+
+    // Second approval should fail (snapshot no longer draft)
+    const secondRes = await fetchWithCookies(cookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    expect(secondRes.status).toBe(409);
+
+    // Verify only ONE audit entry exists
+    const auditCount = await adminDb.auditLog.count({
+      where: {
+        action: "reform.coordination.snapshot_approved",
+        details: { path: ["snapshotId"], equals: snapId } as any,
+      },
+    });
+    expect(auditCount).toBe(1);
   });
 });

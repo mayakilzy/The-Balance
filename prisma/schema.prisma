@@ -1392,6 +1392,7 @@ model ReformCoordinationSharedSnapshot {
   proposal       ReformProposal?    @relation(fields: [proposalId], references: [id])
   action         ReformAction?      @relation("ReformSharedSnapshotAction", fields: [actionId], references: [id])
   revocations    ReformCoordinationSharedSnapshotRevocation[]
+  approvalRequest ReformCoordinationSnapshotApprovalRequest?
 
   @@index([coordinationId, status])
   @@index([ownerTenantId, status])
@@ -1413,6 +1414,29 @@ model ReformCoordinationSharedSnapshotRevocation {
   @@unique([snapshotId])
   @@index([coordinationId])
   @@map("reform_coordination_shared_snapshot_revocations")
+}
+
+/// G03-06 Security Fix (Migration 31): RLS-gated approval request table.
+/// balance_app can INSERT only when their app.tenant_id matches the lead
+/// tenant of the coordination AND requestedBy matches app.user_id.
+/// The AFTER INSERT trigger `process_snapshot_approval_trigger` fires as
+/// balance_coordination_admin (SECURITY DEFINER) and performs the snapshot
+/// UPDATE + audit_log INSERT. balance_app CANNOT call the trigger function
+/// directly — the INSERT is the ONLY invocation path.
+model ReformCoordinationSnapshotApprovalRequest {
+  id            String    @id @default(cuid())
+  snapshotId    String
+  tenantId      String
+  requestedBy   String
+  notes         String?
+  createdAt     DateTime  @default(now())
+  processedAt   DateTime?
+
+  snapshot      ReformCoordinationSharedSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+
+  @@unique([snapshotId])
+  @@index([tenantId, createdAt])
+  @@map("reform_coordination_snapshot_approval_requests")
 }
 
 /// G03-06: Append-only event log for coordination approval state.

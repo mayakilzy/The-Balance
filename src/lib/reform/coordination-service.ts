@@ -749,27 +749,27 @@ export async function approveSharedSnapshot(
       throw new ConflictError(`Snapshot ${input.snapshotId} is not in draft status`);
     }
 
-    // G03-06 HTTP Acceptance fix: invoke the SECURITY DEFINER function
-    // approve_coordination_shared_snapshot (migration 30) instead of a
-    // direct UPDATE. The function runs as balance_coordination_admin
-    // (NOLOGIN), which is exempt from the G03-01 trigger
-    // `enforce_shared_snapshot_immutable_after_approval` (it only fires
-    // when current_user = 'balance_app'). The function performs its own
-    // lead-tenant verification (GUC vs parameter) and writes the audit
-    // entry as part of the same transaction.
-    const approvalNotes = input.approvalNotes ?? "";
-    const rows = await tx.$queryRaw<{ approve_coordination_shared_snapshot: boolean }[]>`
-      SELECT public.approve_coordination_shared_snapshot(
-        ${snapshot.id}::text,
-        ${userId}::text,
-        ${tenantId}::text,
-        ${approvalNotes}::text
-      ) AS approve_coordination_shared_snapshot
+    // G03-06 Security Fix (Migration 31): INSERT into the RLS-gated
+    // reform_coordination_snapshot_approval_requests table. The RLS
+    // INSERT policy verifies:
+    //   (a) tenantId = current_setting('app.tenant_id')
+    //   (b) requestedBy = current_setting('app.user_id')
+    //   (c) the snapshot is in 'draft' status
+    //   (d) the coordination's leadTenantId = current_setting('app.tenant_id')
+    //
+    // The AFTER INSERT trigger `process_snapshot_approval_trigger` fires
+    // as balance_coordination_admin (SECURITY DEFINER) and performs the
+    // UPDATE on shared_snapshots + writes the audit_log entry.
+    //
+    // balance_app CANNOT call the trigger function directly (no EXECUTE
+    // grant). The INSERT is the ONLY invocation path, and it is RLS-gated.
+    // The approver identity (requestedBy) is verified by the RLS policy
+    // to match the session's app.user_id GUC — it cannot be forged.
+    await tx.$executeRaw`
+      INSERT INTO reform_coordination_snapshot_approval_requests
+        ("snapshotId", "tenantId", "requestedBy", "notes")
+      VALUES (${snapshot.id}, ${tenantId}, ${userId}, ${input.approvalNotes ?? ""})
     `;
-    const result = rows[0];
-    if (!result || !result.approve_coordination_shared_snapshot) {
-      throw new Error(`approve_coordination_shared_snapshot returned false for snapshot ${snapshot.id}`);
-    }
 
     return { snapshotId: snapshot.id, status: "approved" };
   });
