@@ -195,7 +195,6 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
     });
     expect(res.status).toBe(201);
     const baselineBody = await res.json();
-    console.log("DEBUG baseline dimensions:", baselineBody.report?.dimensions?.map((d: any) => ({ sector: d.sector, indicators: d.indicators?.length })));
     const body = await res.json();
     expect(body.taskId).toBeTruthy();
     expect(body.report).toBeTruthy();
@@ -247,7 +246,6 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
     // Verify session has correct tenantId
     const meRes = await fetchWithCookies(analystCookies, "/api/v1/auth/me");
     const me = await meRes.json();
-    console.log("DEBUG analyst session: tenantId=", me.user?.tenantId, "countryId=", countryId);
 
     // Use the first alternative's versionId
     const composeRes = await fetchWithCookies(analystCookies, "/api/v1/state-builder/strategies", {
@@ -256,7 +254,6 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       body: JSON.stringify({ countryId, objectiveIds: createdObjectiveIds }),
     });
     const composeBody = await composeRes.json();
-    console.log("DEBUG programs test: alternatives=", composeBody.alternatives?.length, "programs[0]=", composeBody.alternatives?.[0]?.programs?.length, "versionId=", composeBody.alternatives?.[0]?.versionId);
     const versionId = composeBody.alternatives[0]?.versionId;
     if (composeBody.alternatives[0]?.strategyId) {
       createdStrategyIds.push(composeBody.alternatives[0].strategyId);
