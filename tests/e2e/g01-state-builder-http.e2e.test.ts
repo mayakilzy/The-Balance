@@ -109,7 +109,21 @@ beforeAll(async () => {
     throw new Error(`Next.js server not reachable at ${BASE_URL}/api/v1/meta`);
   }
 
-  // Wait 65s before signing in to avoid rate-limit collision with g03-06 tests
+  // Clean up stale G01 strategies from previous test runs (T1 integration test
+  // may have left strategies with the same compositionBatchId fingerprint).
+  const staleStrategies = await adminDb.strategy.findMany({
+    where: { tenantId: tenantAId, compositionBatchId: { startsWith: "compose-" } },
+  });
+  for (const s of staleStrategies) {
+    const versions = await adminDb.strategyVersion.findMany({ where: { strategyId: s.id } });
+    for (const v of versions) {
+      await adminDb.program.deleteMany({ where: { strategyVersionId: v.id } }).catch(() => {});
+    }
+    await adminDb.strategyVersion.deleteMany({ where: { strategyId: s.id } }).catch(() => {});
+    await adminDb.strategy.deleteMany({ where: { id: s.id } }).catch(() => {});
+  }
+
+  // Wait 2s before signing in to avoid rate-limit collision with g03-06 tests
   // (signin endpoint allows 10 POSTs/min; g03-06 uses 7 slots)
   await new Promise((r) => setTimeout(r, 2000));
 
