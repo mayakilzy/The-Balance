@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { withAuthenticatedTenant } from "@/lib/security/tenant-context";
 import { requirePermissionWithCurrentRole } from "@/lib/permissions";
 import { writeAuditTx } from "@/lib/audit";  // 01-10: atomic audit write
+import { NotFoundError } from "@/lib/reform/contracts";
 import type { Prisma } from "@prisma/client";
 import type { Session } from "next-auth";
 
@@ -381,7 +382,7 @@ export async function advanceDecision(
       where: { id: decisionId, tenantId },
     });
     if (!decision) {
-      throw new Error("Decision not found in tenant scope");
+      throw new NotFoundError("Decision not found in tenant scope");
     }
 
     // VALIDATE TRANSITION (founder directive 00-05 closure)
@@ -445,7 +446,7 @@ export async function getDecisionDetail(
       where: { id: decisionId, tenantId },
     });
     if (!decision) {
-      throw new Error("Decision not found");
+      throw new NotFoundError("Decision not found");
     }
 
     const events = await tx.decisionEvent.findMany({

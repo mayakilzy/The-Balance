@@ -430,3 +430,70 @@ jobs:
           wait $SERVER_PID 2>/dev/null || true
 
           exit $E2E_EXIT
+
+      - name: G04 Strategic Continuity HTTP E2E tests (isolated server for fresh rate-limit state)
+        # Delivery 03 — Strategic Continuity. Same isolated-server pattern as G02.
+        # Fresh Next.js process = fresh in-memory signin rate-limit counter (10/min
+        # preserved, just scoped to a new process). Runs the 32-test g04 e2e suite
+        # covering the owner's 8-step scenario: decision lifecycle, handover
+        # dossier generation + retrieval, historical traceability, policy change
+        # impact assessment, strategy version history, decision reversal, and
+        # cross-tenant RLS isolation.
+        if: always()
+        run: |
+          # Kill any leftover Next.js server from previous e2e steps
+          pkill -f "next dev" 2>/dev/null || true
+          sleep 2
+
+          # Recreate .env (in case previous step was skipped)
+          cat > .env <<ENV
+          NODE_ENV=development
+          DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public"
+          DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
+          AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
+          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
+          AUTH_TRUST_HOST="true"
+          LLM_PROVIDER="stub"
+          LOG_LEVEL="warn"
+          ENV
+
+          # Start FRESH Next.js dev server on port 3001
+          bunx next dev -p 3001 &
+          SERVER_PID=$!
+          echo "G04 continuity server PID: $SERVER_PID"
+
+          READY=0
+          for i in $(seq 1 60); do
+            HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3001/api/v1/meta 2>/dev/null || echo "000")
+            if [ "$HTTP_CODE" = "200" ]; then
+              echo "G04 server ready after ${i} attempts"
+              READY=1
+              break
+            fi
+            echo "Waiting... (attempt $i, HTTP $HTTP_CODE)"
+            sleep 2
+          done
+
+          if [ "$READY" = "0" ]; then
+            echo "ERROR: G04 server did not start within 120 seconds"
+            kill $SERVER_PID 2>/dev/null || true
+            exit 1
+          fi
+
+          # Run ONLY the G04 Strategic Continuity HTTP E2E suite (32 tests).
+          DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public" \
+          DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public" \
+          AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public" \
+          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public" \
+          AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars" \
+          AUTH_TRUST_HOST="true" \
+          LLM_PROVIDER="stub" \
+          RUN_E2E_HTTP_TESTS=1 \
+          bunx vitest run tests/e2e/g04-strategic-continuity-http.e2e.test.ts --reporter=verbose
+          E2E_EXIT=$?
+
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+
+          exit $E2E_EXIT
