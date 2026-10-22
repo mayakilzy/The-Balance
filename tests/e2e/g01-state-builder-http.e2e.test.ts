@@ -246,6 +246,7 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       body: JSON.stringify({ countryId, objectiveIds: createdObjectiveIds }),
     });
     const composeBody = await composeRes.json();
+    console.log("DEBUG programs test: alternatives=", composeBody.alternatives?.length, "programs[0]=", composeBody.alternatives?.[0]?.programs?.length, "versionId=", composeBody.alternatives?.[0]?.versionId);
     const versionId = composeBody.alternatives[0]?.versionId;
     if (composeBody.alternatives[0]?.strategyId) {
       createdStrategyIds.push(composeBody.alternatives[0].strategyId);
