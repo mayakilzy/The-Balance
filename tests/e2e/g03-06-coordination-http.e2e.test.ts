@@ -136,9 +136,6 @@ afterAll(async () => {
     await adminDb.reformCoordinationSharedSnapshotRevocation.deleteMany({
       where: { coordinationId: { in: createdCoordinationIds } },
     }).catch(() => {});
-    await adminDb.reformCoordinationSnapshotApprovalRequest.deleteMany({
-      where: { snapshot: { coordinationId: { in: createdCoordinationIds } } },
-    }).catch(() => {});
     await adminDb.reformCoordinationSharedSnapshot.deleteMany({
       where: { coordinationId: { in: createdCoordinationIds } },
     }).catch(() => {});
@@ -1074,8 +1071,8 @@ describeE2E("G03-06 HTTP — DB persistence + audit records", () => {
 // function directly — the ONLY path is through the RLS-gated INSERT
 // on reform_coordination_snapshot_approval_requests.
 // ============================================================
-describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () => {
-  it("approve_coordination_shared_snapshot function does not exist (dropped)", async () => {
+describeE2E("G03-06 HTTP — SECURITY: Trust boundary closure (Migration 32)", () => {
+  it("approve_coordination_shared_snapshot function does not exist (dropped in M31)", async () => {
     const result = await adminDb.$queryRaw<{ exists: boolean }[]>`
       SELECT EXISTS(
         SELECT 1 FROM pg_proc
@@ -1085,36 +1082,53 @@ describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () 
     expect(result[0]?.exists).toBe(false);
   });
 
-  it("process_snapshot_approval_request has NO EXECUTE grant to balance_app", async () => {
-    const result = await adminDb.$queryRaw<{ has_execute: boolean }[]>`
-      SELECT has_function_privilege('balance_app', 'process_snapshot_approval_request()', 'EXECUTE') AS has_execute
+  it("process_snapshot_approval_request function does not exist (dropped in M32)", async () => {
+    const result = await adminDb.$queryRaw<{ exists: boolean }[]>`
+      SELECT EXISTS(
+        SELECT 1 FROM pg_proc
+        WHERE proname = 'process_snapshot_approval_request'
+      ) AS exists
     `;
-    expect(result[0]?.has_execute).toBe(false);
+    expect(result[0]?.exists).toBe(false);
   });
 
-  it("balance_coordination_admin UPDATE on shared_snapshots is column-scoped", async () => {
-    // Should NOT have table-level UPDATE
-    const tableResult = await adminDb.$queryRaw<{ has_update: boolean }[]>`
-      SELECT has_table_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'UPDATE') AS has_update
+  it("reform_coordination_snapshot_approval_requests table does not exist (dropped in M32)", async () => {
+    const result = await adminDb.$queryRaw<{ exists: boolean }[]>`
+      SELECT EXISTS(
+        SELECT 1 FROM information_schema.tables
+        WHERE table_name = 'reform_coordination_snapshot_approval_requests'
+      ) AS exists
     `;
-    expect(tableResult[0]?.has_update).toBe(false);
+    expect(result[0]?.exists).toBe(false);
+  });
 
-    // Should have column-level UPDATE on status, approvedAt, approvedBy
-    const colResult = await adminDb.$queryRaw<{ status: boolean; approved_at: boolean; approved_by: boolean }[]>`
+  it("balance_snapshot_approver LOGIN role exists with column-scoped UPDATE", async () => {
+    // Role exists
+    const roleResult = await adminDb.$queryRaw<{ exists: boolean; can_login: boolean }[]>`
+      SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname = 'balance_snapshot_approver') AS exists,
+             (SELECT rolcanlogin FROM pg_roles WHERE rolname = 'balance_snapshot_approver') AS can_login
+    `;
+    expect(roleResult[0]?.exists).toBe(true);
+    expect(roleResult[0]?.can_login).toBe(true);
+
+    // balance_app is NOT a member of balance_snapshot_approver (cannot SET ROLE)
+    const memberResult = await adminDb.$queryRaw<{ is_member: boolean }[]>`
+      SELECT pg_has_role('balance_app', 'balance_snapshot_approver', 'member') AS is_member
+    `;
+    expect(memberResult[0]?.is_member).toBe(false);
+
+    // Column-level UPDATE on shared_snapshots
+    const colResult = await adminDb.$queryRaw<{ status: boolean; approved_at: boolean; approved_by: boolean; title: boolean }[]>`
       SELECT
-        has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'status', 'UPDATE') AS status,
-        has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'approvedAt', 'UPDATE') AS approved_at,
-        has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'approvedBy', 'UPDATE') AS approved_by
+        has_column_privilege('balance_snapshot_approver', 'reform_coordination_shared_snapshots', 'status', 'UPDATE') AS status,
+        has_column_privilege('balance_snapshot_approver', 'reform_coordination_shared_snapshots', 'approvedAt', 'UPDATE') AS approved_at,
+        has_column_privilege('balance_snapshot_approver', 'reform_coordination_shared_snapshots', 'approvedBy', 'UPDATE') AS approved_by,
+        has_column_privilege('balance_snapshot_approver', 'reform_coordination_shared_snapshots', 'title', 'UPDATE') AS title
     `;
     expect(colResult[0]?.status).toBe(true);
     expect(colResult[0]?.approved_at).toBe(true);
     expect(colResult[0]?.approved_by).toBe(true);
-
-    // Should NOT have column-level UPDATE on title (content field)
-    const titleResult = await adminDb.$queryRaw<{ has_title_update: boolean }[]>`
-      SELECT has_column_privilege('balance_coordination_admin', 'reform_coordination_shared_snapshots', 'title', 'UPDATE') AS has_title_update
-    `;
-    expect(titleResult[0]?.has_title_update).toBe(false);
+    expect(colResult[0]?.title).toBe(false);
   });
 
   it("legitimate HTTP snapshot approval still works (trigger fires correctly)", async () => {
@@ -1127,12 +1141,12 @@ describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () 
       body: JSON.stringify({
         snapshotType: "custom",
         title: "Post-Security-Fix Snapshot",
-        summary: "Snapshot to verify approval works after Migration 31.",
+        summary: "Snapshot to verify approval works after Migration 32.",
       }),
     });
     const snapId = (await createRes.json()).snapshotId;
 
-    // Approve via the HTTP API (uses RLS-gated INSERT + trigger)
+    // Approve via the HTTP API (uses privileged balance_snapshot_approver connection)
     const res = await fetchWithCookies(adminACookies, `/api/v1/reform/coordinations/${coordId}/snapshots/${snapId}/approve`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1146,13 +1160,6 @@ describeE2E("G03-06 HTTP — SECURITY: Direct privileged execution blocked", () 
     const snap = await adminDb.reformCoordinationSharedSnapshot.findUnique({ where: { id: snapId } });
     expect(snap!.status).toBe("approved");
     expect(snap!.approvedBy).toBeTruthy();
-
-    // Verify an approval_request row was created
-    const req = await adminDb.reformCoordinationSnapshotApprovalRequest.findFirst({
-      where: { snapshotId: snapId },
-    });
-    expect(req).toBeTruthy();
-    expect(req!.processedAt).toBeTruthy();
 
     // Verify the audit log entry
     const audit = await adminDb.auditLog.findFirst({

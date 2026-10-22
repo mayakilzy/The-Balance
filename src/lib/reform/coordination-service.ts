@@ -724,7 +724,9 @@ export async function approveSharedSnapshot(
 ) {
   await requirePermissionWithCurrentRole(session, "reform:coordination:approve");
 
-  return withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
+  // Phase 1: Authorization check (as balance_app via withAuthenticatedTenant)
+  // Verifies the caller is the lead of the coordination that owns the snapshot.
+  const authContext = await withAuthenticatedTenant(session, async ({ tx, tenantId, userId }) => {
     const snapshot = await tx.reformCoordinationSharedSnapshot.findFirst({
       where: { id: input.snapshotId },
     });
@@ -741,38 +743,98 @@ export async function approveSharedSnapshot(
     if (coordination.leadTenantId !== tenantId) {
       throw new PermissionDeniedError("reform:coordination:approve");
     }
-
-    const lockKey = coordinationLockKey(snapshot.coordinationId);
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
-
     if (snapshot.status !== "draft") {
       throw new ConflictError(`Snapshot ${input.snapshotId} is not in draft status`);
     }
 
-    // G03-06 Security Fix (Migration 31): INSERT into the RLS-gated
-    // reform_coordination_snapshot_approval_requests table. The RLS
-    // INSERT policy verifies:
-    //   (a) tenantId = current_setting('app.tenant_id')
-    //   (b) requestedBy = current_setting('app.user_id')
-    //   (c) the snapshot is in 'draft' status
-    //   (d) the coordination's leadTenantId = current_setting('app.tenant_id')
-    //
-    // The AFTER INSERT trigger `process_snapshot_approval_trigger` fires
-    // as balance_coordination_admin (SECURITY DEFINER) and performs the
-    // UPDATE on shared_snapshots + writes the audit_log entry.
-    //
-    // balance_app CANNOT call the trigger function directly (no EXECUTE
-    // grant). The INSERT is the ONLY invocation path, and it is RLS-gated.
-    // The approver identity (requestedBy) is verified by the RLS policy
-    // to match the session's app.user_id GUC — it cannot be forged.
-    await tx.$executeRaw`
-      INSERT INTO reform_coordination_snapshot_approval_requests
-        ("snapshotId", "tenantId", "requestedBy", "notes")
-      VALUES (${snapshot.id}, ${tenantId}, ${userId}, ${input.approvalNotes ?? ""})
+    return {
+      snapshotId: snapshot.id,
+      coordinationId: coordination.id,
+      tenantId,
+      userId,
+    };
+  });
+
+  // Phase 2: Privileged execution (as balance_snapshot_approver)
+  // G03-06 Trust Boundary Closure (Migration 32):
+  // The privileged UPDATE + audit INSERT are performed via a SEPARATE
+  // DB connection authenticated as `balance_snapshot_approver` — a LOGIN
+  // role with credentials known ONLY to the application server
+  // (PRIVILEGED_DATABASE_URL env var).
+  //
+  // An attacker with balance_app DB credentials CANNOT:
+  //   - Connect as balance_snapshot_approver (no password)
+  //   - SET ROLE to it (not a member)
+  //   - Set GUCs for it (can't connect)
+  //
+  // The GUCs (app.tenant_id, app.user_id) on this connection are set by
+  // the app from the verified Auth.js session — they are NOT caller-
+  // controllable by a balance_app connection.
+  //
+  // RLS on the privileged connection provides defense-in-depth:
+  //   - UPDATE only on draft snapshots where leadTenantId = app.tenant_id
+  //   - INSERT audit_log only where tenantId = app.tenant_id
+  //
+  // The G03-01 trigger (enforce_shared_snapshot_immutable_after_approval)
+  // does NOT fire for balance_snapshot_approver (it only fires for
+  // current_user = 'balance_app'), so the UPDATE succeeds.
+  const { privilegedDb } = await import("@/lib/privileged-db");
+  if (!privilegedDb) {
+    throw new Error("PRIVILEGED_DATABASE_URL not configured — cannot approve snapshot");
+  }
+
+  const { snapshotId, coordinationId, tenantId, userId } = authContext;
+  const lockKey = coordinationLockKey(coordinationId);
+  const approvalNotes = input.approvalNotes ?? "";
+
+  await privilegedDb.$transaction(async (tx) => {
+    // Set GUCs from the verified session (NOT caller-controllable)
+    await tx.$executeRaw`SELECT set_config('app.tenant_id', ${tenantId}, true)`;
+    await tx.$executeRaw`SELECT set_config('app.user_id', ${userId}, true)`;
+
+    // Acquire L-COORD advisory lock (canonical key — coordinationId only)
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`;
+
+    // Perform the UPDATE. The WHERE clause + RLS policy ensure:
+    //   - snapshot is in 'draft' status (defense-in-depth)
+    //   - coordination's leadTenantId = app.tenant_id (RLS)
+    //   - transition is draft → approved only (RLS WITH CHECK)
+    const result = await tx.$executeRaw`
+      UPDATE reform_coordination_shared_snapshots
+      SET status = 'approved',
+          "approvedAt" = NOW(),
+          "approvedBy" = ${userId}
+      WHERE id = ${snapshotId}
+        AND status = 'draft'
     `;
 
-    return { snapshotId: snapshot.id, status: "approved" };
+    if (result === 0) {
+      // Either not found, not in draft, or RLS blocked (not lead)
+      throw new ConflictError(
+        `Snapshot ${snapshotId} could not be approved (not found, not draft, or not authorized)`
+      );
+    }
+
+    // Write audit log entry (INSERT on audit_log as balance_snapshot_approver)
+    // RLS policy: tenantId must match app.tenant_id (set from verified session)
+    await tx.$executeRaw`
+      INSERT INTO audit_log ("tenantId", actor, action, details, status, "at")
+      VALUES (
+        ${tenantId},
+        ${userId},
+        'reform.coordination.snapshot_approved',
+        jsonb_build_object(
+          'coordinationId', ${coordinationId},
+          'snapshotId', ${snapshotId},
+          'notes', ${approvalNotes}
+        ),
+        'ok',
+        NOW()
+      )
+    `;
   });
+
+  return { snapshotId, status: "approved" };
 }
 
 // ============================================================
