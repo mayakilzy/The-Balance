@@ -368,9 +368,6 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
     expect(advisorBody.disclaimer ?? advisorBody.conditionalDisclaimer).toBeTruthy();
     // Must be labeled simulated
     expect(advisorBody.simulated ?? advisorBody.modelVersion).toBeTruthy();
-    const body = await res.json();
-    // Advisor output must include conditional disclaimer
-    expect(body.disclaimer ?? body.conditionalDisclaimer ?? true).toBeTruthy();
   });
 
   it("POST /state-builder/roadmap → 200 (implementation roadmap)", async () => {

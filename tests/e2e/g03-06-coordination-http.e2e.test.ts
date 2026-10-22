@@ -969,7 +969,7 @@ describeE2E("G03-06 HTTP — NEG-9: Invalid or revoked membership cannot bypass 
         break;
       } catch (e) {
         if (attempt < 2 && e instanceof Error && e.message.includes("429")) {
-          await new Promise((r) => setTimeout(r, 30000)); // wait 30s and retry
+          await new Promise((r) => setTimeout(r, 65000)); // wait 30s and retry
           continue;
         }
         throw e;
