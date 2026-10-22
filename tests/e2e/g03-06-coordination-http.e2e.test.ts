@@ -956,7 +956,20 @@ describeE2E("G03-06 HTTP — NEG-9: Invalid or revoked membership cannot bypass 
 
   it("User with revoked membership cannot list coordinations", async () => {
     // Revoked user can authenticate but has no active membership
-    const cookies = await signIn(REVOKED);
+    // Retry on 429 (rate limit) — g01 test may have consumed rate budget
+    let cookies: string[] = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        cookies = await signIn(REVOKED);
+        break;
+      } catch (e) {
+        if (attempt < 2 && e instanceof Error && e.message.includes("429")) {
+          await new Promise((r) => setTimeout(r, 30000)); // wait 30s and retry
+          continue;
+        }
+        throw e;
+      }
+    }
     const meRes = await fetchWithCookies(cookies, "/api/v1/auth/me");
     const me = await meRes.json();
     if (me.authenticated) {
