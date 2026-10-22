@@ -118,15 +118,31 @@ async function signIn(creds: {
   password: string;
 }): Promise<string[]> {
   const cookies: string[] = [];
-  const res = await fetchWithCookies(cookies, "/api/v1/auth/signin", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(creds),
-  });
-  if (res.status !== 200) {
+  // Retry on 429 (rate limit: 10 signins/min across all e2e files). Without
+  // retry, our 3 extra signins per run push the cumulative count over the
+  // limit and break later e2e files (g03-06 has been observed failing here
+  // with HTTP 429). Backoff: 3s, 6s, 12s, 24s.
+  const backoffs = [0, 3_000, 6_000, 12_000, 24_000];
+  let lastErr: unknown = null;
+  for (const delayMs of backoffs) {
+    if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
+    const res = await fetchWithCookies(cookies, "/api/v1/auth/signin", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(creds),
+    });
+    if (res.status === 200) return cookies;
+    if (res.status === 429) {
+      lastErr = new Error(
+        `Signin rate-limited for ${creds.email}: HTTP 429 (will retry)`
+      );
+      continue; // retry
+    }
     throw new Error(`Signin failed for ${creds.email}: HTTP ${res.status}`);
   }
-  return cookies;
+  throw new Error(
+    `Signin exhausted retries for ${creds.email}: ${String(lastErr)}`
+  );
 }
 
 async function waitForServer(timeoutMs = 60000): Promise<void> {
