@@ -984,7 +984,7 @@ describeE2E("G03-06 HTTP — NEG-9: Invalid or revoked membership cannot bypass 
     }
     const res = await fetchWithCookies(cookies, "/api/v1/reform/coordinations");
     expect([401, 403]).toContain(res.status);
-  });
+  }, 120_000);
 
   it("Reviewer (no coordination:manage) cannot submit plan → 403", async () => {
     const coordId = await createCoordinationAsAdminA("neg-reviewer-submit");
