@@ -107,8 +107,8 @@ interface RateLimitConfig {
 }
 
 const RATE_LIMITS: Record<string, RateLimitConfig> = {
-  "/api/v1/auth/signin": { maxRequests: 10, windowMs: 60_000 },
-  "/api/v1/auth/signout": { maxRequests: 10, windowMs: 60_000 },
+  "/api/v1/auth/signin": { maxRequests: 20, windowMs: 60_000 },
+  "/api/v1/auth/signout": { maxRequests: 20, windowMs: 60_000 },
   "/api/v1/tasks": { maxRequests: 30, windowMs: 60_000 },
   "/api/v1/capabilities": { maxRequests: 20, windowMs: 60_000 },
 };

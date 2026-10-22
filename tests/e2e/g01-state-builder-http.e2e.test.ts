@@ -111,7 +111,7 @@ beforeAll(async () => {
 
   // Wait 65s before signing in to avoid rate-limit collision with g03-06 tests
   // (signin endpoint allows 10 POSTs/min; g03-06 uses 7 slots)
-  await new Promise((r) => setTimeout(r, 70000));
+  await new Promise((r) => setTimeout(r, 2000));
 
   analystCookies = await signIn(ANALYST);
   await new Promise((r) => setTimeout(r, 500));
