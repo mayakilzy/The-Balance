@@ -109,8 +109,11 @@ beforeAll(async () => {
     throw new Error(`Next.js server not reachable at ${BASE_URL}/api/v1/meta`);
   }
 
-  // Clean up stale G01 strategies from previous test runs (T1 integration test
-  // may have left strategies with the same compositionBatchId fingerprint).
+  // Clean up stale G01 strategies AND tasks from previous test runs (T1 integration
+  // test may have left strategies/tasks with the same fingerprint/idempotency key).
+  await adminDb.task.deleteMany({
+    where: { tenantId: tenantAId, type: { in: ["strategy-compose", "gap-analysis", "baseline-compute"] } },
+  }).catch(() => {});
   const staleStrategies = await adminDb.strategy.findMany({
     where: { tenantId: tenantAId, compositionBatchId: { startsWith: "compose-" } },
   });
