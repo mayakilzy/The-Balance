@@ -154,43 +154,20 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
     expect(Array.isArray(body)).toBe(true);
   });
 
-  it("POST /state-builder/objectives → 201 with objectiveId", async () => {
-    const res = await fetchWithCookies(analystCookies, "/api/v1/state-builder/objectives", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        countryId,
-        title: "G01 HTTP E2E — Inflation Target",
-        description: "Reduce inflation to single digits within 3 years.",
-        targetMetric: "inflation_rate",
-        targetValue: "<5%",
-        horizon: 3,
-        status: "active",
-      }),
-    });
-    expect(res.status).toBe(201);
+  it("GET /state-builder/objectives → seeded objectives with evidence-linked sectors", async () => {
+    // Use SEEDED objectives (which have evidence linked) instead of creating
+    // new ones without evidence. The compose function only generates programs
+    // for sectors with supporting evidence (see strategy-composer-service.ts).
+    const res = await fetchWithCookies(analystCookies, "/api/v1/state-builder/objectives");
+    expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.objectiveId).toBeTruthy();
-    createdObjectiveIds.push(body.objectiveId);
-
-    // Create a second objective for multi-objective compose
-    const res2 = await fetchWithCookies(analystCookies, "/api/v1/state-builder/objectives", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        countryId,
-        title: "G01 HTTP E2E — Agriculture Growth",
-        description: "Increase agricultural GDP growth rate.",
-        targetMetric: "agricultural_gdp_growth",
-        targetValue: ">4%",
-        horizon: 3,
-        status: "active",
-      }),
-    });
-    if (res2.status === 201) {
-      const body2 = await res2.json();
-      createdObjectiveIds.push(body2.objectiveId);
-    }
+    expect(Array.isArray(body)).toBe(true);
+    // Find the seeded agriculture + inflation objectives (have evidence)
+    const agObj = body.find((o: { title: string }) => o.title?.includes("agricultural GDP"));
+    const infObj = body.find((o: { title: string }) => o.title?.includes("inflation below"));
+    expect(agObj).toBeTruthy();
+    expect(infObj).toBeTruthy();
+    createdObjectiveIds = [agObj.id, infObj.id];
   });
 
   it("POST /state-builder/baseline → 201 with simulated report", async () => {
@@ -266,14 +243,15 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ strategyAlternativeId: versionId }),
     });
-    // Programs expansion may return 500 if the strategy version metadata
-    // doesn't contain programs (requires evidence linked to objectives).
-    // This is a data-dependency, not a route bug.
-    if (res.status === 500) {
-      console.log("Programs 500 — known data dependency (needs evidence-linked objectives)");
-      return; // skip — route works, data precondition not met
-    }
     expect(res.status).toBe(201);
+    const programsBody = await res.json();
+    expect(programsBody.programs).toBeTruthy();
+    expect(Array.isArray(programsBody.programs)).toBe(true);
+    expect(programsBody.programs.length).toBeGreaterThan(0);
+    // Each program must be labeled simulated: true (honesty)
+    for (const p of programsBody.programs) {
+      expect(p.simulated).toBe(true);
+    }
   });
 
   it("POST /state-builder/portfolio → 201 (build portfolio)", async () => {
@@ -362,14 +340,12 @@ describeE2E("G01 State Builder HTTP — Full T1 Journey", () => {
         alternativeIds: [altId],
       }),
     });
-    // Advisor may return 400 if the alternative doesn't have sufficient data
-    // (needs evidence-linked objectives for a meaningful recommendation).
-    // This is a data-dependency, not a route bug.
-    if (res.status === 400) {
-      console.log("Advisor 400 — known data dependency (needs evidence-linked objectives)");
-      return; // skip — route works, data precondition not met
-    }
     expect(res.status).toBe(200);
+    const advisorBody = await res.json();
+    // Advisor output must include conditional disclaimer (honesty)
+    expect(advisorBody.disclaimer ?? advisorBody.conditionalDisclaimer).toBeTruthy();
+    // Must be labeled simulated
+    expect(advisorBody.simulated ?? advisorBody.modelVersion).toBeTruthy();
     const body = await res.json();
     // Advisor output must include conditional disclaimer
     expect(body.disclaimer ?? body.conditionalDisclaimer ?? true).toBeTruthy();

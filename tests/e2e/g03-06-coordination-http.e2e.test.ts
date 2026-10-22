@@ -116,6 +116,11 @@ beforeAll(async () => {
     throw new Error(`Next.js server not reachable at ${BASE_URL}/api/v1/meta`);
   }
 
+  // Wait 5s before signins to let the rate-limit window recover from
+  // the g01 E2E test's signins (vitest runs files sequentially but
+  // without delay between them).
+  await new Promise((r) => setTimeout(r, 5000));
+
   // Sign in once per role (avoid rate limit on /api/v1/auth/signin: 10/min).
   // Stagger signins to stay under the limit.
   adminACookies = await signIn(ADMIN_A);
@@ -127,7 +132,7 @@ beforeAll(async () => {
   reviewerACookies = await signIn(REVIEWER_A);
   await new Promise((r) => setTimeout(r, 500));
   observerACookies = await signIn(OBSERVER_A);
-}, 120_000);
+}, 180_000);
 
 afterAll(async () => {
   if (!RUN_E2E) return;
