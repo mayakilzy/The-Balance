@@ -68,11 +68,22 @@ async function fetchWithCookies(cookies: string[], path: string, options: Reques
   if (cookies.length > 0) headers.set("Cookie", cookies.join("; "));
   const response = await fetch(`${BASE_URL}${path}`, { ...options, headers });
   const setCookie = response.headers.getSetCookie?.() ?? [];
+  // IMPORTANT: mutate the caller's `cookies` array IN PLACE (splice + push).
+  // Reassigning `cookies = cookies.filter(...)` would only rebind the local
+  // parameter and the captured Set-Cookie values would never reach the test's
+  // analystCookies / adminCookies / tenantBCookies — every subsequent request
+  // would be sent with no Cookie header and the server would return 401.
+  // This is the same pattern used by all other passing E2E helpers
+  // (g01/g02/g04-continuity/g04-d4/g03-06).
   for (const cookie of setCookie) {
     const cookiePart = cookie.split(";")[0];
     if (cookiePart) {
       const [name] = cookiePart.split("=");
-      cookies = cookies.filter((c) => !c.startsWith(`${name}=`));
+      while (cookies.length > 0) {
+        const idx = cookies.findIndex((c) => c.startsWith(`${name}=`));
+        if (idx === -1) break;
+        cookies.splice(idx, 1);
+      }
       cookies.push(cookiePart);
     }
   }
