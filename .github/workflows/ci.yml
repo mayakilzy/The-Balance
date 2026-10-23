@@ -39,6 +39,8 @@ jobs:
       AUTH_DATABASE_URL: "postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
       # G03-06 Trust Boundary Closure: privileged role for snapshot approval
       PRIVILEGED_DATABASE_URL: "postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+      # D05 Final Closure: pre-auth security audit logger
+      SECURITY_LOGGER_DATABASE_URL: "postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public"
       AUTH_SECRET: "ci_only_secret_not_for_production_min_16_chars"
       AUTH_TRUST_HOST: "true"
       LLM_PROVIDER: "stub"
@@ -296,6 +298,7 @@ jobs:
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
           PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public"
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
           AUTH_TRUST_HOST="true"
           LLM_PROVIDER="stub"
@@ -332,7 +335,8 @@ jobs:
           DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public" \
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public" \
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public" \
-          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public" \
+          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public" \
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars" \
           AUTH_TRUST_HOST="true" \
           LLM_PROVIDER="stub" \
@@ -375,6 +379,7 @@ jobs:
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
           PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public"
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
           AUTH_TRUST_HOST="true"
           LLM_PROVIDER="stub"
@@ -417,7 +422,8 @@ jobs:
           DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public" \
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public" \
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public" \
-          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public" \
+          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public" \
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars" \
           AUTH_TRUST_HOST="true" \
           LLM_PROVIDER="stub" \
@@ -452,6 +458,7 @@ jobs:
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
           PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public"
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
           AUTH_TRUST_HOST="true"
           LLM_PROVIDER="stub"
@@ -485,7 +492,8 @@ jobs:
           DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public" \
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public" \
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public" \
-          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public" \
+          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public" \
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars" \
           AUTH_TRUST_HOST="true" \
           LLM_PROVIDER="stub" \
@@ -522,6 +530,7 @@ jobs:
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
           PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public"
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
           AUTH_TRUST_HOST="true"
           LLM_PROVIDER="stub"
@@ -553,7 +562,8 @@ jobs:
           DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public" \
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public" \
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public" \
-          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public" \
+          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public" \
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars" \
           AUTH_TRUST_HOST="true" \
           LLM_PROVIDER="stub" \
@@ -625,6 +635,7 @@ jobs:
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public"
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public"
           PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public"
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars"
           AUTH_TRUST_HOST="true"
           LLM_PROVIDER="stub"
@@ -655,7 +666,8 @@ jobs:
           DATABASE_URL="postgresql://balance_app:balance_app_dev_only@localhost:5432/balance?schema=public" \
           DIRECT_URL="postgresql://balance_admin:balance_admin_dev_only@localhost:5432/balance?schema=public" \
           AUTH_DATABASE_URL="postgresql://balance_auth:balance_auth_dev_only@localhost:5432/balance?schema=public" \
-          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public" \
+          PRIVILEGED_DATABASE_URL="postgresql://balance_snapshot_approver:balance_snapshot_approver_dev_only@localhost:5432/balance?schema=public"
+          SECURITY_LOGGER_DATABASE_URL="postgresql://balance_security_logger:balance_security_logger_dev_only@localhost:5432/balance?schema=public" \
           AUTH_SECRET="ci_only_secret_not_for_production_min_16_chars" \
           AUTH_TRUST_HOST="true" \
           LLM_PROVIDER="stub" \

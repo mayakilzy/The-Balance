@@ -18,6 +18,11 @@ const EnvSchema = z.object({
   // Database (PostgreSQL 16 + pgvector)
   DATABASE_URL: z.string().url(),
   DIRECT_URL: z.string().url().optional(),
+  // D05 Final Closure: dedicated pre-auth security audit writer.
+  // Optional in test environments without the role provisioned; the
+  // audit module falls back to balance_app (which will fail RLS for
+  // tenantId IS NULL — preserved best-effort behavior).
+  SECURITY_LOGGER_DATABASE_URL: z.string().url().optional(),
 
   // Auth.js v5
   AUTH_SECRET: z
