@@ -7,7 +7,9 @@
 **Main HEAD:** `49fb334fd36d2a63ecb79760a2a8103d158f517c` (post-PR-#9-merge)
 **Branch:** `g04-delivery-05-hard-validation`
 **Previous D05 head (failing):** `8ab6d21f84927393b1893510ad867e33e118172f`
-**D05 fix SHA:** `<pending push — see Phase C below>`
+**D05 fix SHA:** `a41190d287331869d66b61512d9a9d17702bae24`
+**CI run (post-fix):** https://github.com/mayakilzy/The-Balance/actions/runs/39881783879 — ✅ **success** (all 28 steps, including the previously-failing step #28 D05)
+**Fresh Install + Recovery (post-fix):** https://github.com/mayakilzy/The-Balance/actions/runs/39881783914 — ✅ **success**
 
 ---
 
@@ -364,9 +366,10 @@ which is out of scope for D05's "no new feature expansion" rule.
 | Main HEAD (post-PR-#9) | `49fb334fd36d2a63ecb79760a2a8103d158f517c` |
 | PR #10 branch | `g04-delivery-05-hard-validation` |
 | Previous D05 head (failing) | `8ab6d21f84927393b1893510ad867e33e118172f` |
-| D05 fix SHA | `<pending push — will be filled after PR update>` |
-| CI run (failing) | https://github.com/mayakilzy/The-Balance/actions/runs/39794829672 |
-| CI job (failing) | id `119879395864`, step #28 |
+| D05 fix SHA | `a41190d287331869d66b61512d9a9d17702bae24` |
+| CI run (previously failing) | https://github.com/mayakilzy/The-Balance/actions/runs/39794829672 (job `119879395864`, step #28 — FAILED) |
+| CI run (post-fix, verified) | https://github.com/mayakilzy/The-Balance/actions/runs/39881783879 — ✅ **SUCCESS** (all 28 steps including D05) |
+| Fresh Install + Recovery (post-fix) | https://github.com/mayakilzy/The-Balance/actions/runs/39881783914 — ✅ **SUCCESS** |
 | Recovery workflow | `.github/workflows/fresh-install-recovery.yml` |
 
 ## 11. Recommendation
