@@ -378,18 +378,30 @@ export async function advanceDecision(
       await requirePermissionWithCurrentRole(session, "strategy:write");
     }
 
-    const decision = await tx.decision.findFirst({
-      where: { id: decisionId, tenantId },
-    });
-    if (!decision) {
+    // ACQUIRE ROW LOCK before reading mutable state (G04-D05 closure).
+    // Same fail-closed SELECT FOR UPDATE pattern as reform_proposals
+    // (see src/lib/reform/lock-helper.ts). Without this lock, two
+    // concurrent advance(reviewed) calls would both read status="proposed",
+    // both validate the proposed→reviewed transition, and both UPDATE
+    // — corrupting the state machine. The lock serializes them: the
+    // second call's FOR UPDATE blocks until the first commits, then
+    // re-reads the now-"reviewed" row and rejects the reviewed→reviewed
+    // transition with a 400/409.
+    const lockRows = await tx.$queryRaw<{ id: string; status: string }[]>`
+      SELECT id, status FROM "decisions"
+      WHERE id = ${decisionId} AND "tenantId" = ${tenantId}
+      FOR UPDATE
+    `;
+    if (!Array.isArray(lockRows) || lockRows.length === 0) {
       throw new NotFoundError("Decision not found in tenant scope");
     }
+    const currentStatus = lockRows[0]!.status;
 
     // VALIDATE TRANSITION (founder directive 00-05 closure)
-    if (!isValidTransition(decision.status, newStatus)) {
+    if (!isValidTransition(currentStatus, newStatus)) {
       throw new Error(
-        `Invalid decision state transition: ${decision.status} → ${newStatus}. ` +
-          `Allowed transitions from '${decision.status}': ${(VALID_TRANSITIONS[decision.status] ?? []).join(", ")}`
+        `Invalid decision state transition: ${currentStatus} → ${newStatus}. ` +
+          `Allowed transitions from '${currentStatus}': ${(VALID_TRANSITIONS[currentStatus] ?? []).join(", ")}`
       );
     }
 
